@@ -116,17 +116,20 @@ const ensureDatabase = async (env: Env) => {
       env.DB.prepare('CREATE INDEX IF NOT EXISTS books_updated_at_idx ON books (updated_at)'),
     ]);
     const fixtures = createExampleBooks();
+    const count = await env.DB.prepare('SELECT COUNT(*) AS total FROM books').first<{ total: number }>();
+    if ((count?.total ?? 0) === 0) {
+      await env.DB.batch(fixtures.map((book) => env.DB.prepare(
+        'INSERT INTO books (id, title, data_json, updated_at) VALUES (?, ?, ?, ?)',
+      ).bind(book.id, book.title, JSON.stringify(book), book.updatedAt)));
+      return;
+    }
     const existing = await env.DB.prepare(
       'SELECT id, title, data_json, updated_at FROM books WHERE id IN (?, ?, ?)',
     ).bind(...fixtures.map((book) => book.id)).all<BookRow>();
     const existingById = new Map(existing.results.map((row) => [row.id, row]));
     const writes = fixtures.flatMap((book) => {
       const row = existingById.get(book.id);
-      if (!row) {
-        return [env.DB.prepare(
-          'INSERT INTO books (id, title, data_json, updated_at) VALUES (?, ?, ?, ?)',
-        ).bind(book.id, book.title, JSON.stringify(book), book.updatedAt)];
-      }
+      if (!row) return [];
       const legacy = legacyExamples.get(book.id);
       let current: unknown;
       try {
@@ -218,6 +221,14 @@ const createBook = async (env: Env, title: string) => {
   });
 };
 
+const deleteBook = async (env: Env, bookId: string) => {
+  validId(bookId, 'Book ID');
+  await ensureDatabase(env);
+  const result = await env.DB.prepare('DELETE FROM books WHERE id = ?').bind(bookId).run();
+  if (!result.meta.changes) throw new HttpError(`找不到 Book：${bookId}`, 404);
+  return { id: bookId };
+};
+
 const json = (value: unknown, status = 200) => Response.json(value, {
   status,
   headers: { 'cache-control': 'no-store' },
@@ -256,6 +267,7 @@ export default {
         if (!isRecord(body) || body.id !== bookMatch[1]) throw new HttpError('URL 与 Book ID 不一致。');
         return json(await saveBook(env, body));
       }
+      if (bookMatch && request.method === 'DELETE') return json(await deleteBook(env, bookMatch[1]));
       if (bookMatch) return json({ error: '这个 Book API 不支持当前请求方法。' }, 405);
 
       if (request.method === 'POST' && url.pathname === '/api/context-plan') {

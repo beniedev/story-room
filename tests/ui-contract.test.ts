@@ -50,14 +50,21 @@ describe('writing UI contract', () => {
 
   it('keeps book creation and source management compact and understandable', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    expect(source).toContain('aria-controls="new-book-form"');
+    expect(source).toContain("openNameDialog({ kind: 'new-book'");
+    expect(source).toContain("openNameDialog({ kind: 'new-section'");
+    expect(source).toContain("openNameDialog({ kind: 'rename-book'");
     expect(source).toContain('修改角色卡');
     expect(source).toContain('删除角色卡');
     expect(source).toContain('已确认设定');
     expect(source).toContain('前文摘要');
     expect(source).toContain('className="book-settings-drawer"');
-    expect(source).toContain('className="chapter-dialog"');
+    expect(source).toContain('className="name-dialog"');
+    expect(source).toContain('className="confirm-dialog"');
+    expect(source).toContain('className="source-group-drawer"');
     expect(source).toContain('章节名称');
+    expect(source).toContain('小节名称');
+    expect(source).toContain('danger-icon');
+    expect(source).not.toContain('window.confirm');
     expect(source).toContain('本书设定');
     expect(source).not.toContain('电子书目录');
     expect(source).not.toContain('aria-label="书目视图"');

@@ -372,16 +372,6 @@ h3 {
   margin-block-end: 1.25rem;
 }
 
-.back-to-directory {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-block-end: 0.8rem;
-  padding-inline: 0.55rem;
-  background: transparent;
-  color: var(--muted);
-}
-
 .breadcrumb,
 .eyebrow {
   color: var(--muted);
@@ -620,16 +610,10 @@ h3 {
   color: var(--accent);
 }
 
-.book-create-row {
+.book-actions-row {
   display: flex;
+  gap: 0.3rem;
   justify-content: flex-end;
-}
-
-.new-book-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.45rem;
-  margin-block-start: -0.45rem;
 }
 
 .prompt-settings > label,
@@ -858,6 +842,71 @@ h3 {
   margin: 0;
 }
 
+.source-group-drawer {
+  margin-block-start: 0.7rem;
+}
+
+.source-group-drawer > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 52px;
+  padding: 0.45rem 0.65rem;
+  background: var(--surface);
+  cursor: pointer;
+  list-style: none;
+}
+
+.source-group-drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-group-drawer > summary:hover,
+.source-group-drawer[open] > summary {
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.source-group-drawer > summary > svg:first-child {
+  color: var(--accent);
+}
+
+.source-group-drawer > summary > svg:last-child {
+  color: var(--muted);
+  transition: rotate 120ms ease-out;
+}
+
+.source-group-drawer[open] > summary > svg:last-child {
+  rotate: 180deg;
+}
+
+.source-group-drawer > summary > span {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.source-group-drawer > summary small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.source-group-content {
+  display: grid;
+  gap: 0.45rem;
+  padding-block-start: 0.45rem;
+}
+
+.source-group-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.source-group-actions .icon-button {
+  background: transparent;
+}
+
 .source-card {
   display: grid;
   gap: 0;
@@ -914,12 +963,14 @@ h3 {
   background: transparent;
 }
 
-.danger-icon {
+.danger-icon,
+.danger-action {
   background: var(--danger) !important;
   color: #ffffff;
 }
 
-.danger-icon:hover {
+.danger-icon:hover,
+.danger-action:hover {
   background: color-mix(in srgb, var(--danger) 86%, #000000) !important;
   color: #ffffff;
 }
@@ -982,11 +1033,6 @@ h3 {
   max-width: 60ch;
   margin-inline: auto;
   text-align: center;
-}
-
-.graph-intro p:last-child {
-  color: var(--muted);
-  line-height: 1.55;
 }
 
 .graph-flow,
@@ -1104,7 +1150,8 @@ h3 {
   transition-behavior: allow-discrete;
 }
 
-.chapter-dialog {
+.name-dialog,
+.confirm-dialog {
   width: min(26rem, calc(100vw - 1rem));
   margin: auto;
   padding: 0;
@@ -1114,16 +1161,23 @@ h3 {
   color: var(--text);
 }
 
-.chapter-dialog-body {
+.name-dialog-body,
+.confirm-dialog-body {
   display: grid;
   gap: 0.65rem;
   padding: 0 1rem 1rem;
 }
 
-.chapter-dialog-body > label {
+.name-dialog-body > label {
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 650;
+}
+
+.confirm-dialog-body > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
 }
 
 .dialog-actions {
@@ -1157,7 +1211,8 @@ h3 {
 
 .settings-drawer::backdrop,
 .book-settings-drawer::backdrop,
-.chapter-dialog::backdrop,
+.name-dialog::backdrop,
+.confirm-dialog::backdrop,
 .prompt-dialog::backdrop {
   background: rgba(35, 24, 37, 0.28);
 }

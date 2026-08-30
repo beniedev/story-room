@@ -99,8 +99,11 @@ export const createStoryServer = (storyStore = new StoryStore()) => {
         if (body.id !== bookMatch[1]) throw new RequestValidationError('URL 与 Book ID 不一致。');
         return sendJson(response, 200, await storyStore.saveBook(body as unknown as Book));
       }
+      if (bookMatch && request.method === 'DELETE') {
+        return sendJson(response, 200, await storyStore.deleteBook(bookMatch[1]));
+      }
       if (bookMatch) {
-        response.setHeader('allow', 'GET, PUT');
+        response.setHeader('allow', 'GET, PUT, DELETE');
         return sendJson(response, 405, { error: '这个 Book API 不支持当前请求方法。' });
       }
       if (request.method === 'POST' && url.pathname === '/api/context-plan') {

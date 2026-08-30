@@ -185,10 +185,7 @@ export class StoryStore {
       ]);
       for (const example of createExampleBooks()) {
         const entry = library.find((item) => item.id === example.id);
-        if (!entry) {
-          await this.saveBook(example);
-          continue;
-        }
+        if (!entry) continue;
         const legacy = legacyExamples.get(example.id);
         if (!legacy) continue;
         const current = await this.loadBook(example.id);
@@ -325,5 +322,36 @@ export class StoryStore {
       updatedAt: new Date().toISOString(),
     };
     return this.saveBook(book);
+  }
+
+  async deleteBook(bookId: string): Promise<{ id: string }> {
+    validId(bookId);
+    await this.ensureSeeded();
+    const operation = async () => {
+      const library = await readJson<BookIndexEntry[]>(this.libraryFile());
+      if (!library.some((entry) => entry.id === bookId)) throw new BookNotFoundError(bookId);
+
+      const root = this.bookRoot(bookId);
+      const quarantine = `${root}.deleting-${randomUUID()}`;
+      try {
+        await rename(root, quarantine);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new BookNotFoundError(bookId);
+        throw error;
+      }
+
+      try {
+        const remaining = library.filter((entry) => entry.id !== bookId);
+        await atomicWrite(this.libraryFile(), `${JSON.stringify(remaining, null, 2)}\n`);
+      } catch (error) {
+        await rename(quarantine, root);
+        throw error;
+      }
+      await rm(quarantine, { recursive: true, force: true });
+      return { id: bookId };
+    };
+    const result = this.writeQueue.then(operation, operation);
+    this.writeQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

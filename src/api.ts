@@ -28,6 +28,9 @@ export const api = {
     method: 'PUT',
     body: JSON.stringify(book),
   }),
+  deleteBook: (bookId: string) => request<{ id: string }>(`/api/books/${bookId}`, {
+    method: 'DELETE',
+  }),
   contextPlan: (body: GenerationRequest) => request<ContextPlan>('/api/context-plan', {
     method: 'POST',
     body: JSON.stringify(body),

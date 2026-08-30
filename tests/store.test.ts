@@ -76,23 +76,27 @@ describe('story store', () => {
     expect((await store.loadBook('book-two')).chapters[0]?.sections[0]?.content).toBe('Two');
   });
 
-  it('adds new examples and upgrades only untouched legacy fixtures', async () => {
+  it('upgrades present legacy fixtures without restoring a deliberately deleted example', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
     temporaryRoots.push(root);
     const store = new StoryStore(root);
+    await store.listBooks();
     await store.saveBook(createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira'));
     const customized = createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan');
     customized.writingBrief = 'Keep this user edit.';
     await store.saveBook(customized);
+    await store.deleteBook('south-of-snowline');
 
-    const library = await store.listBooks();
+    const reopened = new StoryStore(root);
+    const library = await reopened.listBooks();
     expect(library.map((item) => item.id)).toEqual(expect.arrayContaining([
       'the-observatory',
       'harbor-at-noon',
-      'south-of-snowline',
     ]));
-    expect((await store.loadBook('the-observatory')).characters).toHaveLength(5);
-    expect((await store.loadBook('harbor-at-noon')).writingBrief).toBe('Keep this user edit.');
+    expect(library.map((item) => item.id)).not.toContain('south-of-snowline');
+    await expect(reopened.loadBook('south-of-snowline')).rejects.toThrow();
+    expect((await reopened.loadBook('the-observatory')).characters).toHaveLength(5);
+    expect((await reopened.loadBook('harbor-at-noon')).writingBrief).toBe('Keep this user edit.');
   });
 
   it('fails closed when the library file is malformed', async () => {
@@ -141,6 +145,16 @@ describe('story store', () => {
       const wrongMethod = await fetch(`${base}/api/health`, { method: 'POST' });
       expect(wrongMethod.status).toBe(405);
       expect(wrongMethod.headers.get('allow')).toBe('GET');
+
+      const created = await fetch(`${base}/api/books`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Temporary Book' }),
+      });
+      const createdBook = await created.json() as Book;
+      const deleted = await fetch(`${base}/api/books/${createdBook.id}`, { method: 'DELETE' });
+      expect(deleted.status).toBe(200);
+      expect(await fetch(`${base}/api/books/${createdBook.id}`)).toHaveProperty('status', 404);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
