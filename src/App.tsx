@@ -400,6 +400,55 @@ function App() {
     };
   });
 
+  const renameChapter = (chapterId: string, title: string) => changeBook((current) => ({
+    ...current,
+    chapters: current.chapters.map((chapter) => chapter.id === chapterId
+      ? { ...chapter, title: title.trim() }
+      : chapter),
+  }));
+
+  const deleteChapter = (chapterId: string) => {
+    const removedSectionIds = new Set(book?.chapters.find((chapter) => chapter.id === chapterId)
+      ?.sections.map((item) => item.id) ?? []);
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.filter((chapter) => chapter.id !== chapterId),
+      summaries: current.summaries.map((summary) => ({
+        ...summary,
+        sourceSectionIds: summary.sourceSectionIds.filter((id) => !removedSectionIds.has(id)),
+      })),
+      branches: current.branches.filter((branch) => !removedSectionIds.has(branch.fromSectionId)),
+    }));
+    if (removedSectionIds.has(sectionId)) setSectionId('');
+  };
+
+  const renameSection = (chapterId: string, targetSectionId: string, title: string) => changeBook((current) => ({
+    ...current,
+    chapters: current.chapters.map((chapter) => chapter.id === chapterId
+      ? {
+          ...chapter,
+          sections: chapter.sections.map((item) => item.id === targetSectionId
+            ? { ...item, title: title.trim() }
+            : item),
+        }
+      : chapter),
+  }));
+
+  const deleteSection = (chapterId: string, targetSectionId: string) => {
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => chapter.id === chapterId
+        ? { ...chapter, sections: chapter.sections.filter((item) => item.id !== targetSectionId) }
+        : chapter),
+      summaries: current.summaries.map((summary) => ({
+        ...summary,
+        sourceSectionIds: summary.sourceSectionIds.filter((id) => id !== targetSectionId),
+      })),
+      branches: current.branches.filter((branch) => branch.fromSectionId !== targetSectionId),
+    }));
+    if (sectionId === targetSectionId) setSectionId('');
+  };
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
@@ -479,6 +528,10 @@ function App() {
             onAddWorldRule={addWorldRule}
             onAddChapter={addChapter}
             onAddSection={addSection}
+            onRenameChapter={renameChapter}
+            onDeleteChapter={deleteChapter}
+            onRenameSection={renameSection}
+            onDeleteSection={deleteSection}
           />
         ) : (
           <p className="loading-copy">正在打开本地书库…</p>
@@ -621,16 +674,24 @@ interface BookshelfProps {
   onAddWorldRule: (title: string) => void;
   onAddChapter: (title: string) => void;
   onAddSection: (chapterId: string, title: string) => void;
+  onRenameChapter: (chapterId: string, title: string) => void;
+  onDeleteChapter: (chapterId: string) => void;
+  onRenameSection: (chapterId: string, sectionId: string, title: string) => void;
+  onDeleteSection: (chapterId: string, sectionId: string) => void;
 }
 
 type NameDialogState =
   | { kind: 'new-book' | 'rename-book' | 'new-chapter' | 'new-character' | 'new-world'; value: string }
-  | { kind: 'new-section'; value: string; chapterId: string; chapterTitle: string };
+  | { kind: 'new-section'; value: string; chapterId: string; chapterTitle: string }
+  | { kind: 'rename-chapter'; value: string; chapterId: string }
+  | { kind: 'rename-section'; value: string; chapterId: string; sectionId: string };
 
 type DeleteDialogState =
   | { kind: 'book'; id: string; title: string }
   | { kind: 'character'; id: string; title: string }
-  | { kind: 'world'; id: string; title: string };
+  | { kind: 'world'; id: string; title: string }
+  | { kind: 'chapter'; id: string; title: string }
+  | { kind: 'section'; id: string; chapterId: string; title: string };
 
 function Bookshelf(props: BookshelfProps) {
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
@@ -669,7 +730,8 @@ function Bookshelf(props: BookshelfProps) {
     const target = trigger.current;
     window.requestAnimationFrame(() => {
       if (target?.isConnected) target.focus();
-      else bookSettingsDialog.current?.querySelector<HTMLElement>('summary')?.focus();
+      else if (bookSettingsDialog.current?.open) bookSettingsDialog.current.querySelector<HTMLElement>('summary')?.focus();
+      else document.querySelector<HTMLElement>('.directory-toolbar button, .book-selector-card')?.focus();
     });
   };
 
@@ -679,6 +741,8 @@ function Bookshelf(props: BookshelfProps) {
       case 'rename-book': return { title: '修改书名', label: '书名', placeholder: '输入书名', action: '保存' };
       case 'new-chapter': return { title: '新建章节', label: '章节名称', placeholder: `第 ${props.book.chapters.length + 1} 章`, action: '确认新建' };
       case 'new-section': return { title: `在《${nameDialog.chapterTitle}》中新建小节`, label: '小节名称', placeholder: '输入小节名称', action: '确认新建' };
+      case 'rename-chapter': return { title: '修改章节名称', label: '章节名称', placeholder: '输入章节名称', action: '保存' };
+      case 'rename-section': return { title: '修改小节名称', label: '小节名称', placeholder: '输入小节名称', action: '保存' };
       case 'new-character': return { title: '新建角色卡', label: '角色名称', placeholder: '输入角色名称', action: '确认新建' };
       case 'new-world': return { title: '新建世界观条例', label: '条例名称', placeholder: '输入条例名称', action: '确认新建' };
       default: return { title: '命名', label: '名称', placeholder: '输入名称', action: '确认' };
@@ -687,7 +751,15 @@ function Bookshelf(props: BookshelfProps) {
 
   const deleteDialogCopy = deleteDialog
     ? {
-        title: deleteDialog.kind === 'book' ? '删除书目' : deleteDialog.kind === 'character' ? '删除角色卡' : '删除世界观条例',
+        title: deleteDialog.kind === 'book'
+          ? '删除书目'
+          : deleteDialog.kind === 'character'
+            ? '删除角色卡'
+            : deleteDialog.kind === 'world'
+              ? '删除世界观条例'
+              : deleteDialog.kind === 'chapter'
+                ? '删除章节'
+                : '删除小节',
         message: `确定删除“${deleteDialog.title}”吗？此操作无法撤销。`,
       }
     : { title: '确认删除', message: '此操作无法撤销。' };
@@ -737,6 +809,8 @@ function Bookshelf(props: BookshelfProps) {
       case 'rename-book': props.onBookChange((current) => ({ ...current, title: value })); break;
       case 'new-chapter': props.onAddChapter(value); break;
       case 'new-section': props.onAddSection(nameDialog.chapterId, value); break;
+      case 'rename-chapter': props.onRenameChapter(nameDialog.chapterId, value); break;
+      case 'rename-section': props.onRenameSection(nameDialog.chapterId, nameDialog.sectionId, value); break;
       case 'new-character': props.onAddCharacter(value); break;
       case 'new-world': props.onAddWorldRule(value); break;
     }
@@ -748,6 +822,8 @@ function Bookshelf(props: BookshelfProps) {
     if (deleteDialog.kind === 'book') props.onDeleteBook();
     if (deleteDialog.kind === 'character') removeCharacter(deleteDialog.id);
     if (deleteDialog.kind === 'world') removeWorldRule(deleteDialog.id);
+    if (deleteDialog.kind === 'chapter') props.onDeleteChapter(deleteDialog.id);
+    if (deleteDialog.kind === 'section') props.onDeleteSection(deleteDialog.chapterId, deleteDialog.id);
     deleteDialogRef.current?.close();
   };
 
@@ -831,15 +907,49 @@ function Bookshelf(props: BookshelfProps) {
                         aria-label={`在${chapter.title}中新建小节`}
                         title="新建小节"
                       ><FilePlus2 aria-hidden="true" /></button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-haspopup="dialog"
+                        onClick={() => openNameDialog({ kind: 'rename-chapter', value: chapter.title, chapterId: chapter.id })}
+                        aria-label={`修改章节名称${chapter.title}`}
+                        title="修改章节名称"
+                      ><Pencil aria-hidden="true" /></button>
+                      <button
+                        type="button"
+                        className="icon-button danger-icon"
+                        aria-haspopup="dialog"
+                        onClick={() => openDeleteDialog({ kind: 'chapter', id: chapter.id, title: chapter.title })}
+                        aria-label={`删除章节${chapter.title}`}
+                        title="删除章节"
+                      ><Trash2 aria-hidden="true" /></button>
                     </div>
                     <ol className="section-list">
                       {chapter.sections.map((section, sectionIndex) => (
-                        <li key={section.id}>
-                          <button type="button" aria-current={section.id === props.selectedSectionId ? 'true' : undefined} onClick={() => props.onOpenSection(section.id)}>
+                        <li className="section-row" key={section.id}>
+                          <button className="section-open" type="button" aria-current={section.id === props.selectedSectionId ? 'true' : undefined} onClick={() => props.onOpenSection(section.id)}>
                             <span className="section-index">{chapterIndex + 1}.{sectionIndex + 1}</span>
                             <span><strong>{section.title}</strong><small>{section.content.length} 字符</small></span>
                             <ChevronRight className="icon-directional" aria-hidden="true" />
                           </button>
+                          <div className="section-actions">
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-haspopup="dialog"
+                              onClick={() => openNameDialog({ kind: 'rename-section', value: section.title, chapterId: chapter.id, sectionId: section.id })}
+                              aria-label={`修改小节名称${section.title}`}
+                              title="修改小节名称"
+                            ><Pencil aria-hidden="true" /></button>
+                            <button
+                              type="button"
+                              className="icon-button danger-icon"
+                              aria-haspopup="dialog"
+                              onClick={() => openDeleteDialog({ kind: 'section', id: section.id, chapterId: chapter.id, title: section.title })}
+                              aria-label={`删除小节${section.title}`}
+                              title="删除小节"
+                            ><Trash2 aria-hidden="true" /></button>
+                          </div>
                         </li>
                       ))}
                       {chapter.sections.length === 0 && <li className="empty-section">这一章还没有小节。</li>}

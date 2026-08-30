@@ -53,6 +53,10 @@ describe('writing UI contract', () => {
     expect(source).toContain("openNameDialog({ kind: 'new-book'");
     expect(source).toContain("openNameDialog({ kind: 'new-section'");
     expect(source).toContain("openNameDialog({ kind: 'rename-book'");
+    expect(source).toContain("openNameDialog({ kind: 'rename-chapter'");
+    expect(source).toContain("openNameDialog({ kind: 'rename-section'");
+    expect(source).toContain("openDeleteDialog({ kind: 'chapter'");
+    expect(source).toContain("openDeleteDialog({ kind: 'section'");
     expect(source).toContain('修改角色卡');
     expect(source).toContain('删除角色卡');
     expect(source).toContain('已确认设定');
