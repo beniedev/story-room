@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StoryStore } from '../server/store.ts';
+import { createLegacyFixtureBook } from '../src/fixtures.ts';
 import type { Book } from '../src/types.ts';
 
 const temporaryRoots: string[] = [];
@@ -73,6 +74,25 @@ describe('story store', () => {
     expect((await store.listBooks()).map((item) => item.id)).toEqual(expect.arrayContaining(['book-one', 'book-two']));
     expect((await store.loadBook('book-one')).chapters[0]?.sections[0]?.content).toBe('One');
     expect((await store.loadBook('book-two')).chapters[0]?.sections[0]?.content).toBe('Two');
+  });
+
+  it('adds new examples and upgrades only untouched legacy fixtures', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    await store.saveBook(createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira'));
+    const customized = createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan');
+    customized.writingBrief = 'Keep this user edit.';
+    await store.saveBook(customized);
+
+    const library = await store.listBooks();
+    expect(library.map((item) => item.id)).toEqual(expect.arrayContaining([
+      'the-observatory',
+      'harbor-at-noon',
+      'south-of-snowline',
+    ]));
+    expect((await store.loadBook('the-observatory')).characters).toHaveLength(5);
+    expect((await store.loadBook('harbor-at-noon')).writingBrief).toBe('Keep this user edit.');
   });
 
   it('fails closed when the library file is malformed', async () => {

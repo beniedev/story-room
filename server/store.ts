@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   Book,
   BookIndexEntry,
@@ -10,7 +11,7 @@ import type {
   Summary,
   WorldRule,
 } from '../src/types.ts';
-import { createFixtureBook } from '../src/fixtures.ts';
+import { createExampleBooks, createLegacyFixtureBook } from '../src/fixtures.ts';
 
 type BookFile = Omit<Book, 'characters' | 'worldRules' | 'canonFacts' | 'summaries' | 'chapters'> & {
   characters: Array<Pick<CharacterCard, 'id'>>;
@@ -140,9 +141,14 @@ const atomicWrite = async (file: string, content: string) => {
   }
 };
 
+const sameBookIgnoringTimestamp = (left: Book, right: Book) => (
+  isDeepStrictEqual({ ...left, updatedAt: '' }, { ...right, updatedAt: '' })
+);
+
 export class StoryStore {
   readonly root: string;
   private seedPromise?: Promise<void>;
+  private examplesPromise?: Promise<void>;
   private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(root = process.env.STORY_DATA_DIR ?? path.resolve('.data')) {
@@ -164,15 +170,37 @@ export class StoryStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         await atomicWrite(this.libraryFile(), '[]\n');
-        await this.saveBook(createFixtureBook('the-observatory', 'The Observatory', 'Mira'));
-        await this.saveBook(createFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan'));
+        for (const book of createExampleBooks()) await this.saveBook(book);
       }
     })();
     await this.seedPromise;
   }
 
+  private async ensureExamples() {
+    this.examplesPromise ??= (async () => {
+      const library = await readJson<BookIndexEntry[]>(this.libraryFile());
+      const legacyExamples = new Map([
+        ['the-observatory', createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira')],
+        ['harbor-at-noon', createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan')],
+      ]);
+      for (const example of createExampleBooks()) {
+        const entry = library.find((item) => item.id === example.id);
+        if (!entry) {
+          await this.saveBook(example);
+          continue;
+        }
+        const legacy = legacyExamples.get(example.id);
+        if (!legacy) continue;
+        const current = await this.loadBook(example.id);
+        if (sameBookIgnoringTimestamp(current, legacy)) await this.saveBook(example);
+      }
+    })();
+    await this.examplesPromise;
+  }
+
   async listBooks(): Promise<BookIndexEntry[]> {
     await this.ensureSeeded();
+    await this.ensureExamples();
     return readJson<BookIndexEntry[]>(this.libraryFile());
   }
 

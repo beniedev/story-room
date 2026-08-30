@@ -531,10 +531,28 @@ h3 {
   padding: 0.8rem;
 }
 
+.book-picker {
+  display: grid;
+  gap: 0.4rem;
+  margin-block-end: 1rem;
+}
+
+.book-picker label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.book-picker select {
+  min-height: 44px;
+  background: var(--surface-active);
+  cursor: pointer;
+  font-weight: 650;
+}
+
 .new-book-form {
   display: grid;
   gap: 0.45rem;
-  margin-block-end: 1rem;
 }
 
 .new-book-form > label,
@@ -551,33 +569,6 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.4rem;
-}
-
-.book-list {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.book-list > button {
-  display: grid;
-  gap: 0.25rem;
-  justify-items: start;
-  min-width: 0;
-  padding: 0.8rem;
-  text-align: start;
-}
-
-.book-list strong {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.book-list span {
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .shelf-content {
@@ -1353,10 +1344,6 @@ h3 {
 
   .book-rail {
     padding: 0.65rem;
-  }
-
-  .book-list {
-    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
   }
 
   .graph-branch {

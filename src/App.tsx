@@ -4,12 +4,12 @@ import {
   BookOpenText,
   Check,
   ChevronRight,
+  Download,
   FilePlus2,
   FolderPlus,
   Layers3,
   Library,
   Plus,
-  Save,
   Settings,
   Share2,
   Sparkles,
@@ -31,6 +31,50 @@ type ViewName = 'write' | 'shelf';
 type ShelfTab = 'directory' | 'sources' | 'graph';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
+
+const isCachedBook = (value: unknown, bookId: string): value is Book => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<Book>;
+  return candidate.id === bookId
+    && typeof candidate.title === 'string'
+    && typeof candidate.updatedAt === 'string'
+    && Array.isArray(candidate.characters)
+    && Array.isArray(candidate.worldRules)
+    && Array.isArray(candidate.canonFacts)
+    && Array.isArray(candidate.summaries)
+    && Array.isArray(candidate.chapters)
+    && Array.isArray(candidate.branches);
+};
+
+const readCachedBook = (bookId: string) => {
+  try {
+    const value = localStorage.getItem(bookCacheKey(bookId));
+    if (!value) return null;
+    const parsed = JSON.parse(value) as unknown;
+    return isCachedBook(parsed, bookId) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const cacheBook = (book: Book) => {
+  try {
+    localStorage.setItem(bookCacheKey(book.id), JSON.stringify(book));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const newerBook = (remote: Book, cached: Book | null) => {
+  if (!cached) return remote;
+  const remoteTime = Date.parse(remote.updatedAt);
+  const cachedTime = Date.parse(cached.updatedAt);
+  return Number.isFinite(cachedTime) && (!Number.isFinite(remoteTime) || cachedTime > remoteTime)
+    ? cached
+    : remote;
+};
 
 function App() {
   const [library, setLibrary] = useState<BookIndexEntry[]>([]);
@@ -53,6 +97,8 @@ function App() {
   const promptTrigger = useRef<HTMLElement | null>(null);
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const saveRevision = useRef(0);
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
@@ -84,6 +130,39 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!book || !dirty) return;
+    const cachedLocally = cacheBook(book);
+    setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
+      ...items.filter((item) => item.id !== book.id)]);
+    setStatus(cachedLocally
+      ? '已自动保存到此设备，正在同步私有书库…'
+      : '当前设备的浏览器存储不可用，正在尝试同步私有书库…');
+
+    const revision = saveRevision.current;
+    const timer = window.setTimeout(() => {
+      const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(book));
+      saveQueue.current = task.then(() => undefined, () => undefined);
+      void task.then((saved) => {
+        if (saveRevision.current !== revision) return;
+        cacheBook(saved);
+        setBook((current) => current?.id === saved.id ? saved : current);
+        setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
+          ...items.filter((item) => item.id !== saved.id)]);
+        setDirty(false);
+        setStatus(api.runtime === 'cloud'
+          ? '已自动保存到此设备，并同步私有云端书库。'
+          : '已自动保存到此设备和本机故事目录。');
+      }).catch((error) => {
+        if (saveRevision.current === revision) {
+          setStatus(`${error instanceof Error ? error.message : '同步失败。'} 本机自动保存不受影响。`);
+        }
+      });
+    }, 700);
+
+    return () => window.clearTimeout(timer);
+  }, [book, dirty]);
+
+  useEffect(() => {
     const dialog = promptDialog.current;
     if (promptPlan && dialog && !dialog.open) {
       dialog.showModal();
@@ -92,30 +171,65 @@ function App() {
   }, [promptPlan]);
 
   const openBook = async (bookId: string) => {
-    const loaded = await api.loadBook(bookId);
+    const remote = await api.loadBook(bookId);
+    const cached = readCachedBook(bookId);
+    const loaded = newerBook(remote, cached);
+    cacheBook(loaded);
+    saveRevision.current += 1;
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setDraft('');
-    setDirty(false);
+    setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
     setView('shelf');
     setShelfTab('directory');
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
-    setBook((current) => current ? recipe(current) : current);
+    saveRevision.current += 1;
+    setBook((current) => current
+      ? { ...recipe(current), updatedAt: new Date().toISOString() }
+      : current);
     setDirty(true);
+  };
+
+  const queueBookSave = (candidate: Book) => {
+    const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(candidate));
+    saveQueue.current = task.then(() => undefined, () => undefined);
+    return task;
   };
 
   const saveCurrent = async () => {
     if (!book) throw new Error('请先打开一本书。');
-    const saved = await api.saveBook(book);
-    setBook(saved);
+    const revision = saveRevision.current;
+    cacheBook(book);
+    const saved = await queueBookSave(book);
+    if (saveRevision.current === revision) {
+      cacheBook(saved);
+      setBook(saved);
+      setDirty(false);
+    }
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
-    setDirty(false);
-    setStatus(api.runtime === 'cloud' ? '已保存到私有云端书库。' : '已保存到本机故事目录。');
+    setStatus(api.runtime === 'cloud'
+      ? '已自动保存到此设备，并同步私有云端书库。'
+      : '已自动保存到此设备和本机故事目录。');
     return saved;
+  };
+
+  const exportCurrentBook = () => {
+    if (!book) return;
+    cacheBook(book);
+    const safeTitle = book.title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').trim() || 'story-book';
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(book, null, 2)}\n`], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeTitle}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStatus(`已导出《${book.title}》的 JSON 文件。`);
   };
 
   const generationRequest = (saved: Book) => ({
@@ -197,6 +311,8 @@ function App() {
       const created = await api.createBook(newBookTitle);
       setLibrary((items) => [{ id: created.id, title: created.title, updatedAt: created.updatedAt }, ...items]);
       setBook(created);
+      cacheBook(created);
+      saveRevision.current += 1;
       setSectionId('');
       setSelectedCharacterId('');
       setNewBookTitle('');
@@ -272,12 +388,12 @@ function App() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => void withBusy(async () => { await saveCurrent(); })}
-            disabled={busy || !book}
-            aria-label={dirty ? '保存更改' : '内容已保存'}
-            title={dirty ? '保存更改' : '内容已保存'}
+            onClick={exportCurrentBook}
+            disabled={!book}
+            aria-label="导出当前书目"
+            title="导出当前书目"
           >
-            {dirty ? <Save aria-hidden="true" /> : <Check aria-hidden="true" />}
+            <Download aria-hidden="true" />
           </button>
           <button
             ref={settingsTrigger}
@@ -503,6 +619,12 @@ function Bookshelf(props: BookshelfProps) {
   return (
     <div className="shelf-page">
       <aside className="book-rail" aria-label="Book 列表">
+        <div className="book-picker">
+          <label htmlFor="book-select">当前书目</label>
+          <select id="book-select" value={props.book.id} onChange={(event) => props.onOpenBook(event.target.value)}>
+            {props.library.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}
+          </select>
+        </div>
         <form className="new-book-form" onSubmit={props.onCreateBook}>
           <label htmlFor="new-book-title">新建书目</label>
           <div>
@@ -510,14 +632,6 @@ function Bookshelf(props: BookshelfProps) {
             <button type="submit" className="button-with-icon"><Plus aria-hidden="true" />新建</button>
           </div>
         </form>
-        <div className="book-list">
-          {props.library.map((entry) => (
-            <button key={entry.id} type="button" aria-current={entry.id === props.book.id ? 'true' : undefined} onClick={() => props.onOpenBook(entry.id)}>
-              <strong>{entry.title}</strong>
-              <span>{new Date(entry.updatedAt).toLocaleDateString()}</span>
-            </button>
-          ))}
-        </div>
       </aside>
 
       <section className="shelf-content">
@@ -724,7 +838,7 @@ function SettingsDrawer({ dialogRef, theme, onThemeChange, onClose }: {
       </section>
       <section className="settings-section" aria-labelledby="storage-heading">
         <h3 id="storage-heading">当前存储</h3>
-        <p className="helper-copy">{api.runtime === 'cloud' ? '私有云端书库；同一账号下的设备共用。' : '本机故事目录；不会自动上传。'}</p>
+        <p className="helper-copy">正文和资料会先自动保存到当前设备。{api.runtime === 'cloud' ? '联网时同时同步到你的私有云端书库。' : '本机 host 同时写入故事目录。'}</p>
       </section>
     </dialog>
   );

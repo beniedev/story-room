@@ -1,5 +1,5 @@
 import { buildContextPlan, fakeGenerate, RequestValidationError } from '../server/domain';
-import { createFixtureBook } from '../src/fixtures';
+import { createExampleBooks, createLegacyFixtureBook } from '../src/fixtures';
 import type { Book, BookIndexEntry, GenerationRequest } from '../src/types';
 
 interface Env {
@@ -23,6 +23,16 @@ class HttpError extends Error {
 const MAX_BODY_BYTES = 1_000_000;
 const idPattern = /^[a-z0-9][a-z0-9-]*$/i;
 let schemaReady: Promise<void> | undefined;
+
+const legacyExamples = new Map([
+  ['the-observatory', createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira')],
+  ['harbor-at-noon', createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan')],
+]);
+
+const sameBookIgnoringTimestamp = (left: unknown, right: Book) => {
+  if (!isRecord(left)) return false;
+  return JSON.stringify({ ...left, updatedAt: '' }) === JSON.stringify({ ...right, updatedAt: '' });
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null
@@ -105,16 +115,31 @@ const ensureDatabase = async (env: Env) => {
       )`),
       env.DB.prepare('CREATE INDEX IF NOT EXISTS books_updated_at_idx ON books (updated_at)'),
     ]);
-    const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM books').first<{ count: number }>();
-    if (Number(count?.count ?? 0) === 0) {
-      const fixtures = [
-        createFixtureBook('the-observatory', 'The Observatory', 'Mira'),
-        createFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan'),
-      ];
-      await env.DB.batch(fixtures.map((book) => env.DB.prepare(
-        'INSERT OR IGNORE INTO books (id, title, data_json, updated_at) VALUES (?, ?, ?, ?)',
-      ).bind(book.id, book.title, JSON.stringify(book), book.updatedAt)));
-    }
+    const fixtures = createExampleBooks();
+    const existing = await env.DB.prepare(
+      'SELECT id, title, data_json, updated_at FROM books WHERE id IN (?, ?, ?)',
+    ).bind(...fixtures.map((book) => book.id)).all<BookRow>();
+    const existingById = new Map(existing.results.map((row) => [row.id, row]));
+    const writes = fixtures.flatMap((book) => {
+      const row = existingById.get(book.id);
+      if (!row) {
+        return [env.DB.prepare(
+          'INSERT INTO books (id, title, data_json, updated_at) VALUES (?, ?, ?, ?)',
+        ).bind(book.id, book.title, JSON.stringify(book), book.updatedAt)];
+      }
+      const legacy = legacyExamples.get(book.id);
+      let current: unknown;
+      try {
+        current = JSON.parse(row.data_json) as unknown;
+      } catch {
+        return [];
+      }
+      if (!legacy || !sameBookIgnoringTimestamp(current, legacy)) return [];
+      return [env.DB.prepare(
+        'UPDATE books SET title = ?, data_json = ?, updated_at = ? WHERE id = ?',
+      ).bind(book.title, JSON.stringify(book), book.updatedAt, book.id)];
+    });
+    if (writes.length > 0) await env.DB.batch(writes);
   })();
   try {
     await schemaReady;

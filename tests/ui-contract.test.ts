@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { createExampleBooks } from '../src/fixtures';
 
 describe('writing UI contract', () => {
   it('keeps the manuscript out of chat UI structures', async () => {
@@ -35,5 +36,23 @@ describe('writing UI contract', () => {
     expect(source).toContain('font-size: 1rem');
     expect(source).toContain('env(safe-area-inset-bottom)');
     expect(source).toContain(':focus-visible');
+  });
+
+  it('uses local-first autosave, a real export action, and a native book picker', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");
+    expect(source).toContain('<Download aria-hidden="true" />');
+    expect(source).toContain('download = `${safeTitle}.json`');
+    expect(source).toContain('id="book-select"');
+    expect(source).toContain('value={props.book.id}');
+  });
+
+  it('provides three example books with the requested character and chapter depth', () => {
+    const books = createExampleBooks();
+    expect(books).toHaveLength(3);
+    expect(books.map((book) => book.characters.length)).toEqual([5, 4, 2]);
+    expect(books.every((book) => book.chapters.length >= 2 && book.chapters.length <= 3)).toBe(true);
+    expect(books.every((book) => book.chapters.every((chapter) => chapter.sections.length >= 2 && chapter.sections.length <= 3))).toBe(true);
+    expect(books.some((book) => book.chapters.some((chapter) => chapter.sections.some((section) => section.content.trim())))).toBe(true);
   });
 });
