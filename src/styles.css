@@ -768,6 +768,13 @@ h3 {
   margin-block-end: 1rem;
 }
 
+.book-settings-button {
+  min-height: 44px;
+  padding-inline: 0.85rem;
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
 .directory-actions {
   display: flex;
   gap: 0.3rem;
@@ -1348,46 +1355,16 @@ h3 {
   margin: 0;
 }
 
-.settings-list,
-.provider-profile-list {
-  display: grid;
-  gap: 0.65rem;
+.settings-section select {
+  min-height: 44px;
 }
 
-.settings-list-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  width: 100%;
-  gap: 0.75rem;
-  min-height: 60px;
-  padding: 0.75rem;
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  text-align: start;
-}
-
-.settings-list-row[aria-pressed="true"] {
-  background: var(--surface-active);
-  color: var(--accent-strong);
-}
-
-.settings-list-row > svg:first-child {
-  color: var(--accent);
-}
-
-.settings-list-row > span {
-  display: grid;
-  gap: 0.2rem;
-  min-width: 0;
-}
-
-.settings-list-row small {
+.compact-setting-note {
+  margin: 0;
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 500;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .settings-subdrawer {
@@ -1443,15 +1420,19 @@ h3 {
   padding-block-start: 1rem;
 }
 
-.settings-subheading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+.provider-profile-picker {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
 }
 
-.settings-subheading h4 {
-  margin: 0;
+.provider-profile-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .provider-profile-form {

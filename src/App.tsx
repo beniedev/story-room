@@ -19,7 +19,6 @@ import {
   Pencil,
   Plus,
   ScrollText,
-  Server,
   Settings,
   Sparkles,
   Trash2,
@@ -1117,7 +1116,7 @@ function Bookshelf(props: BookshelfProps) {
             <div className="book-actions-row">
               <button
                 type="button"
-                className="icon-button"
+                className="book-settings-button button-with-icon"
                 aria-haspopup="dialog"
                 aria-label="新建书目"
                 title="新建书目"
@@ -1159,7 +1158,7 @@ function Bookshelf(props: BookshelfProps) {
                 }}
                 aria-label="打开本书设定"
                 title="本书设定"
-              ><BookMarked aria-hidden="true" /></button>
+              ><BookMarked aria-hidden="true" /><span>设定</span></button>
               <div className="directory-actions">
                 <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-chapter', value: '' })} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
                 <button
@@ -1608,18 +1607,12 @@ function SettingsDrawer({
       </header>
       <section className="settings-section" aria-labelledby="theme-heading">
         <h3 id="theme-heading">皮肤</h3>
-        <div className="settings-list" aria-label="选择皮肤">
-          <button type="button" className="settings-list-row" aria-pressed={theme === 'paper'} onClick={() => onThemeChange('paper')}>
-            <BookOpenText aria-hidden="true" />
-            <span><strong>Paper</strong><small>类 Notion / Obsidian 的安静默认版</small></span>
-            {theme === 'paper' && <Check aria-hidden="true" />}
-          </button>
-          <button type="button" className="settings-list-row" aria-pressed={theme === 'manga'} onClick={() => onThemeChange('manga')}>
-            <Sparkles aria-hidden="true" />
-            <span><strong>少女漫画</strong><small>沿用酒馆的粉紫交互语言</small></span>
-            {theme === 'manga' && <Check aria-hidden="true" />}
-          </button>
-        </div>
+        <label className="sr-only" htmlFor="theme-select">选择皮肤</label>
+        <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeName)}>
+          <option value="paper">Paper · 默认</option>
+          <option value="manga">少女漫画</option>
+        </select>
+        <p className="compact-setting-note">{theme === 'paper' ? '类 Notion / Obsidian 的安静默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
       </section>
       <section className="settings-section" aria-labelledby="provider-settings-heading">
         <h3 id="provider-settings-heading" className="sr-only">模型连接</h3>
@@ -1630,24 +1623,23 @@ function SettingsDrawer({
             <ChevronDown aria-hidden="true" />
           </summary>
           <div className="provider-settings-content">
-            <div className="settings-subheading">
-              <h4>连接方案</h4>
-              <button type="button" className="icon-button" onClick={startNewProfile} aria-label="新建连接方案" title="新建连接方案"><Plus aria-hidden="true" /></button>
-            </div>
-            <div className="provider-profile-list" aria-label="已保存的连接方案">
-              {providerProfiles.map((profile) => (
-                <button
-                  type="button"
-                  className="settings-list-row provider-profile-row"
-                  aria-pressed={profile.id === activeProviderProfileId}
-                  onClick={() => selectProfile(profile)}
-                  key={profile.id}
+            <div className="provider-profile-picker">
+              <label htmlFor="provider-profile-select">连接方案</label>
+              <div className="provider-profile-select-row">
+                <select
+                  id="provider-profile-select"
+                  value={editingId}
+                  onChange={(event) => {
+                    const profile = providerProfiles.find((item) => item.id === event.target.value);
+                    if (profile) selectProfile(profile);
+                    else startNewProfile();
+                  }}
                 >
-                  <Server aria-hidden="true" />
-                  <span><strong>{profile.name}</strong><small>{profile.modelId || '未填写模型 ID'}</small></span>
-                  {profile.id === activeProviderProfileId && <Check aria-hidden="true" />}
-                </button>
-              ))}
+                  <option value="">新连接方案</option>
+                  {providerProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.modelId}</option>)}
+                </select>
+                <button type="button" className="icon-button" onClick={startNewProfile} aria-label="新建连接方案" title="新建连接方案"><Plus aria-hidden="true" /></button>
+              </div>
             </div>
             <form className="provider-profile-form" onSubmit={submitProfile}>
               <label htmlFor="provider-profile-name">方案名称</label>

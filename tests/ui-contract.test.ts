@@ -97,6 +97,9 @@ describe('writing UI contract', () => {
   it('keeps settings compact while supporting reusable provider profiles', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain('选择皮肤');
+    expect(source).toContain('id="theme-select"');
+    expect(source).toContain('id="provider-profile-select"');
+    expect(source).toContain('<span>设定</span>');
     expect(source).toContain('模型连接');
     expect(source).toContain('API Key');
     expect(source).toContain('模型 ID');
@@ -105,6 +108,8 @@ describe('writing UI contract', () => {
     expect(source).toContain('保存连接方案');
     expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
     expect(source).toContain('type="password"');
+    expect(source).not.toContain('className="settings-list-row');
+    expect(source).not.toContain('className="provider-profile-list');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {
