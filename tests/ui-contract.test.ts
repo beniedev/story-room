@@ -47,6 +47,20 @@ describe('writing UI contract', () => {
     expect(source).toContain('value={props.book.id}');
   });
 
+  it('keeps book creation and source management compact and understandable', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('aria-controls="new-book-form"');
+    expect(source).toContain('修改角色卡');
+    expect(source).toContain('删除角色卡');
+    expect(source).toContain('已确认设定');
+    expect(source).toContain('前文摘要');
+    expect(source).toContain('className="book-settings-drawer"');
+    expect(source).toContain('本书设定');
+    expect(source).not.toContain('aria-label="书目视图"');
+    expect(source).not.toContain('Canon 与摘要');
+    expect(source).not.toContain('<span>装入 Prompt</span>');
+  });
+
   it('provides three example books with the requested character and chapter depth', () => {
     const books = createExampleBooks();
     expect(books).toHaveLength(3);
