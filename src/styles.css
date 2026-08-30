@@ -83,6 +83,29 @@ button {
   transition-timing-function: ease-out;
 }
 
+button svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  place-items: center;
+}
+
+.button-with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
 button:hover,
 button[aria-current],
 button[aria-pressed="true"],
@@ -190,7 +213,7 @@ h3 {
   inset-block-start: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 1.3fr) minmax(12rem, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
   padding: 0.65rem clamp(0.75rem, 3vw, 2rem);
@@ -217,6 +240,15 @@ h3 {
   min-width: 0;
 }
 
+.brand-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.2rem 0.45rem 0.2rem 0.2rem;
+  background: transparent;
+}
+
 .brand-mark {
   display: grid;
   width: 2.35rem;
@@ -235,6 +267,27 @@ h3 {
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.header-context {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  justify-items: center;
+  line-height: 1.25;
+}
+
+.header-context strong,
+.header-context span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-context span {
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .demo-badge,
@@ -260,6 +313,17 @@ h3 {
   background: var(--surface-soft);
 }
 
+.content-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.content-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
 .primary-tabs button,
 .content-tabs button,
 .segmented-control button {
@@ -268,6 +332,7 @@ h3 {
 }
 
 .primary-tabs button[aria-current],
+.content-tabs button[aria-current],
 .content-tabs button[aria-selected="true"],
 .content-tabs button[aria-pressed="true"],
 .segmented-control button[aria-pressed="true"] {
@@ -277,6 +342,10 @@ h3 {
 .header-actions {
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.header-actions .icon-button:first-child {
+  color: var(--accent-strong);
 }
 
 .save-button,
@@ -301,6 +370,16 @@ h3 {
   width: min(100%, 72ch);
   margin-inline: auto;
   margin-block-end: 1.25rem;
+}
+
+.back-to-directory {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-block-end: 0.8rem;
+  padding-inline: 0.55rem;
+  background: transparent;
+  color: var(--muted);
 }
 
 .breadcrumb,
@@ -523,6 +602,122 @@ h3 {
   align-items: start;
 }
 
+.directory-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 1rem;
+}
+
+.directory-title-row h2 {
+  margin: 0;
+}
+
+.book-directory-root {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-radius: var(--radius-card);
+  background: var(--surface-active);
+}
+
+.book-directory-root > svg {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0.55rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--accent);
+}
+
+.book-directory-root > span:nth-child(2),
+.chapter-card summary > span:nth-child(2),
+.section-list button > span:nth-child(2) {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.book-directory-root small,
+.chapter-card summary small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.book-directory-root > span:last-child,
+.chapter-card summary > span:last-child {
+  color: var(--muted);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.chapter-list,
+.section-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chapter-list {
+  display: grid;
+  gap: 0.8rem;
+  margin-block-start: 1rem;
+}
+
+.chapter-card {
+  position: relative;
+}
+
+.chapter-card details {
+  margin: 0;
+}
+
+.chapter-card summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 56px;
+  padding: 0.7rem 3.7rem 0.7rem 0.8rem;
+  background: var(--surface);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.chapter-index,
+.section-index {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.chapter-index {
+  display: grid;
+  width: 2.55rem;
+  height: 2.55rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-soft);
+}
+
+.chapter-actions {
+  position: absolute;
+  inset-block-start: 0.35rem;
+  inset-inline-end: 0.35rem;
+}
+
+.chapter-actions .icon-button {
+  width: 44px;
+  min-width: 44px;
+  background: transparent;
+}
+
 .directory-panel,
 .prompt-settings,
 .graph-view {
@@ -551,19 +746,50 @@ h3 {
   font-weight: 700;
 }
 
+.directory-panel .chapter-card details {
+  margin: 0;
+}
+
+.directory-panel .chapter-card summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 56px;
+  padding: 0.7rem 3.7rem 0.7rem 0.8rem;
+}
+
 .section-list {
   display: grid;
   gap: 0.4rem;
   padding-block: 0.5rem 1rem;
-  padding-inline-start: 1rem;
+  padding-inline-start: 1.1rem;
 }
 
 .section-list button {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
   text-align: start;
+}
+
+.section-list button > svg {
+  color: var(--muted);
+}
+
+.section-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty-section {
+  padding: 0.8rem;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .section-list small,
@@ -744,6 +970,116 @@ h3 {
   color: var(--text);
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.settings-drawer {
+  width: min(27rem, 100vw);
+  max-width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
+  background: var(--page);
+  color: var(--text);
+  opacity: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  transform: translateX(100%);
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: 180ms;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+.settings-drawer[open] {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+@starting-style {
+  .settings-drawer[open] {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.settings-drawer::backdrop,
+.prompt-dialog::backdrop {
+  background: rgba(35, 24, 37, 0.28);
+}
+
+.drawer-heading {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--page) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.drawer-heading h2 {
+  margin: 0;
+}
+
+.settings-section {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.settings-section + .settings-section {
+  margin-block-start: 0.75rem;
+}
+
+.settings-section h3 {
+  margin: 0;
+}
+
+.theme-options {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.theme-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 64px;
+  padding: 0.75rem;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.theme-option:has(input:checked) {
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.theme-option input {
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.theme-option > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.theme-option small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .prompt-dialog::backdrop {
@@ -935,12 +1271,7 @@ h3 {
 
 @media (max-width: 64rem) {
   .app-header {
-    grid-template-columns: 1fr auto;
-  }
-
-  .primary-tabs {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .directory-layout {
@@ -970,10 +1301,7 @@ h3 {
   }
 
   .header-actions button:first-child {
-    max-width: 8.3rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    max-width: none;
   }
 
   .writer-page {
@@ -1023,6 +1351,10 @@ h3 {
     padding: 0.65rem;
   }
 
+  .book-rail {
+    padding: 0.65rem;
+  }
+
   .book-list {
     grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
   }
@@ -1039,6 +1371,11 @@ h3 {
     padding-block-end: env(safe-area-inset-bottom);
   }
 
+  .settings-drawer {
+    border-radius: 0;
+    padding-block-end: env(safe-area-inset-bottom);
+  }
+
   .prompt-blocks summary {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -1051,21 +1388,51 @@ h3 {
 
 @media (max-width: 24rem) {
   .app-header {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .header-actions {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    gap: 0.2rem;
   }
 
   .header-actions button {
-    width: 100%;
+    width: 44px;
   }
 
   .segmented-control,
   .primary-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .header-context span {
+    display: none;
+  }
+
+  .content-tabs button {
+    gap: 0.25rem;
+    padding-inline: 0.4rem;
+  }
+
+  .book-directory-root {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .book-directory-root > span:last-child {
+    grid-column: 2;
+    white-space: normal;
+  }
+
+  .chapter-card summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .chapter-card summary > span:last-child {
+    display: none;
+  }
+
+  .section-list {
+    padding-inline-start: 0.5rem;
   }
 
   .source-card {

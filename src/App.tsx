@@ -1,4 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  BookOpenText,
+  Check,
+  ChevronRight,
+  FilePlus2,
+  FolderPlus,
+  Layers3,
+  Library,
+  Plus,
+  Save,
+  Settings,
+  Share2,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { api } from './api';
 import type {
   Book,
@@ -12,9 +28,7 @@ import type {
 } from './types';
 
 type ViewName = 'write' | 'shelf';
-type ShelfTab = 'directory' | 'graph';
-
-const firstSectionId = (book: Book) => book.chapters[0]?.sections[0]?.id ?? '';
+type ShelfTab = 'directory' | 'sources' | 'graph';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
@@ -22,7 +36,7 @@ function App() {
   const [library, setLibrary] = useState<BookIndexEntry[]>([]);
   const [book, setBook] = useState<Book | null>(null);
   const [sectionId, setSectionId] = useState('');
-  const [view, setView] = useState<ViewName>('write');
+  const [view, setView] = useState<ViewName>('shelf');
   const [shelfTab, setShelfTab] = useState<ShelfTab>('directory');
   const [mode, setMode] = useState<GenerationMode>('author');
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
@@ -37,14 +51,24 @@ function App() {
   const [newBookTitle, setNewBookTitle] = useState('');
   const promptDialog = useRef<HTMLDialogElement>(null);
   const promptTrigger = useRef<HTMLElement | null>(null);
+  const settingsDialog = useRef<HTMLDialogElement>(null);
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
+  const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
+    chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.title = view === 'write' && book && section
+      ? `${section.title} · ${book.title} · Story-native`
+      : '故事书架 · Story-native';
+  }, [book, section, view]);
 
   useEffect(() => {
     void (async () => {
@@ -70,10 +94,12 @@ function App() {
   const openBook = async (bookId: string) => {
     const loaded = await api.loadBook(bookId);
     setBook(loaded);
-    setSectionId(firstSectionId(loaded));
+    setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setDraft('');
     setDirty(false);
+    setView('shelf');
+    setShelfTab('directory');
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
@@ -171,7 +197,7 @@ function App() {
       const created = await api.createBook(newBookTitle);
       setLibrary((items) => [{ id: created.id, title: created.title, updatedAt: created.updatedAt }, ...items]);
       setBook(created);
-      setSectionId(firstSectionId(created));
+      setSectionId('');
       setSelectedCharacterId('');
       setNewBookTitle('');
       setDirty(false);
@@ -205,14 +231,26 @@ function App() {
     }],
   }));
 
-  const addSection = () => changeBook((current) => {
-    const targetChapter = current.chapters[0];
-    if (!targetChapter) return current;
-    const next = { id: makeId('section'), title: `新段落 ${targetChapter.sections.length + 1}`, content: '' };
-    setSectionId(next.id);
+  const addChapter = () => changeBook((current) => {
+    const chapterId = makeId('chapter');
+    const sectionId = makeId('section');
     return {
       ...current,
-      chapters: current.chapters.map((chapter, index) => index === 0
+      chapters: [...current.chapters, {
+        id: chapterId,
+        title: `第 ${current.chapters.length + 1} 章`,
+        sections: [{ id: sectionId, title: '新小节', content: '' }],
+      }],
+    };
+  });
+
+  const addSection = (chapterId: string) => changeBook((current) => {
+    const targetChapter = current.chapters.find((chapter) => chapter.id === chapterId);
+    if (!targetChapter) return current;
+    const next = { id: makeId('section'), title: `第 ${targetChapter.sections.length + 1} 节`, content: '' };
+    return {
+      ...current,
+      chapters: current.chapters.map((chapter) => chapter.id === chapterId
         ? { ...chapter, sections: [...chapter.sections, next] }
         : chapter),
     };
@@ -222,27 +260,40 @@ function App() {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
       <header className="app-header">
-        <div className="brand-group">
-          <span className="brand-mark" aria-hidden="true">文</span>
+        <button type="button" className="brand-home" onClick={() => { setView('shelf'); setShelfTab('directory'); }} aria-label="返回故事书架" title="返回故事书架">
+          <span className="brand-mark" aria-hidden="true"><Library size={20} strokeWidth={2} /></span>
           <span className="brand-name">Story-native</span>
-          <span className="demo-badge">{api.runtime === 'cloud' ? 'Private Cloud DEMO' : 'Local DEMO'}</span>
+        </button>
+        <div className="header-context" aria-live="polite">
+          <strong>{view === 'write' && book ? book.title : '故事书架'}</strong>
+          {view === 'write' && section && <span>{sectionChapter?.title} · {section.title}</span>}
         </div>
-        <nav className="primary-tabs" aria-label="主要页面">
-          <button type="button" aria-current={view === 'write' ? 'page' : undefined} onClick={() => setView('write')}>写作</button>
-          <button type="button" aria-current={view === 'shelf' ? 'page' : undefined} onClick={() => setView('shelf')}>故事书架</button>
-        </nav>
         <div className="header-actions">
-          <button type="button" onClick={() => setTheme(theme === 'paper' ? 'manga' : 'paper')}>
-            {theme === 'paper' ? '切到少女漫画' : '切到 Paper'}
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => void withBusy(async () => { await saveCurrent(); })}
+            disabled={busy || !book}
+            aria-label={dirty ? '保存更改' : '内容已保存'}
+            title={dirty ? '保存更改' : '内容已保存'}
+          >
+            {dirty ? <Save aria-hidden="true" /> : <Check aria-hidden="true" />}
           </button>
-          <button type="button" className="save-button" onClick={() => void withBusy(async () => { await saveCurrent(); })}>
-            {dirty ? '保存更改' : '已保存'}
+          <button
+            ref={settingsTrigger}
+            type="button"
+            className="icon-button"
+            onClick={() => settingsDialog.current?.showModal()}
+            aria-label="打开设置"
+            title="设置"
+          >
+            <Settings aria-hidden="true" />
           </button>
         </div>
       </header>
 
       <main id="main-content">
-        {book && view === 'write' ? (
+        {book && view === 'write' && section ? (
           <Writer
             book={book}
             section={section}
@@ -259,6 +310,7 @@ function App() {
             onGenerate={() => void previewGeneration()}
             onApplyDraft={applyDraft}
             onDiscardDraft={() => setDraft('')}
+            onBackToDirectory={() => { setView('shelf'); setShelfTab('directory'); }}
           />
         ) : book ? (
           <Bookshelf
@@ -267,6 +319,7 @@ function App() {
             tab={shelfTab}
             newBookTitle={newBookTitle}
             selectedCharacterId={selectedCharacterId}
+            selectedSectionId={sectionId}
             onTabChange={setShelfTab}
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => { setSectionId(id); setView('write'); }}
@@ -276,6 +329,7 @@ function App() {
             onSelectedCharacterChange={setSelectedCharacterId}
             onAddCharacter={addCharacter}
             onAddWorldRule={addWorldRule}
+            onAddChapter={addChapter}
             onAddSection={addSection}
           />
         ) : (
@@ -284,6 +338,13 @@ function App() {
       </main>
 
       <div className="status-line" role="status" aria-live="polite">{status}</div>
+
+      <SettingsDrawer
+        dialogRef={settingsDialog}
+        theme={theme}
+        onThemeChange={setTheme}
+        onClose={() => settingsTrigger.current?.focus()}
+      />
 
       <PromptDialog
         dialogRef={promptDialog}
@@ -314,6 +375,7 @@ interface WriterProps {
   onGenerate: () => void;
   onApplyDraft: () => void;
   onDiscardDraft: () => void;
+  onBackToDirectory: () => void;
 }
 
 function Writer(props: WriterProps) {
@@ -323,6 +385,10 @@ function Writer(props: WriterProps) {
   return (
     <div className="writer-page">
       <header className="writer-heading">
+        <button type="button" className="back-to-directory" onClick={props.onBackToDirectory}>
+          <ArrowLeft aria-hidden="true" />
+          返回目录
+        </button>
         <p className="breadcrumb">{props.book.title} <span aria-hidden="true">/</span> {props.section?.title}</p>
         <h1>{props.section?.title ?? '尚无正文'}</h1>
         <div className="mode-row">
@@ -374,8 +440,8 @@ function Writer(props: WriterProps) {
           </div>
           <p>{props.draft}</p>
           <div className="draft-actions">
-            <button type="button" className="primary-action" onClick={props.onApplyDraft}>应用到正文</button>
-            <button type="button" onClick={props.onDiscardDraft}>放弃预览</button>
+            <button type="button" className="primary-action button-with-icon" onClick={props.onApplyDraft}><Check aria-hidden="true" />应用到正文</button>
+            <button type="button" className="button-with-icon" onClick={props.onDiscardDraft}><X aria-hidden="true" />放弃预览</button>
           </div>
         </section>
       )}
@@ -389,8 +455,8 @@ function Writer(props: WriterProps) {
           placeholder={props.mode === 'author' ? '例如：让场景出现一个新的变化…' : '以当前角色输入行动、台词或选择…'}
         />
         <div className="instruction-actions">
-          <button type="button" onClick={props.onShowPrompt} disabled={props.busy}>查看 Prompt</button>
-          <button type="submit" className="primary-action" disabled={props.busy}>{props.busy ? '正在准备…' : '预览续写'}</button>
+          <button type="button" className="button-with-icon" onClick={props.onShowPrompt} disabled={props.busy}><Layers3 aria-hidden="true" />查看 Prompt</button>
+          <button type="submit" className="primary-action button-with-icon" disabled={props.busy}><Sparkles aria-hidden="true" />{props.busy ? '正在准备…' : '预览续写'}</button>
         </div>
       </form>
     </div>
@@ -403,6 +469,7 @@ interface BookshelfProps {
   tab: ShelfTab;
   newBookTitle: string;
   selectedCharacterId: string;
+  selectedSectionId: string;
   onTabChange: (tab: ShelfTab) => void;
   onOpenBook: (id: string) => void;
   onOpenSection: (id: string) => void;
@@ -412,7 +479,8 @@ interface BookshelfProps {
   onSelectedCharacterChange: (id: string) => void;
   onAddCharacter: () => void;
   onAddWorldRule: () => void;
-  onAddSection: () => void;
+  onAddChapter: () => void;
+  onAddSection: (chapterId: string) => void;
 }
 
 function Bookshelf(props: BookshelfProps) {
@@ -436,10 +504,10 @@ function Bookshelf(props: BookshelfProps) {
     <div className="shelf-page">
       <aside className="book-rail" aria-label="Book 列表">
         <form className="new-book-form" onSubmit={props.onCreateBook}>
-          <label htmlFor="new-book-title">新 Book</label>
+          <label htmlFor="new-book-title">新建书目</label>
           <div>
             <input id="new-book-title" value={props.newBookTitle} onChange={(event) => props.onNewBookTitleChange(event.target.value)} placeholder="书名" />
-            <button type="submit">新建</button>
+            <button type="submit" className="button-with-icon"><Plus aria-hidden="true" />新建</button>
           </div>
         </form>
         <div className="book-list">
@@ -455,36 +523,60 @@ function Bookshelf(props: BookshelfProps) {
       <section className="shelf-content">
         <header className="shelf-heading">
           <div>
-            <p className="eyebrow">故事书架</p>
+            <p className="eyebrow">当前书目</p>
             <h1>{props.book.title}</h1>
           </div>
-          <div className="content-tabs" role="group" aria-label="书架视图">
-            <button type="button" aria-pressed={props.tab === 'directory'} onClick={() => props.onTabChange('directory')}>书籍目录</button>
-            <button type="button" aria-pressed={props.tab === 'graph'} onClick={() => props.onTabChange('graph')}>关系图</button>
-          </div>
+          <nav className="content-tabs" aria-label="书目视图">
+            <button type="button" aria-current={props.tab === 'directory' ? 'page' : undefined} onClick={() => props.onTabChange('directory')}><BookOpenText aria-hidden="true" />目录</button>
+            <button type="button" aria-current={props.tab === 'sources' ? 'page' : undefined} onClick={() => props.onTabChange('sources')}><Layers3 aria-hidden="true" />资料</button>
+            <button type="button" aria-current={props.tab === 'graph' ? 'page' : undefined} onClick={() => props.onTabChange('graph')}><Share2 aria-hidden="true" />关系</button>
+          </nav>
         </header>
 
         {props.tab === 'directory' ? (
-          <div className="directory-layout">
-            <section className="directory-panel" aria-labelledby="directory-heading">
-              <div className="section-heading-row">
-                <h2 id="directory-heading">章节与正文</h2>
-                <button type="button" onClick={props.onAddSection}>新建段落</button>
+          <section className="directory-panel" aria-labelledby="directory-heading">
+            <div className="directory-title-row">
+              <div>
+                <p className="eyebrow">书 · 章 · 节</p>
+                <h2 id="directory-heading">电子书目录</h2>
               </div>
-              {props.book.chapters.map((chapter) => (
-                <details key={chapter.id} open>
-                  <summary>{chapter.title}</summary>
-                  <div className="section-list">
-                    {chapter.sections.map((section) => (
-                      <button key={section.id} type="button" onClick={() => props.onOpenSection(section.id)}>
-                        <span>{section.title}</span><small>{section.content.length} 字符</small>
-                      </button>
-                    ))}
-                  </div>
-                </details>
+              <button type="button" className="icon-button" onClick={props.onAddChapter} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
+            </div>
+            <div className="book-directory-root">
+              <BookOpenText aria-hidden="true" />
+              <span><small>书</small><strong>{props.book.title}</strong></span>
+              <span>{props.book.chapters.length} 章 · {props.book.chapters.reduce((count, chapter) => count + chapter.sections.length, 0)} 节</span>
+            </div>
+            <ol className="chapter-list">
+              {props.book.chapters.map((chapter, chapterIndex) => (
+                <li className="chapter-card" key={chapter.id}>
+                  <details open>
+                    <summary>
+                      <span className="chapter-index">{String(chapterIndex + 1).padStart(2, '0')}</span>
+                      <span><small>章</small><strong>{chapter.title}</strong></span>
+                      <span>{chapter.sections.length} 节</span>
+                    </summary>
+                    <div className="chapter-actions">
+                      <button type="button" className="icon-button" onClick={() => props.onAddSection(chapter.id)} aria-label={`在${chapter.title}中新建小节`} title="新建小节"><FilePlus2 aria-hidden="true" /></button>
+                    </div>
+                    <ol className="section-list">
+                      {chapter.sections.map((section, sectionIndex) => (
+                        <li key={section.id}>
+                          <button type="button" aria-current={section.id === props.selectedSectionId ? 'true' : undefined} onClick={() => props.onOpenSection(section.id)}>
+                            <span className="section-index">{chapterIndex + 1}.{sectionIndex + 1}</span>
+                            <span><strong>{section.title}</strong><small>{section.content.length} 字符</small></span>
+                            <ChevronRight className="icon-directional" aria-hidden="true" />
+                          </button>
+                        </li>
+                      ))}
+                      {chapter.sections.length === 0 && <li className="empty-section">这一章还没有小节。</li>}
+                    </ol>
+                  </details>
+                </li>
               ))}
-            </section>
-
+            </ol>
+          </section>
+        ) : props.tab === 'sources' ? (
             <section className="prompt-settings" aria-labelledby="prompt-settings-heading">
               <div className="section-heading-row">
                 <div>
@@ -551,7 +643,6 @@ function Bookshelf(props: BookshelfProps) {
                 </label>
               ))}
             </section>
-          </div>
         ) : (
           <StoryGraph book={props.book} onOpenSection={props.onOpenSection} />
         )}
@@ -595,6 +686,50 @@ function StoryGraph({ book, onOpenSection }: { book: Book; onOpenSection: (id: s
   );
 }
 
+function SettingsDrawer({ dialogRef, theme, onThemeChange, onClose }: {
+  dialogRef: React.RefObject<HTMLDialogElement | null>;
+  theme: ThemeName;
+  onThemeChange: (theme: ThemeName) => void;
+  onClose: () => void;
+}) {
+  const closeDrawer = () => dialogRef.current?.close();
+
+  return (
+    <dialog
+      className="settings-drawer"
+      ref={dialogRef}
+      onClose={onClose}
+      onCancel={(event) => { event.preventDefault(); closeDrawer(); }}
+      aria-labelledby="settings-title"
+    >
+      <header className="drawer-heading">
+        <div>
+          <p className="eyebrow">界面偏好</p>
+          <h2 id="settings-title">设置</h2>
+        </div>
+        <button type="button" className="icon-button" autoFocus onClick={closeDrawer} aria-label="关闭设置" title="关闭设置"><X aria-hidden="true" /></button>
+      </header>
+      <section className="settings-section" aria-labelledby="theme-heading">
+        <h3 id="theme-heading">主题</h3>
+        <div className="theme-options">
+          <label className="theme-option">
+            <input type="radio" name="theme" value="paper" checked={theme === 'paper'} onChange={() => onThemeChange('paper')} />
+            <span><strong>Paper</strong><small>类 Notion / Obsidian 的安静默认版</small></span>
+          </label>
+          <label className="theme-option manga-option">
+            <input type="radio" name="theme" value="manga" checked={theme === 'manga'} onChange={() => onThemeChange('manga')} />
+            <span><strong>少女漫画</strong><small>沿用你现在酒馆的粉紫交互语言</small></span>
+          </label>
+        </div>
+      </section>
+      <section className="settings-section" aria-labelledby="storage-heading">
+        <h3 id="storage-heading">当前存储</h3>
+        <p className="helper-copy">{api.runtime === 'cloud' ? '私有云端书库；同一账号下的设备共用。' : '本机故事目录；不会自动上传。'}</p>
+      </section>
+    </dialog>
+  );
+}
+
 function PromptDialog({ dialogRef, plan, onClose }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
   plan: ContextPlan | null;
@@ -622,7 +757,7 @@ function PromptDialog({ dialogRef, plan, onClose }: {
           <p className="eyebrow">将发送给 Provider 的输入</p>
           <h2 id="prompt-dialog-title">Prompt 计划</h2>
         </div>
-        <button type="button" data-dialog-close autoFocus onClick={closeDialog} aria-label="关闭 Prompt 计划">关闭</button>
+        <button type="button" className="icon-button" data-dialog-close autoFocus onClick={closeDialog} aria-label="关闭 Prompt 计划" title="关闭 Prompt 计划"><X aria-hidden="true" /></button>
       </div>
       {plan && (
         <div className="prompt-plan">
