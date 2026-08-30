@@ -31,7 +31,7 @@ describe('writing UI contract', () => {
   it('keeps mobile reflow and touch/focus contracts explicit', async () => {
     const source = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('@media (max-width: 24rem)');
-    expect(source).toContain('.source-card {');
+    expect(source).toContain('.source-open-row {');
     expect(source).toContain('min-height: 44px');
     expect(source).toContain('font-size: 1rem');
     expect(source).toContain('env(safe-area-inset-bottom)');
@@ -61,8 +61,16 @@ describe('writing UI contract', () => {
     expect(source).toContain('toggleSectionSelection');
     expect(source).toContain("kind: 'selection'");
     expect(source).toContain('删除所选内容');
-    expect(source).toContain('修改角色卡');
-    expect(source).toContain('删除角色卡');
+    expect(source).toContain('返回本书设定');
+    expect(source).toContain('bookSettingsOpenRequest');
+    expect(source).toContain("openSourcePage('character'");
+    expect(source).toContain("openSourcePage('world'");
+    expect(source).toContain("kind: 'source-selection'");
+    expect(source).toContain('删除所选角色卡');
+    expect(source).toContain('删除所选世界观条例');
+    expect(source).not.toContain('editingCharacterId');
+    expect(source).not.toContain('editingWorldId');
+    expect(source).toContain('className="source-editor-page"');
     expect(source).toContain('全局指引');
     expect(source).toContain('剧情大纲');
     expect(source).toContain('写作风格指导');
