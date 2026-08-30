@@ -15,7 +15,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vite/client", "vitest/globals", "@cloudflare/workers-types"]
   },
-  "include": ["src", "server", "tests", "vite.config.ts"]
+  "include": ["src", "server", "worker", "db", "tests", "vite.config.ts", "drizzle.config.ts"]
 }

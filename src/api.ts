@@ -17,6 +17,7 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
 };
 
 export const api = {
+  runtime: import.meta.env.MODE === 'site' ? 'cloud' as const : 'local' as const,
   listBooks: () => request<BookIndexEntry[]>('/api/library'),
   loadBook: (bookId: string) => request<Book>(`/api/books/${bookId}`),
   createBook: (title: string) => request<Book>('/api/books', {

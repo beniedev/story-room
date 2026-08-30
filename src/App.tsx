@@ -33,7 +33,7 @@ function App() {
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('正在打开本地书库…');
+  const [status, setStatus] = useState(api.runtime === 'cloud' ? '正在打开私有云端书库…' : '正在打开本地书库…');
   const [newBookTitle, setNewBookTitle] = useState('');
   const promptDialog = useRef<HTMLDialogElement>(null);
   const promptTrigger = useRef<HTMLElement | null>(null);
@@ -52,9 +52,9 @@ function App() {
         const entries = await api.listBooks();
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
-        setStatus('本地书库已打开。');
+        setStatus(api.runtime === 'cloud' ? '私有云端书库已打开。' : '本地书库已打开。');
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : '无法打开本地书库。');
+        setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
     })();
   }, []);
@@ -88,7 +88,7 @@ function App() {
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
     setDirty(false);
-    setStatus('已保存到本机故事目录。');
+    setStatus(api.runtime === 'cloud' ? '已保存到私有云端书库。' : '已保存到本机故事目录。');
     return saved;
   };
 
@@ -176,7 +176,7 @@ function App() {
       setNewBookTitle('');
       setDirty(false);
       setView('shelf');
-      setStatus('新 Book 已建立在本机。');
+      setStatus(api.runtime === 'cloud' ? '新 Book 已建立在私有云端书库。' : '新 Book 已建立在本机。');
     });
   };
 
@@ -225,7 +225,7 @@ function App() {
         <div className="brand-group">
           <span className="brand-mark" aria-hidden="true">文</span>
           <span className="brand-name">Story-native</span>
-          <span className="demo-badge">Local DEMO</span>
+          <span className="demo-badge">{api.runtime === 'cloud' ? 'Private Cloud DEMO' : 'Local DEMO'}</span>
         </div>
         <nav className="primary-tabs" aria-label="主要页面">
           <button type="button" aria-current={view === 'write' ? 'page' : undefined} onClick={() => setView('write')}>写作</button>
