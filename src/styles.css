@@ -1300,10 +1300,38 @@ h3 {
   margin: 0;
 }
 
+.drawer-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.drawer-title-row > div {
+  min-width: 0;
+}
+
 .book-settings-content {
   display: grid;
   gap: 1rem;
   padding: 0 1rem 1rem;
+}
+
+.book-settings-content > .guide-editor-page,
+.book-settings-content > .source-editor-page {
+  width: 100%;
+  padding: 0 0 calc(1rem + env(safe-area-inset-bottom));
+}
+
+.book-settings-content .guide-editor-heading,
+.book-settings-content .guide-editor-field,
+.book-settings-content .source-editor-heading,
+.book-settings-content .source-editor-fields {
+  width: 100%;
+}
+
+.book-settings-content .guide-editor-field textarea {
+  min-height: min(66vh, 42rem);
 }
 
 .settings-section {
@@ -1320,45 +1348,153 @@ h3 {
   margin: 0;
 }
 
-.theme-options {
+.settings-list,
+.provider-profile-list {
   display: grid;
   gap: 0.65rem;
 }
 
-.theme-option {
+.settings-list-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
+  width: 100%;
   gap: 0.75rem;
-  min-height: 64px;
+  min-height: 60px;
   padding: 0.75rem;
   border-radius: var(--radius-card);
   background: var(--surface);
-  cursor: pointer;
+  text-align: start;
 }
 
-.theme-option:has(input:checked) {
+.settings-list-row[aria-pressed="true"] {
   background: var(--surface-active);
   color: var(--accent-strong);
 }
 
-.theme-option input {
-  width: 1.25rem;
-  height: 1.25rem;
-  padding: 0;
-  accent-color: var(--accent);
+.settings-list-row > svg:first-child {
+  color: var(--accent);
 }
 
-.theme-option > span {
+.settings-list-row > span {
   display: grid;
   gap: 0.2rem;
+  min-width: 0;
 }
 
-.theme-option small {
+.settings-list-row small {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 500;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.settings-subdrawer {
+  margin: 0;
+}
+
+.settings-subdrawer > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 60px;
+  padding: 0.75rem;
+  background: var(--surface);
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-subdrawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-subdrawer > summary > span {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.settings-subdrawer > summary > svg:first-child {
+  color: var(--accent);
+}
+
+.settings-subdrawer > summary small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.settings-subdrawer[open] > summary,
+.settings-subdrawer > summary:hover {
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.settings-subdrawer[open] > summary > svg:last-child {
+  rotate: 180deg;
+}
+
+.provider-settings-content {
+  display: grid;
+  gap: 1rem;
+  padding-block-start: 1rem;
+}
+
+.settings-subheading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.settings-subheading h4 {
+  margin: 0;
+}
+
+.provider-profile-form {
+  display: grid;
+  gap: 0.45rem;
+  padding-block-start: 0.5rem;
+}
+
+.provider-profile-form > label,
+.provider-number-grid label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.provider-profile-form > input,
+.provider-number-grid input {
+  margin-block-end: 0.35rem;
+}
+
+.provider-number-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.provider-secret-note,
+.provider-save-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.provider-profile-form .primary-action {
+  width: 100%;
+  margin-block-start: 0.35rem;
+}
+
+.provider-save-status {
+  min-height: 1.15rem;
 }
 
 .prompt-dialog::backdrop {
@@ -1702,6 +1838,10 @@ h3 {
   .plan-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .provider-number-grid {
+    grid-template-columns: 1fr;
   }
 
 }

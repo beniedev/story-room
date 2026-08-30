@@ -12,12 +12,14 @@ import {
   FilePlus2,
   FolderPlus,
   Globe2,
+  KeyRound,
   Layers3,
   Library,
   ListChecks,
   Pencil,
   Plus,
   ScrollText,
+  Server,
   Settings,
   Sparkles,
   Trash2,
@@ -36,6 +38,11 @@ import {
   toggleSourceSelection,
   type SourceSelectionKind,
 } from './sourceSelection';
+import {
+  readProviderProfiles,
+  upsertProviderProfile,
+  type ProviderProfile,
+} from './providerProfiles';
 import type {
   Book,
   BookIndexEntry,
@@ -46,11 +53,19 @@ import type {
   WorldRule,
 } from './types';
 
-type ViewName = 'write' | 'shelf' | 'outline' | 'style' | 'character' | 'world';
+type ViewName = 'write' | 'shelf';
 type SettingsSection = 'guidance' | 'characters' | 'world';
+type BookSettingsView =
+  | { kind: 'root' }
+  | { kind: 'outline' }
+  | { kind: 'style' }
+  | { kind: 'character'; id: string }
+  | { kind: 'world'; id: string };
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
+const providerProfilesKey = 'story-native:provider-profiles';
+const activeProviderProfileKey = 'story-native:active-provider-profile';
 
 const isCachedBook = (value: unknown, bookId: string): value is Book => {
   if (!value || typeof value !== 'object') return false;
@@ -99,10 +114,7 @@ function App() {
   const [library, setLibrary] = useState<BookIndexEntry[]>([]);
   const [book, setBook] = useState<Book | null>(null);
   const [sectionId, setSectionId] = useState('');
-  const [sourceId, setSourceId] = useState('');
   const [view, setView] = useState<ViewName>('shelf');
-  const [settingsReturnSection, setSettingsReturnSection] = useState<SettingsSection>('guidance');
-  const [bookSettingsOpenRequest, setBookSettingsOpenRequest] = useState(0);
   const [mode, setMode] = useState<GenerationMode>('author');
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [instruction, setInstruction] = useState('让观测站出现一个必须由人物回应的新变化。');
@@ -110,6 +122,10 @@ function App() {
   const [promptPlan, setPromptPlan] = useState<ContextPlan | null>(null);
   const [theme, setTheme] = useState<ThemeName>(() =>
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() =>
+    readProviderProfiles(localStorage.getItem(providerProfilesKey)));
+  const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
+    localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(api.runtime === 'cloud' ? '正在打开私有云端书库…' : '正在打开本地书库…');
@@ -124,27 +140,25 @@ function App() {
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
-  const sourceCharacter = useMemo(() => book?.characters.find((character) => character.id === sourceId), [book, sourceId]);
-  const sourceWorldRule = useMemo(() => book?.worldRules.find((rule) => rule.id === sourceId), [book, sourceId]);
-
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(providerProfilesKey, JSON.stringify(providerProfiles));
+      localStorage.setItem(activeProviderProfileKey, activeProviderProfileId);
+    } catch {
+      // Settings still work for the current page when browser persistence is unavailable.
+    }
+  }, [activeProviderProfileId, providerProfiles]);
+
+  useEffect(() => {
     document.title = view === 'write' && book && section
       ? `${section.title} · ${book.title} · Story-native`
-      : view === 'outline' && book
-        ? `剧情大纲 · ${book.title} · Story-native`
-        : view === 'style' && book
-          ? `写作风格指导 · ${book.title} · Story-native`
-          : view === 'character' && book && sourceCharacter
-            ? `${sourceCharacter.name} · ${book.title} · Story-native`
-            : view === 'world' && book && sourceWorldRule
-              ? `${sourceWorldRule.title} · ${book.title} · Story-native`
-          : '故事书架 · Story-native';
-  }, [book, section, sourceCharacter, sourceWorldRule, view]);
+      : '故事书架 · Story-native';
+  }, [book, section, view]);
 
   useEffect(() => {
     void (async () => {
@@ -208,7 +222,6 @@ function App() {
     saveRevision.current += 1;
     setBook(loaded);
     setSectionId('');
-    setSourceId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setDraft('');
     setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
@@ -476,23 +489,15 @@ function App() {
     }
   };
 
-  const openSettingsPage = (target: 'outline' | 'style' | 'character' | 'world', id = '') => {
-    setSettingsReturnSection(target === 'character' ? 'characters' : target === 'world' ? 'world' : 'guidance');
-    setSourceId(id);
-    setView(target);
+  const saveProviderProfile = (profile: ProviderProfile) => {
+    setProviderProfiles((current) => upsertProviderProfile(current, profile));
+    setActiveProviderProfileId(profile.id);
   };
 
   const navigateFromHeader = () => {
     if (view === 'shelf') return;
-    if (view === 'write') {
-      setView('shelf');
-      return;
-    }
     setView('shelf');
-    setBookSettingsOpenRequest((current) => current + 1);
   };
-
-  const isSettingsPage = view === 'outline' || view === 'style' || view === 'character' || view === 'world';
 
   return (
     <div className="app-shell">
@@ -502,8 +507,8 @@ function App() {
           type="button"
           className="brand-home"
           onClick={navigateFromHeader}
-          aria-label={isSettingsPage ? '返回本书设定' : view === 'write' ? '返回故事书架' : '故事书架主页'}
-          title={isSettingsPage ? '返回本书设定' : view === 'write' ? '返回故事书架' : '故事书架主页'}
+          aria-label={view === 'write' ? '返回故事书架' : '故事书架主页'}
+          title={view === 'write' ? '返回故事书架' : '故事书架主页'}
         >
           <span className="brand-mark" aria-hidden="true">
             {view !== 'shelf' ? <ArrowLeft size={20} strokeWidth={2} /> : <Library size={20} strokeWidth={2} />}
@@ -513,10 +518,6 @@ function App() {
         <div className="header-context" aria-live="polite">
           <strong>{view !== 'shelf' && book ? book.title : '故事书架'}</strong>
           {view === 'write' && section && <span>{sectionChapter?.title} · {section.title}</span>}
-          {view === 'outline' && <span>全局指引 · 剧情大纲</span>}
-          {view === 'style' && <span>全局指引 · 写作风格指导</span>}
-          {view === 'character' && sourceCharacter && <span>角色卡 · {sourceCharacter.name}</span>}
-          {view === 'world' && sourceWorldRule && <span>世界观条例 · {sourceWorldRule.title}</span>}
         </div>
         <div className="header-actions">
           <button
@@ -564,47 +565,12 @@ function App() {
             onApplyDraft={applyDraft}
             onDiscardDraft={() => setDraft('')}
           />
-        ) : book && view === 'outline' ? (
-          <GuideEditor
-            title="剧情大纲"
-            description="记录本书的情节走向、阶段目标与关键转折；生成时会作为全书的长期指导。"
-            placeholder="记录主要情节、阶段目标与关键转折……"
-            value={book.plotOutline ?? ''}
-            onChange={(value) => changeBook((current) => ({ ...current, plotOutline: value }))}
-          />
-        ) : book && view === 'style' ? (
-          <GuideEditor
-            title="写作风格指导"
-            description="指定本书的行文风格、语气和语言表达；适用于书内全部章节与小节。"
-            placeholder="例如：克制、清澈；少用解释性旁白……"
-            value={book.writingBrief}
-            onChange={(value) => changeBook((current) => ({ ...current, writingBrief: value }))}
-          />
-        ) : book && view === 'character' ? (
-          sourceCharacter
-            ? <CharacterEditor
-                bookTitle={book.title}
-                character={sourceCharacter}
-                isActiveRole={selectedCharacterId === sourceCharacter.id}
-                onChange={(patch) => updateCharacter(sourceCharacter.id, patch)}
-                onSetActive={() => setSelectedCharacterId(sourceCharacter.id)}
-              />
-            : <MissingSettingsItem label="角色卡" />
-        ) : book && view === 'world' ? (
-          sourceWorldRule
-            ? <WorldRuleEditor
-                bookTitle={book.title}
-                rule={sourceWorldRule}
-                onChange={(patch) => updateWorldRule(sourceWorldRule.id, patch)}
-              />
-            : <MissingSettingsItem label="世界观条例" />
         ) : book ? (
           <Bookshelf
             book={book}
             library={library}
             selectedSectionId={sectionId}
-            bookSettingsOpenRequest={bookSettingsOpenRequest}
-            settingsReturnSection={settingsReturnSection}
+            selectedCharacterId={selectedCharacterId}
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => {
               if (id !== sectionId) setDraft('');
@@ -621,7 +587,11 @@ function App() {
             onRenameChapter={renameChapter}
             onDeleteSelection={deleteSelection}
             onDeleteSources={deleteSources}
-            onOpenSettingsPage={openSettingsPage}
+            onPlotOutlineChange={(value) => changeBook((current) => ({ ...current, plotOutline: value }))}
+            onWritingBriefChange={(value) => changeBook((current) => ({ ...current, writingBrief: value }))}
+            onCharacterChange={updateCharacter}
+            onWorldRuleChange={updateWorldRule}
+            onSetActiveCharacter={setSelectedCharacterId}
           />
         ) : (
           <p className="loading-copy">正在打开本地书库…</p>
@@ -634,6 +604,10 @@ function App() {
         dialogRef={settingsDialog}
         theme={theme}
         onThemeChange={setTheme}
+        providerProfiles={providerProfiles}
+        activeProviderProfileId={activeProviderProfileId}
+        onSelectProviderProfile={setActiveProviderProfileId}
+        onSaveProviderProfile={saveProviderProfile}
         onClose={() => settingsTrigger.current?.focus()}
       />
 
@@ -889,8 +863,7 @@ interface BookshelfProps {
   book: Book;
   library: BookIndexEntry[];
   selectedSectionId: string;
-  bookSettingsOpenRequest: number;
-  settingsReturnSection: SettingsSection;
+  selectedCharacterId: string;
   onOpenBook: (id: string) => void;
   onOpenSection: (id: string) => void;
   onCreateBook: (title: string) => void;
@@ -903,7 +876,11 @@ interface BookshelfProps {
   onRenameChapter: (chapterId: string, title: string) => void;
   onDeleteSelection: (selection: DirectorySelection) => void;
   onDeleteSources: (kind: SourceSelectionKind, ids: Set<string>) => void;
-  onOpenSettingsPage: (view: 'outline' | 'style' | 'character' | 'world', id?: string) => void;
+  onPlotOutlineChange: (value: string) => void;
+  onWritingBriefChange: (value: string) => void;
+  onCharacterChange: (id: string, patch: Partial<CharacterCard>) => void;
+  onWorldRuleChange: (id: string, patch: Partial<WorldRule>) => void;
+  onSetActiveCharacter: (id: string) => void;
 }
 
 type NameDialogState =
@@ -927,14 +904,18 @@ function Bookshelf(props: BookshelfProps) {
   const [sourceSelectionMode, setSourceSelectionMode] = useState<SourceSelectionKind | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
   const [openSettingsSections, setOpenSettingsSections] = useState<Set<SettingsSection>>(
-    () => new Set([props.settingsReturnSection]),
+    () => new Set(['guidance']),
   );
+  const [bookSettingsView, setBookSettingsView] = useState<BookSettingsView>({ kind: 'root' });
   const nameDialogRef = useRef<HTMLDialogElement>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
   const nameDialogTrigger = useRef<HTMLElement | null>(null);
   const deleteDialogTrigger = useRef<HTMLElement | null>(null);
   const bookSettingsDialog = useRef<HTMLDialogElement>(null);
   const bookSettingsTrigger = useRef<HTMLButtonElement>(null);
+  const bookSettingsPageTrigger = useRef<HTMLElement | null>(null);
+  const bookSettingsScrollTop = useRef(0);
+  const bookSettingsBackButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (nameDialog && nameDialogRef.current && !nameDialogRef.current.open) {
@@ -954,12 +935,6 @@ function Bookshelf(props: BookshelfProps) {
     setSourceSelectionMode(null);
     setSelectedSourceIds(new Set());
   }, [props.book.id]);
-
-  useEffect(() => {
-    if (props.bookSettingsOpenRequest > 0 && bookSettingsDialog.current && !bookSettingsDialog.current.open) {
-      bookSettingsDialog.current.showModal();
-    }
-  }, [props.bookSettingsOpenRequest]);
 
   const rememberTrigger = () => document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const openNameDialog = (dialog: NameDialogState) => {
@@ -1064,9 +1039,27 @@ function Bookshelf(props: BookshelfProps) {
     setSelectedSourceIds(new Set());
   };
 
-  const openSourcePage = (kind: SourceSelectionKind, id: string) => {
-    bookSettingsDialog.current?.close();
-    props.onOpenSettingsPage(kind, id);
+  const openBookSettingsPage = (next: BookSettingsView) => {
+    bookSettingsPageTrigger.current = rememberTrigger();
+    bookSettingsScrollTop.current = bookSettingsDialog.current?.scrollTop ?? 0;
+    setBookSettingsView(next);
+    window.requestAnimationFrame(() => bookSettingsBackButton.current?.focus());
+  };
+
+  const returnBookSettingsRoot = () => {
+    const trigger = bookSettingsPageTrigger.current;
+    setBookSettingsView({ kind: 'root' });
+    window.requestAnimationFrame(() => {
+      if (bookSettingsDialog.current) bookSettingsDialog.current.scrollTop = bookSettingsScrollTop.current;
+      if (trigger?.isConnected) trigger.focus();
+    });
+  };
+
+  const closeBookSettings = () => bookSettingsDialog.current?.close();
+
+  const resetBookSettings = () => {
+    setBookSettingsView({ kind: 'root' });
+    bookSettingsTrigger.current?.focus();
   };
 
   const setSettingsSectionOpen = (section: SettingsSection, open: boolean) => {
@@ -1077,6 +1070,25 @@ function Bookshelf(props: BookshelfProps) {
       return next;
     });
   };
+
+  const settingsCharacter = bookSettingsView.kind === 'character'
+    ? props.book.characters.find((character) => character.id === bookSettingsView.id)
+    : undefined;
+  const settingsWorldRule = bookSettingsView.kind === 'world'
+    ? props.book.worldRules.find((rule) => rule.id === bookSettingsView.id)
+    : undefined;
+  const bookSettingsTitle = bookSettingsView.kind === 'outline'
+    ? '剧情大纲'
+    : bookSettingsView.kind === 'style'
+      ? '写作风格指导'
+      : bookSettingsView.kind === 'character'
+        ? settingsCharacter?.name ?? '角色卡'
+        : bookSettingsView.kind === 'world'
+          ? settingsWorldRule?.title ?? '世界观条例'
+          : '本书设定';
+  const bookSettingsEyebrow = bookSettingsView.kind === 'root'
+    ? '全局指引 · 角色 · 世界'
+    : `本书设定 · ${props.book.title}`;
 
   return (
     <div className="shelf-page">
@@ -1137,7 +1149,17 @@ function Bookshelf(props: BookshelfProps) {
         <h1 className="sr-only">故事书架</h1>
         <section className={`directory-panel${selectionMode ? ' selection-mode' : ''}`} aria-label="章节目录">
             <div className="directory-toolbar">
-              <button ref={bookSettingsTrigger} type="button" className="icon-button" onClick={() => bookSettingsDialog.current?.showModal()} aria-label="打开本书设定" title="本书设定"><BookMarked aria-hidden="true" /></button>
+              <button
+                ref={bookSettingsTrigger}
+                type="button"
+                className="icon-button"
+                onClick={() => {
+                  setBookSettingsView({ kind: 'root' });
+                  bookSettingsDialog.current?.showModal();
+                }}
+                aria-label="打开本书设定"
+                title="本书设定"
+              ><BookMarked aria-hidden="true" /></button>
               <div className="directory-actions">
                 <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-chapter', value: '' })} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
                 <button
@@ -1302,18 +1324,31 @@ function Bookshelf(props: BookshelfProps) {
       <dialog
         className="book-settings-drawer"
         ref={bookSettingsDialog}
-        onClose={() => bookSettingsTrigger.current?.focus()}
-        onCancel={(event) => { event.preventDefault(); bookSettingsDialog.current?.close(); }}
+        onClose={resetBookSettings}
+        onCancel={(event) => { event.preventDefault(); closeBookSettings(); }}
         aria-labelledby="book-settings-title"
       >
         <header className="drawer-heading">
-          <div>
-            <p className="eyebrow">全局指引 · 角色 · 世界</p>
-            <h2 id="book-settings-title">本书设定</h2>
+          <div className="drawer-title-row">
+            {bookSettingsView.kind !== 'root' && (
+              <button
+                ref={bookSettingsBackButton}
+                type="button"
+                className="icon-button"
+                onClick={returnBookSettingsRoot}
+                aria-label="返回本书设定"
+                title="返回本书设定"
+              ><ArrowLeft aria-hidden="true" /></button>
+            )}
+            <div>
+              <p className="eyebrow">{bookSettingsEyebrow}</p>
+              <h2 id="book-settings-title">{bookSettingsTitle}</h2>
+            </div>
           </div>
-          <button type="button" className="icon-button" autoFocus onClick={() => bookSettingsDialog.current?.close()} aria-label="关闭本书设定" title="关闭本书设定"><X aria-hidden="true" /></button>
+          <button type="button" className="icon-button" autoFocus={bookSettingsView.kind === 'root'} onClick={closeBookSettings} aria-label="关闭本书设定" title="关闭本书设定"><X aria-hidden="true" /></button>
         </header>
         <div className="book-settings-content">
+          {bookSettingsView.kind === 'root' ? (
             <section className="prompt-settings" aria-labelledby="prompt-settings-heading">
               <h2 id="prompt-settings-heading" className="sr-only">本书设定内容</h2>
 
@@ -1324,11 +1359,11 @@ function Bookshelf(props: BookshelfProps) {
                   <ChevronDown aria-hidden="true" />
                 </summary>
                 <div className="guide-link-list">
-                  <button type="button" className="guide-link-row" onClick={() => { bookSettingsDialog.current?.close(); props.onOpenSettingsPage('outline'); }}>
+                  <button type="button" className="guide-link-row" onClick={() => openBookSettingsPage({ kind: 'outline' })}>
                     <span><strong>剧情大纲</strong><small>规划情节走向，生成时作为本书的长期指导。</small></span>
                     <ChevronRight className="icon-directional" aria-hidden="true" />
                   </button>
-                  <button type="button" className="guide-link-row" onClick={() => { bookSettingsDialog.current?.close(); props.onOpenSettingsPage('style'); }}>
+                  <button type="button" className="guide-link-row" onClick={() => openBookSettingsPage({ kind: 'style' })}>
                     <span><strong>写作风格指导</strong><small>指定行文风格、语气和语言表达。</small></span>
                     <ChevronRight className="icon-directional" aria-hidden="true" />
                   </button>
@@ -1371,7 +1406,7 @@ function Bookshelf(props: BookshelfProps) {
                         aria-pressed={sourceSelectionMode === 'character' ? selectedSourceIds.has(character.id) : undefined}
                         onClick={() => sourceSelectionMode === 'character'
                           ? setSelectedSourceIds((current) => toggleSourceSelection(current, character.id))
-                          : openSourcePage('character', character.id)}
+                          : openBookSettingsPage({ kind: 'character', id: character.id })}
                         aria-label={sourceSelectionMode === 'character'
                           ? `${selectedSourceIds.has(character.id) ? '取消选择' : '选择'}角色卡${character.name}`
                           : `打开角色卡${character.name}`}
@@ -1427,7 +1462,7 @@ function Bookshelf(props: BookshelfProps) {
                         aria-pressed={sourceSelectionMode === 'world' ? selectedSourceIds.has(rule.id) : undefined}
                         onClick={() => sourceSelectionMode === 'world'
                           ? setSelectedSourceIds((current) => toggleSourceSelection(current, rule.id))
-                          : openSourcePage('world', rule.id)}
+                          : openBookSettingsPage({ kind: 'world', id: rule.id })}
                         aria-label={sourceSelectionMode === 'world'
                           ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观条例${rule.title}`
                           : `打开世界观条例${rule.title}`}
@@ -1448,19 +1483,113 @@ function Bookshelf(props: BookshelfProps) {
               </details>
 
             </section>
+          ) : bookSettingsView.kind === 'outline' ? (
+            <GuideEditor
+              title="剧情大纲"
+              description="记录本书的情节走向、阶段目标与关键转折；生成时会作为全书的长期指导。"
+              placeholder="记录主要情节、阶段目标与关键转折……"
+              value={props.book.plotOutline ?? ''}
+              onChange={props.onPlotOutlineChange}
+            />
+          ) : bookSettingsView.kind === 'style' ? (
+            <GuideEditor
+              title="写作风格指导"
+              description="指定本书的行文风格、语气和语言表达；适用于书内全部章节与小节。"
+              placeholder="例如：克制、清澈；少用解释性旁白……"
+              value={props.book.writingBrief}
+              onChange={props.onWritingBriefChange}
+            />
+          ) : bookSettingsView.kind === 'character' ? (
+            settingsCharacter
+              ? <CharacterEditor
+                  bookTitle={props.book.title}
+                  character={settingsCharacter}
+                  isActiveRole={props.selectedCharacterId === settingsCharacter.id}
+                  onChange={(patch) => props.onCharacterChange(settingsCharacter.id, patch)}
+                  onSetActive={() => props.onSetActiveCharacter(settingsCharacter.id)}
+                />
+              : <MissingSettingsItem label="角色卡" />
+          ) : (
+            settingsWorldRule
+              ? <WorldRuleEditor
+                  bookTitle={props.book.title}
+                  rule={settingsWorldRule}
+                  onChange={(patch) => props.onWorldRuleChange(settingsWorldRule.id, patch)}
+                />
+              : <MissingSettingsItem label="世界观条例" />
+          )}
         </div>
       </dialog>
     </div>
   );
 }
 
-function SettingsDrawer({ dialogRef, theme, onThemeChange, onClose }: {
+function SettingsDrawer({
+  dialogRef,
+  theme,
+  onThemeChange,
+  providerProfiles,
+  activeProviderProfileId,
+  onSelectProviderProfile,
+  onSaveProviderProfile,
+  onClose,
+}: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
   theme: ThemeName;
   onThemeChange: (theme: ThemeName) => void;
+  providerProfiles: ProviderProfile[];
+  activeProviderProfileId: string;
+  onSelectProviderProfile: (id: string) => void;
+  onSaveProviderProfile: (profile: ProviderProfile) => void;
   onClose: () => void;
 }) {
+  const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
+    ?? providerProfiles[0];
+  const blankProfile = (): ProviderProfile => ({
+    id: '',
+    name: '',
+    baseUrl: '',
+    modelId: '',
+    maxContext: 128000,
+    maxOutput: 8192,
+  });
+  const [editingId, setEditingId] = useState(currentProfile?.id ?? '');
+  const [profileDraft, setProfileDraft] = useState<ProviderProfile>(() => currentProfile ? { ...currentProfile } : blankProfile());
+  const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('');
   const closeDrawer = () => dialogRef.current?.close();
+  const selectProfile = (profile: ProviderProfile) => {
+    onSelectProviderProfile(profile.id);
+    setEditingId(profile.id);
+    setProfileDraft({ ...profile });
+    setApiKeyDraft(sessionKeys[profile.id] ?? '');
+    setConnectionStatus('');
+  };
+  const startNewProfile = () => {
+    setEditingId('');
+    setProfileDraft(blankProfile());
+    setApiKeyDraft('');
+    setConnectionStatus('');
+  };
+  const submitProfile = (event: React.FormEvent) => {
+    event.preventDefault();
+    const id = editingId || makeId('provider');
+    const profile: ProviderProfile = {
+      ...profileDraft,
+      id,
+      name: profileDraft.name.trim(),
+      baseUrl: profileDraft.baseUrl.trim(),
+      modelId: profileDraft.modelId.trim(),
+      maxContext: Math.max(1, Number(profileDraft.maxContext)),
+      maxOutput: Math.max(1, Number(profileDraft.maxOutput)),
+    };
+    onSaveProviderProfile(profile);
+    setEditingId(id);
+    setProfileDraft(profile);
+    setSessionKeys((current) => ({ ...current, [id]: apiKeyDraft }));
+    setConnectionStatus('连接方案已保存。API Key 只在当前页面临时保留。');
+  };
 
   return (
     <dialog
@@ -1478,17 +1607,72 @@ function SettingsDrawer({ dialogRef, theme, onThemeChange, onClose }: {
         <button type="button" className="icon-button" autoFocus onClick={closeDrawer} aria-label="关闭设置" title="关闭设置"><X aria-hidden="true" /></button>
       </header>
       <section className="settings-section" aria-labelledby="theme-heading">
-        <h3 id="theme-heading">主题</h3>
-        <div className="theme-options">
-          <label className="theme-option">
-            <input type="radio" name="theme" value="paper" checked={theme === 'paper'} onChange={() => onThemeChange('paper')} />
+        <h3 id="theme-heading">皮肤</h3>
+        <div className="settings-list" aria-label="选择皮肤">
+          <button type="button" className="settings-list-row" aria-pressed={theme === 'paper'} onClick={() => onThemeChange('paper')}>
+            <BookOpenText aria-hidden="true" />
             <span><strong>Paper</strong><small>类 Notion / Obsidian 的安静默认版</small></span>
-          </label>
-          <label className="theme-option manga-option">
-            <input type="radio" name="theme" value="manga" checked={theme === 'manga'} onChange={() => onThemeChange('manga')} />
-            <span><strong>少女漫画</strong><small>沿用你现在酒馆的粉紫交互语言</small></span>
-          </label>
+            {theme === 'paper' && <Check aria-hidden="true" />}
+          </button>
+          <button type="button" className="settings-list-row" aria-pressed={theme === 'manga'} onClick={() => onThemeChange('manga')}>
+            <Sparkles aria-hidden="true" />
+            <span><strong>少女漫画</strong><small>沿用酒馆的粉紫交互语言</small></span>
+            {theme === 'manga' && <Check aria-hidden="true" />}
+          </button>
         </div>
+      </section>
+      <section className="settings-section" aria-labelledby="provider-settings-heading">
+        <h3 id="provider-settings-heading" className="sr-only">模型连接</h3>
+        <details className="settings-subdrawer">
+          <summary>
+            <KeyRound aria-hidden="true" />
+            <span><strong>模型连接</strong><small>{currentProfile ? `${currentProfile.name} · ${currentProfile.modelId}` : '保存并选择连接方案'}</small></span>
+            <ChevronDown aria-hidden="true" />
+          </summary>
+          <div className="provider-settings-content">
+            <div className="settings-subheading">
+              <h4>连接方案</h4>
+              <button type="button" className="icon-button" onClick={startNewProfile} aria-label="新建连接方案" title="新建连接方案"><Plus aria-hidden="true" /></button>
+            </div>
+            <div className="provider-profile-list" aria-label="已保存的连接方案">
+              {providerProfiles.map((profile) => (
+                <button
+                  type="button"
+                  className="settings-list-row provider-profile-row"
+                  aria-pressed={profile.id === activeProviderProfileId}
+                  onClick={() => selectProfile(profile)}
+                  key={profile.id}
+                >
+                  <Server aria-hidden="true" />
+                  <span><strong>{profile.name}</strong><small>{profile.modelId || '未填写模型 ID'}</small></span>
+                  {profile.id === activeProviderProfileId && <Check aria-hidden="true" />}
+                </button>
+              ))}
+            </div>
+            <form className="provider-profile-form" onSubmit={submitProfile}>
+              <label htmlFor="provider-profile-name">方案名称</label>
+              <input id="provider-profile-name" name="provider-profile-name" required autoComplete="off" value={profileDraft.name} onChange={(event) => setProfileDraft((current) => ({ ...current, name: event.target.value }))} placeholder="例如：主要模型" />
+
+              <label htmlFor="provider-api-key">API Key</label>
+              <input id="provider-api-key" name="provider-api-key" type="password" autoComplete="off" spellCheck={false} value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)} placeholder="sk-…" />
+
+              <label htmlFor="provider-base-url">URL</label>
+              <input id="provider-base-url" name="provider-base-url" type="url" required autoComplete="url" spellCheck={false} value={profileDraft.baseUrl} onChange={(event) => setProfileDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" />
+
+              <label htmlFor="provider-model-id">模型 ID</label>
+              <input id="provider-model-id" name="provider-model-id" required autoComplete="off" spellCheck={false} value={profileDraft.modelId} onChange={(event) => setProfileDraft((current) => ({ ...current, modelId: event.target.value }))} placeholder="model-id" />
+
+              <div className="provider-number-grid">
+                <label>最大上下文<input name="provider-max-context" type="number" inputMode="numeric" min="1" required value={profileDraft.maxContext} onChange={(event) => setProfileDraft((current) => ({ ...current, maxContext: Number(event.target.value) }))} /></label>
+                <label>最大输出<input name="provider-max-output" type="number" inputMode="numeric" min="1" required value={profileDraft.maxOutput} onChange={(event) => setProfileDraft((current) => ({ ...current, maxOutput: Number(event.target.value) }))} /></label>
+              </div>
+
+              <p className="provider-secret-note">API Key 不会写入书稿、私有书库或浏览器持久化；刷新页面后需要重新输入。</p>
+              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存连接方案</button>
+              <p className="provider-save-status" role="status" aria-live="polite">{connectionStatus}</p>
+            </form>
+          </div>
+        </details>
       </section>
       <section className="settings-section" aria-labelledby="storage-heading">
         <h3 id="storage-heading">当前存储</h3>

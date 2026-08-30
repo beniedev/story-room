@@ -62,9 +62,11 @@ describe('writing UI contract', () => {
     expect(source).toContain("kind: 'selection'");
     expect(source).toContain('删除所选内容');
     expect(source).toContain('返回本书设定');
-    expect(source).toContain('bookSettingsOpenRequest');
-    expect(source).toContain("openSourcePage('character'");
-    expect(source).toContain("openSourcePage('world'");
+    expect(source).toContain('bookSettingsView');
+    expect(source).toContain('returnBookSettingsRoot');
+    expect(source).toContain("openBookSettingsPage({ kind: 'character'");
+    expect(source).toContain("openBookSettingsPage({ kind: 'world'");
+    expect(source).not.toContain('bookSettingsOpenRequest');
     expect(source).toContain("kind: 'source-selection'");
     expect(source).toContain('删除所选角色卡');
     expect(source).toContain('删除所选世界观条例');
@@ -90,6 +92,19 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('剧情记忆');
     expect(source).not.toContain('Book 隔离视图');
     expect(source).not.toContain('StoryGraph');
+  });
+
+  it('keeps settings compact while supporting reusable provider profiles', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('选择皮肤');
+    expect(source).toContain('模型连接');
+    expect(source).toContain('API Key');
+    expect(source).toContain('模型 ID');
+    expect(source).toContain('最大上下文');
+    expect(source).toContain('最大输出');
+    expect(source).toContain('保存连接方案');
+    expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
+    expect(source).toContain('type="password"');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {
