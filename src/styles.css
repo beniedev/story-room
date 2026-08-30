@@ -531,29 +531,98 @@ h3 {
   padding: 0.8rem;
 }
 
-.book-picker {
+.book-library-drawer {
+  margin: 0;
+}
+
+.book-selector-card {
   display: grid;
-  gap: 0.4rem;
-  margin-block-end: 1rem;
-}
-
-.book-picker label {
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 650;
-}
-
-.book-picker-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.4rem;
-}
-
-.book-picker select {
-  min-height: 44px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 64px;
+  padding: 0.75rem;
+  border-radius: var(--radius-card);
   background: var(--surface-active);
   cursor: pointer;
-  font-weight: 650;
+  list-style: none;
+}
+
+.book-selector-card::-webkit-details-marker {
+  display: none;
+}
+
+.book-selector-card > svg:first-child {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0.55rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--accent);
+}
+
+.book-selector-card > span {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.book-selector-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-selector-card small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.book-selector-chevron {
+  color: var(--muted);
+  transition: rotate 120ms ease-out;
+}
+
+.book-library-drawer[open] .book-selector-chevron {
+  rotate: 180deg;
+}
+
+.book-library-panel {
+  display: grid;
+  gap: 0.45rem;
+  padding-block-start: 0.45rem;
+}
+
+.book-list {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.book-list button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 44px;
+  text-align: start;
+}
+
+.book-list button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-list button > svg {
+  color: var(--accent);
+}
+
+.book-create-row {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .new-book-form {
@@ -594,7 +663,7 @@ h3 {
   align-items: start;
 }
 
-.directory-title-row {
+.directory-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -602,35 +671,6 @@ h3 {
   margin-block-end: 1rem;
 }
 
-.directory-actions {
-  display: flex;
-  gap: 0.3rem;
-}
-
-.directory-title-row h2 {
-  margin: 0;
-}
-
-.book-directory-root {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.8rem;
-  padding: 1rem;
-  border-radius: var(--radius-card);
-  background: var(--surface-active);
-}
-
-.book-directory-root > svg {
-  width: 2.4rem;
-  height: 2.4rem;
-  padding: 0.55rem;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  color: var(--accent);
-}
-
-.book-directory-root > span:nth-child(2),
 .chapter-card summary > span:nth-child(2),
 .section-list button > span:nth-child(2) {
   display: grid;
@@ -638,7 +678,6 @@ h3 {
   min-width: 0;
 }
 
-.book-directory-root small,
 .chapter-card summary small {
   color: var(--muted);
   font-size: 0.68rem;
@@ -647,7 +686,6 @@ h3 {
   text-transform: uppercase;
 }
 
-.book-directory-root > span:last-child,
 .chapter-card summary > span:last-child {
   color: var(--muted);
   font-size: 0.74rem;
@@ -1066,6 +1104,35 @@ h3 {
   transition-behavior: allow-discrete;
 }
 
+.chapter-dialog {
+  width: min(26rem, calc(100vw - 1rem));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--page);
+  color: var(--text);
+}
+
+.chapter-dialog-body {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0 1rem 1rem;
+}
+
+.chapter-dialog-body > label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-block-start: 0.35rem;
+}
+
 .book-settings-drawer[open] {
   opacity: 1;
   transform: translateX(0);
@@ -1090,6 +1157,7 @@ h3 {
 
 .settings-drawer::backdrop,
 .book-settings-drawer::backdrop,
+.chapter-dialog::backdrop,
 .prompt-dialog::backdrop {
   background: rgba(35, 24, 37, 0.28);
 }
@@ -1499,15 +1567,6 @@ h3 {
   .content-tabs button {
     gap: 0.25rem;
     padding-inline: 0.4rem;
-  }
-
-  .book-directory-root {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .book-directory-root > span:last-child {
-    grid-column: 2;
-    white-space: normal;
   }
 
   .chapter-card summary {

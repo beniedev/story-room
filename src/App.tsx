@@ -4,6 +4,7 @@ import {
   BookMarked,
   BookOpenText,
   Check,
+  ChevronDown,
   ChevronRight,
   Download,
   FilePlus2,
@@ -346,14 +347,14 @@ function App() {
     }],
   }));
 
-  const addChapter = () => changeBook((current) => {
+  const addChapter = (title: string) => changeBook((current) => {
     const chapterId = makeId('chapter');
     const sectionId = makeId('section');
     return {
       ...current,
       chapters: [...current.chapters, {
         id: chapterId,
-        title: `第 ${current.chapters.length + 1} 章`,
+        title: title.trim() || `第 ${current.chapters.length + 1} 章`,
         sections: [{ id: sectionId, title: '新小节', content: '' }],
       }],
     };
@@ -590,14 +591,17 @@ interface BookshelfProps {
   onSelectedCharacterChange: (id: string) => void;
   onAddCharacter: () => void;
   onAddWorldRule: () => void;
-  onAddChapter: () => void;
+  onAddChapter: (title: string) => void;
   onAddSection: (chapterId: string) => void;
 }
 
 function Bookshelf(props: BookshelfProps) {
   const [showNewBook, setShowNewBook] = useState(false);
+  const [chapterTitle, setChapterTitle] = useState('');
   const [editingCharacterId, setEditingCharacterId] = useState('');
   const [editingWorldId, setEditingWorldId] = useState('');
+  const chapterDialog = useRef<HTMLDialogElement>(null);
+  const chapterTrigger = useRef<HTMLButtonElement>(null);
   const bookSettingsDialog = useRef<HTMLDialogElement>(null);
   const bookSettingsTrigger = useRef<HTMLButtonElement>(null);
 
@@ -640,13 +644,29 @@ function Bookshelf(props: BookshelfProps) {
 
   return (
     <div className="shelf-page">
-      <aside className="book-rail" aria-label="Book 列表">
-        <div className="book-picker">
-          <label htmlFor="book-select">当前书目</label>
-          <div className="book-picker-row">
-            <select id="book-select" value={props.book.id} onChange={(event) => props.onOpenBook(event.target.value)}>
-              {props.library.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}
-            </select>
+      <aside className="book-rail" aria-label="书目选择">
+        <details className="book-library-drawer">
+          <summary className="book-selector-card">
+            <BookOpenText aria-hidden="true" />
+            <span><small>书</small><strong>{props.book.title}</strong></span>
+            <ChevronDown className="book-selector-chevron" aria-hidden="true" />
+          </summary>
+          <div className="book-library-panel">
+            <div className="book-list" aria-label="全部书目">
+              {props.library.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  aria-current={entry.id === props.book.id ? 'true' : undefined}
+                  onClick={() => props.onOpenBook(entry.id)}
+                >
+                  <BookOpenText aria-hidden="true" />
+                  <span>{entry.title}</span>
+                  {entry.id === props.book.id && <Check aria-hidden="true" />}
+                </button>
+              ))}
+            </div>
+            <div className="book-create-row">
             <button
               type="button"
               className="icon-button"
@@ -658,34 +678,24 @@ function Bookshelf(props: BookshelfProps) {
             >
               {showNewBook ? <X aria-hidden="true" /> : <Plus aria-hidden="true" />}
             </button>
+            </div>
+            {showNewBook && (
+              <form id="new-book-form" className="new-book-form" onSubmit={(event) => { props.onCreateBook(event); setShowNewBook(false); }}>
+                <label className="sr-only" htmlFor="new-book-title">书名</label>
+                <input id="new-book-title" autoFocus value={props.newBookTitle} onChange={(event) => props.onNewBookTitleChange(event.target.value)} placeholder="书名" />
+                <button type="submit" className="icon-button" aria-label="确认新建书目" title="确认新建书目"><Check aria-hidden="true" /></button>
+              </form>
+            )}
           </div>
-        </div>
-        {showNewBook && (
-          <form id="new-book-form" className="new-book-form" onSubmit={(event) => { props.onCreateBook(event); setShowNewBook(false); }}>
-            <label className="sr-only" htmlFor="new-book-title">书名</label>
-            <input id="new-book-title" autoFocus value={props.newBookTitle} onChange={(event) => props.onNewBookTitleChange(event.target.value)} placeholder="书名" />
-            <button type="submit" className="icon-button" aria-label="确认新建书目" title="确认新建书目"><Check aria-hidden="true" /></button>
-          </form>
-        )}
+        </details>
       </aside>
 
       <section className="shelf-content">
         <h1 className="sr-only">故事书架</h1>
-        <section className="directory-panel" aria-labelledby="directory-heading">
-            <div className="directory-title-row">
-              <div>
-                <p className="eyebrow">书 · 章 · 节</p>
-                <h2 id="directory-heading">电子书目录</h2>
-              </div>
-              <div className="directory-actions">
-                <button ref={bookSettingsTrigger} type="button" className="icon-button" onClick={() => bookSettingsDialog.current?.showModal()} aria-label="打开本书设定" title="本书设定"><BookMarked aria-hidden="true" /></button>
-                <button type="button" className="icon-button" onClick={props.onAddChapter} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
-              </div>
-            </div>
-            <div className="book-directory-root">
-              <BookOpenText aria-hidden="true" />
-              <span><small>书</small><strong>{props.book.title}</strong></span>
-              <span>{props.book.chapters.length} 章 · {props.book.chapters.reduce((count, chapter) => count + chapter.sections.length, 0)} 节</span>
+        <section className="directory-panel" aria-label="章节目录">
+            <div className="directory-toolbar">
+              <button ref={bookSettingsTrigger} type="button" className="icon-button" onClick={() => bookSettingsDialog.current?.showModal()} aria-label="打开本书设定" title="本书设定"><BookMarked aria-hidden="true" /></button>
+              <button ref={chapterTrigger} type="button" className="icon-button" onClick={() => chapterDialog.current?.showModal()} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
             </div>
             <ol className="chapter-list">
               {props.book.chapters.map((chapter, chapterIndex) => (
@@ -717,6 +727,40 @@ function Bookshelf(props: BookshelfProps) {
             </ol>
         </section>
       </section>
+
+      <dialog
+        className="chapter-dialog"
+        ref={chapterDialog}
+        onClose={() => { setChapterTitle(''); chapterTrigger.current?.focus(); }}
+        onCancel={(event) => { event.preventDefault(); chapterDialog.current?.close(); }}
+        aria-labelledby="chapter-dialog-title"
+      >
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          props.onAddChapter(chapterTitle);
+          chapterDialog.current?.close();
+        }}>
+          <header className="dialog-heading">
+            <h2 id="chapter-dialog-title">新建章节</h2>
+            <button type="button" className="icon-button" onClick={() => chapterDialog.current?.close()} aria-label="取消新建章节" title="取消"><X aria-hidden="true" /></button>
+          </header>
+          <div className="chapter-dialog-body">
+            <label htmlFor="chapter-title">章节名称</label>
+            <input
+              id="chapter-title"
+              autoFocus
+              required
+              value={chapterTitle}
+              onChange={(event) => setChapterTitle(event.target.value)}
+              placeholder={`第 ${props.book.chapters.length + 1} 章`}
+            />
+            <div className="dialog-actions">
+              <button type="button" className="quiet-action" onClick={() => chapterDialog.current?.close()}>取消</button>
+              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />确认新建</button>
+            </div>
+          </div>
+        </form>
+      </dialog>
 
       <dialog
         className="book-settings-drawer"

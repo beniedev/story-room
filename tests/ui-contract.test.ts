@@ -38,13 +38,14 @@ describe('writing UI contract', () => {
     expect(source).toContain(':focus-visible');
   });
 
-  it('uses local-first autosave, a real export action, and a native book picker', async () => {
+  it('uses local-first autosave, a real export action, and a compact book drawer', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");
     expect(source).toContain('<Download aria-hidden="true" />');
     expect(source).toContain('download = `${safeTitle}.json`');
-    expect(source).toContain('id="book-select"');
-    expect(source).toContain('value={props.book.id}');
+    expect(source).toContain('className="book-library-drawer"');
+    expect(source).toContain('<summary className="book-selector-card">');
+    expect(source).not.toContain('id="book-select"');
   });
 
   it('keeps book creation and source management compact and understandable', async () => {
@@ -55,7 +56,10 @@ describe('writing UI contract', () => {
     expect(source).toContain('已确认设定');
     expect(source).toContain('前文摘要');
     expect(source).toContain('className="book-settings-drawer"');
+    expect(source).toContain('className="chapter-dialog"');
+    expect(source).toContain('章节名称');
     expect(source).toContain('本书设定');
+    expect(source).not.toContain('电子书目录');
     expect(source).not.toContain('aria-label="书目视图"');
     expect(source).not.toContain('Canon 与摘要');
     expect(source).not.toContain('<span>装入 Prompt</span>');
