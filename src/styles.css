@@ -372,6 +372,22 @@ h3 {
   margin-block-end: 1.25rem;
 }
 
+.writer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.writer-title-row h1 {
+  min-width: 0;
+  margin: 0;
+}
+
+.writer-title-row .icon-button {
+  background: transparent;
+  color: var(--accent);
+}
+
 .breadcrumb,
 .eyebrow {
   color: var(--muted);
@@ -498,6 +514,38 @@ h3 {
   text-align: center;
 }
 
+.guide-editor-page {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 76rem);
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 2.25rem) clamp(0.75rem, 4vw, 3rem) calc(1rem + env(safe-area-inset-bottom));
+}
+
+.guide-editor-heading,
+.guide-editor-field {
+  width: min(100%, 72ch);
+  margin-inline: auto;
+}
+
+.guide-editor-heading h1 {
+  margin-block-end: 0.5rem;
+}
+
+.guide-editor-heading > p:last-child {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.guide-editor-field textarea {
+  min-height: min(68vh, 52rem);
+  padding: clamp(1rem, 4vw, 2.5rem);
+  background: var(--surface);
+  font-family: ui-serif, "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  line-height: 1.7;
+}
+
 .shelf-page {
   display: grid;
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
@@ -509,8 +557,7 @@ h3 {
 
 .book-rail,
 .directory-panel,
-.prompt-settings,
-.graph-view {
+.prompt-settings {
   min-width: 0;
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--surface) 76%, transparent);
@@ -655,6 +702,11 @@ h3 {
   margin-block-end: 1rem;
 }
 
+.directory-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
 .chapter-card summary > span:nth-child(2),
 .section-list button > span:nth-child(2) {
   display: grid;
@@ -703,7 +755,7 @@ h3 {
   align-items: center;
   gap: 0.8rem;
   min-height: 56px;
-  padding: 0.7rem 9.2rem 0.7rem 0.8rem;
+  padding: 0.7rem 6.4rem 0.7rem 0.8rem;
   background: var(--surface);
   cursor: pointer;
   list-style-position: inside;
@@ -725,6 +777,12 @@ h3 {
   background: var(--surface-soft);
 }
 
+.chapter-index svg,
+.section-index svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
 .chapter-actions {
   position: absolute;
   inset-block-start: 0.35rem;
@@ -740,8 +798,7 @@ h3 {
 }
 
 .directory-panel,
-.prompt-settings,
-.graph-view {
+.prompt-settings {
   padding: clamp(0.85rem, 2vw, 1.25rem);
 }
 
@@ -776,7 +833,17 @@ h3 {
   align-items: center;
   gap: 0.8rem;
   min-height: 56px;
-  padding: 0.7rem 9.2rem 0.7rem 0.8rem;
+  padding: 0.7rem 6.4rem 0.7rem 0.8rem;
+}
+
+.selection-mode .chapter-card summary {
+  padding-inline-end: 0.8rem;
+}
+
+.chapter-card[data-selected="true"] > details > summary,
+.section-row[data-selected="true"] .section-open {
+  background: var(--surface-active);
+  color: var(--accent-strong);
 }
 
 .section-list {
@@ -787,10 +854,7 @@ h3 {
 }
 
 .section-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.25rem;
+  display: block;
 }
 
 .section-list .section-open {
@@ -805,18 +869,6 @@ h3 {
 
 .section-list .section-open > svg {
   color: var(--muted);
-}
-
-.section-actions {
-  display: flex;
-  gap: 0.2rem;
-}
-
-.section-actions .icon-button {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
-  background: transparent;
 }
 
 .section-list strong {
@@ -917,6 +969,35 @@ h3 {
   display: grid;
   gap: 0.45rem;
   padding-block-start: 0.45rem;
+}
+
+.guide-link-list {
+  display: grid;
+  gap: 0.45rem;
+  padding-block-start: 0.45rem;
+}
+
+.guide-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 58px;
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  text-align: start;
+}
+
+.guide-link-row > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.guide-link-row small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .source-group-actions {
@@ -1034,86 +1115,6 @@ h3 {
   display: grid;
   gap: 0.15rem;
   margin-inline-end: auto;
-}
-
-.memory-heading {
-  align-items: start;
-}
-
-.memory-heading .helper-copy {
-  max-width: 52ch;
-  margin-block-start: 0.3rem;
-}
-
-.compact-toggle-label {
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.graph-intro {
-  max-width: 60ch;
-  margin-inline: auto;
-  text-align: center;
-}
-
-.graph-flow,
-.graph-column {
-  display: grid;
-  justify-items: center;
-  gap: 0.65rem;
-}
-
-.graph-flow {
-  width: min(100%, 46rem);
-  margin: 1.5rem auto;
-}
-
-.graph-branch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  width: 100%;
-}
-
-.graph-column {
-  position: relative;
-  width: 100%;
-  padding: 0.8rem;
-  border-radius: var(--radius-card);
-  background: var(--surface-soft);
-}
-
-.graph-column > p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.graph-node {
-  display: grid;
-  gap: 0.25rem;
-  width: min(100%, 18rem);
-  min-height: 4rem;
-  place-content: center;
-  padding: 0.7rem 1rem;
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.graph-node small {
-  color: var(--accent);
-  font-size: 0.72rem;
-}
-
-.graph-root {
-  background: var(--surface-active);
-}
-
-.graph-manuscript {
-  width: min(100%, 25rem);
 }
 
 .prompt-dialog {
@@ -1587,10 +1588,6 @@ h3 {
 
   .book-rail {
     padding: 0.65rem;
-  }
-
-  .graph-branch {
-    grid-template-columns: 1fr;
   }
 
   .prompt-dialog {

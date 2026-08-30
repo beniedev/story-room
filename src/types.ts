@@ -42,6 +42,7 @@ export interface Branch {
 export interface Book {
   id: string;
   title: string;
+  plotOutline?: string;
   writingBrief: string;
   characters: CharacterCard[];
   worldRules: WorldRule[];

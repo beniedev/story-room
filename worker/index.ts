@@ -66,6 +66,7 @@ function validateBook(value: unknown): asserts value is Book {
   if (!isRecord(value)) throw new HttpError('Book 数据无效。');
   validId(value.id, 'Book ID');
   requiredString(value.title, 'Book 标题');
+  if (value.plotOutline !== undefined) requiredString(value.plotOutline, 'Book 剧情大纲');
   requiredString(value.writingBrief, 'Book 写作约定');
 
   for (const character of requiredArray(value.characters, '角色卡')) {
@@ -206,6 +207,7 @@ const createBook = async (env: Env, title: string) => {
   return saveBook(env, {
     id,
     title: title.trim() || 'Untitled Book',
+    plotOutline: '',
     writingBrief: '',
     characters: [],
     worldRules: [],

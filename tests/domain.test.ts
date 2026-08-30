@@ -5,6 +5,7 @@ import type { Book } from '../src/types.ts';
 const makeBook = (id: string, marker: string): Book => ({
   id,
   title: `Book ${marker}`,
+  plotOutline: `Outline ${marker}`,
   writingBrief: `Brief ${marker}`,
   characters: [{
     id: `${id}-character`,
@@ -42,9 +43,14 @@ describe('context plan', () => {
     });
 
     expect(plan.included.every((item) => item.bookId === 'book-a')).toBe(true);
+    expect(plan.prompt).toContain('Outline ALPHA');
+    expect(plan.prompt).toContain('Brief ALPHA');
     expect(plan.prompt).toContain('World context ALPHA');
+    expect(plan.prompt).not.toContain('Canon context ALPHA');
+    expect(plan.prompt).not.toContain('Summary context ALPHA');
     expect(plan.prompt).not.toContain('BRAVO');
-    expect(plan.excluded.map((item) => item.sourceId)).toContain('book-a-summary');
+    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-summary');
+    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-canon');
   });
 
   it('rejects a character that is not in the active Book', () => {

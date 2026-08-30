@@ -91,6 +91,7 @@ const validateBook = (book: Book) => {
   if (!isRecord(book)) throw new StoreInputError('Book 数据无效。');
   validId(requiredString(book.id, 'Book ID'));
   requiredString(book.title, 'Book 标题');
+  if (book.plotOutline !== undefined) requiredString(book.plotOutline, 'Book 剧情大纲');
   requiredString(book.writingBrief, 'Book 写作约定');
 
   for (const character of requiredArray(book.characters, '角色卡')) {
@@ -141,8 +142,14 @@ const atomicWrite = async (file: string, content: string) => {
   }
 };
 
+const comparableBook = (book: Book) => ({
+  ...book,
+  plotOutline: book.plotOutline ?? '',
+  updatedAt: '',
+});
+
 const sameBookIgnoringTimestamp = (left: Book, right: Book) => (
-  isDeepStrictEqual({ ...left, updatedAt: '' }, { ...right, updatedAt: '' })
+  isDeepStrictEqual(comparableBook(left), comparableBook(right))
 );
 
 export class StoryStore {
@@ -255,6 +262,7 @@ export class StoryStore {
       const meta: BookFile = {
         id: saved.id,
         title: saved.title,
+        plotOutline: saved.plotOutline ?? '',
         writingBrief: saved.writingBrief,
         characters: saved.characters.map(({ id }) => ({ id })),
         worldRules: saved.worldRules.map(({ content: _content, ...item }) => item),
@@ -308,6 +316,7 @@ export class StoryStore {
     const book: Book = {
       id,
       title: cleanTitle,
+      plotOutline: '',
       writingBrief: '',
       characters: [],
       worldRules: [],

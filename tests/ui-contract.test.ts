@@ -54,13 +54,18 @@ describe('writing UI contract', () => {
     expect(source).toContain("openNameDialog({ kind: 'new-section'");
     expect(source).toContain("openNameDialog({ kind: 'rename-book'");
     expect(source).toContain("openNameDialog({ kind: 'rename-chapter'");
-    expect(source).toContain("openNameDialog({ kind: 'rename-section'");
-    expect(source).toContain("openDeleteDialog({ kind: 'chapter'");
-    expect(source).toContain("openDeleteDialog({ kind: 'section'");
+    expect(source).not.toContain("openNameDialog({ kind: 'rename-section'");
+    expect(source).toContain('id="section-title-dialog-heading"');
+    expect(source).toContain("if (id !== sectionId) setDraft('')");
+    expect(source).toContain('toggleChapterSelection');
+    expect(source).toContain('toggleSectionSelection');
+    expect(source).toContain("kind: 'selection'");
+    expect(source).toContain('删除所选内容');
     expect(source).toContain('修改角色卡');
     expect(source).toContain('删除角色卡');
-    expect(source).toContain('已确认设定');
-    expect(source).toContain('前文摘要');
+    expect(source).toContain('全局指引');
+    expect(source).toContain('剧情大纲');
+    expect(source).toContain('写作风格指导');
     expect(source).toContain('className="book-settings-drawer"');
     expect(source).toContain('className="name-dialog"');
     expect(source).toContain('className="confirm-dialog"');
@@ -74,6 +79,9 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('aria-label="书目视图"');
     expect(source).not.toContain('Canon 与摘要');
     expect(source).not.toContain('<span>装入 Prompt</span>');
+    expect(source).not.toContain('剧情记忆');
+    expect(source).not.toContain('Book 隔离视图');
+    expect(source).not.toContain('StoryGraph');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {

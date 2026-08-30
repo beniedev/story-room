@@ -23,6 +23,7 @@ describe('story store', () => {
     const book: Book = {
       id: 'round-trip-book',
       title: 'Round Trip',
+      plotOutline: 'Follow the signal.',
       writingBrief: 'Keep it quiet.',
       characters: [],
       worldRules: [{ id: 'rule-one', title: 'Rule', content: 'A rule.', includeInPrompt: true }],
@@ -43,6 +44,7 @@ describe('story store', () => {
     const loaded = await store.loadBook(book.id);
 
     expect(loaded.chapters[0]?.sections[0]?.content).toBe(content);
+    expect(loaded.plotOutline).toBe('Follow the signal.');
     expect(await readFile(path.join(root, 'books', book.id, 'canon', 'fact-one.json'), 'utf8')).toContain('A fact.');
     expect(await readFile(path.join(root, 'books', book.id, 'summaries', 'summary-one.json'), 'utf8')).toContain('sourceSectionIds');
     expect(await readFile(path.join(root, 'books', book.id, 'world', 'rule-one.md'), 'utf8')).toBe('A rule.');

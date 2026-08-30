@@ -114,7 +114,8 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
       true,
       true,
     ),
-    block(book.id, 'book', book.id, '本书写作约定', book.writingBrief, '当前 Book 的可编辑长期写作约定', Boolean(book.writingBrief.trim()), false),
+    block(book.id, 'book', `${book.id}:outline`, '剧情大纲', book.plotOutline ?? '', '当前 Book 的全局剧情指导', Boolean(book.plotOutline?.trim()), false),
+    block(book.id, 'book', `${book.id}:style`, '写作风格指导', book.writingBrief, '当前 Book 的全局行文风格与语言表达', Boolean(book.writingBrief.trim()), false),
     ...book.characters.map((character) => characterBlock(
       book.id,
       character,
@@ -122,8 +123,6 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
       request.mode === 'character' && character.id === selectedCharacter!.id,
     )),
     ...book.worldRules.map((source) => sourceBlock(book.id, 'world', source, '本书启用的世界观条例')),
-    ...book.canonFacts.map((source) => sourceBlock(book.id, 'canon', source, '本书已确认的 Canon 事实')),
-    ...book.summaries.map((source) => sourceBlock(book.id, 'summary', source, '本书启用的有来源摘要')),
     block(
       book.id,
       'manuscript',
