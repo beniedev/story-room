@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { defaultProviderProfiles, type ProviderProfile } from '../src/providerProfiles.ts';
+import type { PromptMessage, ProviderLimits } from '../src/types.ts';
 
 type StoredProviderProfile = ProviderProfile & {
   apiKey?: string;
@@ -352,6 +353,13 @@ export class ProviderStore {
     return (await this.readConfig()).profiles.map(safeProfile);
   }
 
+  async getContextLimits(profileId?: string): Promise<ProviderLimits> {
+    const profiles = (await this.readConfig()).profiles;
+    const profile = profileId ? profiles.find((item) => item.id === profileId) : profiles[0];
+    if (!profile) throw new ProviderInputError('找不到所选连接方案。');
+    return { maxContext: profile.maxContext, maxOutput: profile.maxOutput };
+  }
+
   async save(profile: ProviderProfile, apiKey?: string): Promise<ProviderProfile> {
     validateProfile(profile);
     const config = await this.readConfig();
@@ -428,14 +436,14 @@ export class ProviderStore {
     return { ok: true, modelId: candidate.modelId };
   }
 
-  async generate(profileId: string, prompt: string): Promise<string | null> {
+  async generate(profileId: string, messages: PromptMessage[]): Promise<string | null> {
     const profile = await this.resolve(profileId);
     if (profile.kind === 'fake') return null;
     const apiKey = normalizeApiKey(profile.apiKey);
     if (!apiKey) throw new ProviderInputError('所选连接方案没有本机 API Key。');
     const body = {
       model: profile.modelId,
-      messages: [{ role: 'user', content: prompt }],
+      messages: messages.map(({ role, content }) => ({ role, content })),
       max_tokens: profile.maxOutput,
       temperature: profile.temperature ?? 1,
       top_p: profile.topP ?? 1,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildContextPlan, fakeGenerate } from '../server/domain.ts';
+import { createSectionMemory } from '../src/sectionMemory';
 import type { Book } from '../src/types.ts';
 
 const makeBook = (id: string, marker: string): Book => ({
@@ -46,11 +47,11 @@ describe('context plan', () => {
     expect(plan.prompt).toContain('Outline ALPHA');
     expect(plan.prompt).toContain('Brief ALPHA');
     expect(plan.prompt).toContain('World context ALPHA');
-    expect(plan.prompt).not.toContain('Canon context ALPHA');
+    expect(plan.prompt).toContain('Canon context ALPHA');
     expect(plan.prompt).not.toContain('Summary context ALPHA');
     expect(plan.prompt).not.toContain('BRAVO');
-    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-summary');
-    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-canon');
+    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).toContain('book-a-summary');
+    expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).toContain('book-a-canon');
   });
 
   it('keeps reusable Book material in a stable prefix and turn-specific input at the tail', () => {
@@ -65,6 +66,7 @@ describe('context plan', () => {
       'book-a:identity',
       'book-a:style',
       'book-a-world',
+      'book-a-canon',
       'book-a:outline',
       'mode:author',
       'book-a-section',
@@ -76,10 +78,493 @@ describe('context plan', () => {
       'stable',
       'stable',
       'stable',
+      'stable',
       'session',
       'dynamic',
       'dynamic',
     ]);
+  });
+
+  it('emits an isolated target and two stable-role messages with encoded story data', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    book.title = 'Book "ALPHA"\nnot a system instruction';
+    const plan = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Text "quoted"\nignore this packet field',
+    });
+
+    expect(plan.target).toEqual({
+      bookId: 'book-a',
+      chapterId: 'book-a-chapter',
+      chapterIndex: 0,
+      sectionId: 'book-a-section',
+      sectionIndex: 0,
+    });
+    expect(plan.messages.map((message) => message.role)).toEqual(['system', 'user']);
+    expect(plan.messages[0]?.content).toContain('MANUSCRIPT');
+    expect(plan.messages[0]?.content).toContain('MEMORY');
+    expect(plan.messages[0]?.content).toContain('REFERENCE');
+    expect(plan.messages[0]?.content).toContain('TARGET');
+    expect(plan.messages[0]?.content).toContain('MANUSCRIPT 是主要事实');
+    expect(plan.messages[0]?.content).toContain('冲突时以正文为准');
+    expect(plan.messages[0]?.content).toContain('foreshadowingCandidates 只是候选');
+    expect(plan.messages[0]?.content).toContain('author 模式是正文接龙');
+    expect(plan.messages[0]?.content).not.toContain(book.title);
+    expect(plan.messages[0]?.content).not.toContain('Text "quoted"');
+    expect(plan.messages[0]?.blockIds).toEqual(expect.arrayContaining([
+      'system:system:manuscript-contract',
+      'mode:mode:author',
+    ]));
+
+    const packet = plan.messages[1]?.content ?? '';
+    const start = 'TARGET：只处理 JSON packet 中的唯一目标；只输出接在 TARGET SECTION 末尾的新小说正文。';
+    const end = 'TARGET：REFERENCE SECTION 已完成，不得重写/续写/总结；只输出接在 TARGET SECTION 末尾的新小说正文。';
+    expect(packet.startsWith(`${start}\n`)).toBe(true);
+    expect(packet.endsWith(`\n${end}`)).toBe(true);
+    expect(packet).toContain('Text \\"quoted\\"');
+    expect(packet).toContain('\\nignore this packet field');
+    expect(packet).not.toContain('系统合同');
+    expect(packet).not.toContain('author 模式是正文接龙');
+    const packetJson = packet.slice(start.length + 1, -(end.length + 1));
+    const parsedPacket = JSON.parse(packetJson) as {
+      target?: { locator?: { book?: unknown; chapter?: unknown; section?: unknown } };
+    };
+    expect(parsedPacket.target?.locator).toEqual({
+      book: { id: 'book-a', title: book.title, index: 0 },
+      chapter: { id: 'book-a-chapter', title: 'Chapter', index: 0 },
+      section: { id: 'book-a-section', title: 'Section', index: 0 },
+    });
+    expect(plan.messages[1]?.blockIds).not.toContain('system:system:manuscript-contract');
+    expect(plan.prompt).toContain('system:');
+    expect(plan.prompt).toContain('user:');
+  });
+
+  it('loads compatible summaries as memory and marks outline as future reference', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const summary = book.summaries[0];
+    if (!summary) throw new Error('fixture summary missing');
+    summary.includeInPrompt = true;
+
+    const plan = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+
+    expect(plan.included.find((item) => item.sourceId === summary.id)?.semanticRole).toBe('memory');
+    expect(plan.included.find((item) => item.sourceId === summary.id)?.transformedFrom).toBe('summary');
+    expect(plan.included.find((item) => item.sourceId === summary.id)?.cacheBand).toBe('session');
+    expect(plan.included.find((item) => item.sourceId === summary.id)?.source?.sourceSectionIds)
+      .toEqual(summary.sourceSectionIds);
+    expect(plan.included.find((item) => item.sourceId === 'book-a:outline')).toMatchObject({
+      semanticRole: 'outline-future',
+      future: true,
+    });
+    expect(plan.included.find((item) => item.sourceId === 'book-a-canon')?.semanticRole).toBe('constraint');
+    const style = plan.included.find((item) => item.sourceId === 'book-a:style');
+    expect(style).not.toHaveProperty('freshness');
+
+    summary.sourceSectionIds = ['book-a-other-section'];
+    const scopedOut = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+    expect(scopedOut.included.map((item) => item.sourceId)).toContain(summary.id);
+    summary.loadedSectionIds = ['book-a-other-section'];
+    const loadedElsewhere = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+    expect(loadedElsewhere.included.map((item) => item.sourceId)).not.toContain(summary.id);
+    expect(loadedElsewhere.excluded.map((item) => item.sourceId)).toContain(summary.id);
+  });
+
+  it('loads only earlier same-Book full references before the target', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    book.chapters = [
+      {
+        id: 'book-a-chapter-one',
+        title: 'Earlier Chapter',
+        sections: [
+          { id: 'book-a-earlier', title: 'Earlier Section', content: 'Earlier manuscript.' },
+          { id: 'book-a-summary-source', title: 'Summary Source', content: 'Summary source manuscript.' },
+        ],
+      },
+      {
+        id: 'book-a-chapter-two',
+        title: 'Current Chapter',
+        sections: [
+          {
+            id: 'book-a-target',
+            title: 'Target Section',
+            content: 'Target manuscript.',
+            contextReferences: [
+              { sectionId: 'book-a-earlier', mode: 'full', reason: 'manual' },
+              { sectionId: 'book-a-future', mode: 'full', reason: 'manual' },
+              { sectionId: 'book-a-target', mode: 'full', reason: 'manual' },
+              { sectionId: 'book-b-other', mode: 'full', reason: 'manual' },
+              { sectionId: 'book-a-summary-source', mode: 'summary', reason: 'manual' },
+            ],
+          },
+          { id: 'book-a-future', title: 'Future Section', content: 'Future manuscript.' },
+        ],
+      },
+    ];
+
+    const plan = buildContextPlan(book, {
+      sectionId: 'book-a-target',
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+    const reference = plan.included.find((item) => item.source?.sectionId === 'book-a-earlier');
+    const targetIndex = plan.included.findIndex((item) => item.semanticRole === 'target');
+
+    expect(reference).toMatchObject({
+      title: expect.stringContaining('REFERENCE'),
+      content: 'Earlier manuscript.',
+      messageRole: 'user',
+      semanticRole: 'reference-manuscript',
+      manualSelection: true,
+      transformedFrom: 'full',
+      cacheBand: 'session',
+      source: {
+        bookId: 'book-a',
+        chapterId: 'book-a-chapter-one',
+        chapterIndex: 0,
+        sectionId: 'book-a-earlier',
+        sectionIndex: 0,
+      },
+    });
+    expect(plan.included.findIndex((item) => item.source?.sectionId === 'book-a-earlier')).toBeLessThan(targetIndex);
+    expect(plan.messages[1]?.content).toContain('Earlier manuscript.');
+    expect(plan.messages[1]?.content).not.toContain('Future manuscript.');
+    expect(plan.messages[1]?.content).not.toContain('book-b-other');
+    const futurePlaceholder = plan.excluded.find((item) => item.source?.sectionId === 'book-a-future');
+    const targetPlaceholder = plan.excluded.find((item) => item.title.startsWith('REFERENCE') && item.source?.sectionId === 'book-a-target');
+    const missingPlaceholder = plan.excluded.find((item) => item.source?.sectionId === 'book-b-other');
+    expect(futurePlaceholder).toMatchObject({ content: '', reason: '当前或未来 Section 不能作为前文' });
+    expect(targetPlaceholder).toMatchObject({ content: '', reason: '当前或未来 Section 不能作为前文' });
+    expect(missingPlaceholder).toMatchObject({ content: '', reason: '引用不存在或不属于当前 Book' });
+    expect(plan.excluded.find((item) => item.source?.sectionId === 'book-a-summary-source')?.reason).toBe('前文记忆缺失');
+  });
+
+  it('deduplicates imported references with last-wins semantics', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const target = book.chapters[0]?.sections[0];
+    if (!target) throw new Error('target fixture missing');
+    const source = { id: 'book-a-source', title: 'Source', content: 'Source manuscript.' };
+    book.chapters[0]!.sections = [source, { ...target, contextReferences: [
+      { sectionId: source.id, mode: 'full', reason: 'manual' },
+      { sectionId: source.id, mode: 'summary', reason: 'manual' },
+    ] }];
+
+    const plan = buildContextPlan(book, {
+      sectionId: target.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+
+    expect(plan.included.filter((item) => item.source?.sectionId === source.id)).toHaveLength(0);
+    expect(plan.excluded.filter((item) => item.source?.sectionId === source.id)).toHaveLength(1);
+    expect(plan.messages[1]?.content).not.toContain('Source manuscript.');
+  });
+
+  it('loads eligible memory and full references in deterministic order, with future target plan', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const memorySource: Book['chapters'][number]['sections'][number] = {
+      id: 'book-a-memory-source', title: 'Memory Source', content: 'Memory source manuscript.'
+    };
+    const bothSource: Book['chapters'][number]['sections'][number] = {
+      id: 'book-a-both-source', title: 'Both Source', content: 'Both source manuscript.'
+    };
+    const staleSource: Book['chapters'][number]['sections'][number] = {
+      id: 'book-a-stale-source', title: 'Stale Source', content: 'Stale source manuscript.'
+    };
+    const modelDraftSource: Book['chapters'][number]['sections'][number] = {
+      id: 'book-a-draft-source', title: 'Draft Source', content: 'Draft source manuscript.'
+    };
+    memorySource.memory = createSectionMemory({
+      synopsis: 'Memory synopsis',
+      beats: ['Memory beat'],
+      continuityFacts: ['Memory fact'],
+      characterStateChanges: ['Memory state'],
+      foreshadowingCandidates: ['Memory candidate'],
+    }, memorySource.content, 'model-confirmed');
+    bothSource.memory = createSectionMemory({
+      synopsis: 'Both synopsis',
+      beats: ['Both beat'],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    }, bothSource.content, 'manual');
+    staleSource.memory = createSectionMemory({
+      synopsis: 'Stale synopsis',
+      beats: [],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    }, 'original source', 'manual');
+    modelDraftSource.memory = createSectionMemory({
+      synopsis: 'Draft synopsis',
+      beats: [],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    }, modelDraftSource.content, 'model-draft');
+    const target = {
+      id: 'book-a-target-with-plan',
+      title: 'Target With Plan',
+      content: 'Target manuscript.',
+      plan: { goal: 'Future goal', intendedBeats: ['Future beat'] },
+      contextReferences: [
+        { sectionId: memorySource.id, mode: 'summary' as const, reason: 'manual' as const },
+        { sectionId: bothSource.id, mode: 'both' as const, reason: 'manual' as const },
+        { sectionId: staleSource.id, mode: 'summary' as const, reason: 'manual' as const },
+        { sectionId: modelDraftSource.id, mode: 'summary' as const, reason: 'manual' as const },
+      ],
+    };
+    book.chapters[0]!.sections = [memorySource, bothSource, staleSource, modelDraftSource, target];
+
+    const plan = buildContextPlan(book, {
+      sectionId: target.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+    const targetIndex = plan.included.findIndex((item) => item.semanticRole === 'target');
+    const memory = plan.included.find((item) => item.source?.sectionId === memorySource.id);
+    const bothMemoryIndex = plan.included.findIndex((item) => item.source?.sectionId === bothSource.id
+      && item.semanticRole === 'memory');
+    const bothFullIndex = plan.included.findIndex((item) => item.source?.sectionId === bothSource.id
+      && item.transformedFrom === 'full');
+    const targetPlanIndex = plan.included.findIndex((item) => item.semanticRole === 'outline-future'
+      && item.source?.sectionId === target.id);
+    expect(memory).toMatchObject({ semanticRole: 'memory', freshness: 'fresh', transformedFrom: 'summary', cacheBand: 'session' });
+    expect(JSON.parse(memory?.content ?? '{}')).toEqual({
+      synopsis: 'Memory synopsis',
+      beats: ['Memory beat'],
+      continuityFacts: ['Memory fact'],
+      characterStateChanges: ['Memory state'],
+      foreshadowingCandidates: ['Memory candidate'],
+    });
+    expect(memory?.content).not.toContain('sourceContentHash');
+    expect(bothMemoryIndex).toBeLessThan(bothFullIndex);
+    expect(plan.included[bothFullIndex]?.cacheBand).toBe('session');
+    expect(bothFullIndex).toBeLessThan(targetPlanIndex);
+    expect(targetPlanIndex).toBeLessThan(targetIndex);
+    expect(plan.excluded.find((item) => item.source?.sectionId === staleSource.id)).toMatchObject({
+      freshness: 'stale',
+      reason: '前文记忆已过期',
+      content: '',
+    });
+    expect(plan.excluded.find((item) => item.source?.sectionId === modelDraftSource.id)).toMatchObject({
+      freshness: 'fresh',
+      reason: '前文记忆尚未确认',
+      content: '',
+    });
+    expect(plan.excluded.find((item) => item.source?.sectionId === modelDraftSource.id))
+      .not.toHaveProperty('transformedFrom');
+    expect(plan.messages[1]?.content).toContain('Both source manuscript.');
+  });
+
+  it('includes a SectionPlan with only a POV character and keeps it session-stable', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.plan = { goal: '', intendedBeats: [], povCharacterId: 'book-a-character' };
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    });
+    expect(plan.included.find((item) => item.semanticRole === 'outline-future'
+      && item.source?.sectionId === section.id)).toMatchObject({
+      included: true,
+      cacheBand: 'session',
+      future: true,
+    });
+  });
+
+  it('builds regenerate-block context around only the selected assistant block', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.blocks = [
+      { id: 'block-before', kind: 'user', content: 'Prefix synthetic text.' },
+      { id: 'block-target', kind: 'assistant', content: 'Target synthetic text.' },
+      { id: 'block-after', kind: 'user', content: 'Suffix synthetic text.' },
+    ];
+
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      authorNote: 'Synthetic transient note.',
+      instruction: 'Rewrite only the target block.',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'block-target',
+    });
+
+    expect(plan.target).toMatchObject({ sectionId: section.id, sectionIndex: 0 });
+    expect(plan.included.map((item) => item.semanticRole)).toEqual(expect.arrayContaining([
+      'reference-manuscript',
+      'target',
+    ]));
+    expect(plan.included.find((item) => item.semanticRole === 'reference-manuscript'))
+      .not.toHaveProperty('transformedFrom');
+    const packet = plan.messages[1]?.content ?? '';
+    expect(plan.messages[0]?.content).toContain('regenerate-block 只替换 TARGET block');
+    expect(packet.startsWith('TARGET：只处理 JSON packet 中的唯一目标；只输出 TARGET BLOCK 的替换正文。')).toBe(true);
+    expect(packet).toContain('prefix/suffix 仅用于衔接');
+    expect(packet).toContain('Prefix synthetic text.');
+    expect(packet).toContain('Target synthetic text.');
+    expect(packet).toContain('Suffix synthetic text.');
+    const prefixIndex = plan.included.findIndex((item) => item.title === 'TARGET prefix');
+    const targetBlockIndex = plan.included.findIndex((item) => item.title === 'TARGET target');
+    const suffixIndex = plan.included.findIndex((item) => item.title === 'TARGET suffix');
+    const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
+    const instructionIndex = plan.included.findIndex((item) => item.layer === 'instruction');
+    expect(prefixIndex).toBeLessThan(targetBlockIndex);
+    expect(targetBlockIndex).toBeLessThan(suffixIndex);
+    expect(suffixIndex).toBeLessThan(noteIndex);
+    expect(noteIndex).toBeLessThan(instructionIndex);
+    expect(() => buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Rewrite.',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'block-before',
+    })).toThrow('assistant block');
+    expect(() => buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Rewrite.',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'missing-block',
+    })).toThrow('当前 Section');
+  });
+
+  it('executes summary contract without mixing other story context and keeps rewrite unsupported', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const summaryPlan = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Summarize this section.',
+      generationKind: 'summarize-section',
+    });
+    expect(summaryPlan.messages[0]?.content).toContain('JSON schema');
+    for (const field of ['synopsis', 'beats', 'continuityFacts', 'characterStateChanges', 'foreshadowingCandidates']) {
+      expect(summaryPlan.messages[0]?.content).toContain(field);
+    }
+    expect(summaryPlan.messages[1]?.content).toContain('只输出 SectionMemoryDraft schema JSON');
+    expect(summaryPlan.included.map((item) => item.semanticRole)).not.toContain('instruction');
+    expect(summaryPlan.included.map((item) => item.semanticRole)).toEqual(['contract', 'target']);
+    expect(summaryPlan.messages[1]?.content).not.toContain('Outline ALPHA');
+    expect(summaryPlan.messages[1]?.content).not.toContain('Summary context ALPHA');
+    const generated = fakeGenerate(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Summarize this section.',
+      generationKind: 'summarize-section',
+    });
+    expect(JSON.parse(generated.draft)).toEqual({
+      synopsis: expect.any(String),
+      beats: expect.any(Array),
+      continuityFacts: expect.any(Array),
+      characterStateChanges: expect.any(Array),
+      foreshadowingCandidates: expect.any(Array),
+    });
+    expect(() => buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Rewrite a selection.',
+      generationKind: 'rewrite-selection',
+    })).toThrow('rewrite-selection');
+  });
+
+  it('fits a target tail but reports overflow for required material', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.content = `${'前文'.repeat(1800)}TAIL`;
+    const fitted = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    }, { maxContext: 2200, maxOutput: 100 });
+    const target = fitted.included.find((item) => item.semanticRole === 'target');
+    expect(target?.truncated).toBe(true);
+    expect(target?.truncationReason).toContain('尾部');
+    expect(target?.content.endsWith('TAIL')).toBe(true);
+    expect(fitted.budget.overflow).toBe(false);
+    expect(fitted.budget.reservedOutput).toBe(100);
+    expect(fitted.budget.availableInput).toBe(1_332);
+    expect(fitted.budget.estimatedInput).toBe(fitted.estimatedTokens);
+    expect(fitted.budget.remainingInput).toBeGreaterThanOrEqual(0);
+    expect(fitted.budget).not.toHaveProperty('inputBudget');
+
+    book.writingBrief = 'required brief '.repeat(900);
+    const overflow = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    }, { maxContext: 2200, maxOutput: 100 });
+    expect(overflow.budget.overflow).toBe(true);
+    expect(overflow.budget.overflowTokens).toBeGreaterThan(0);
+    let budgetError: unknown;
+    try {
+      fakeGenerate(book, {
+        sectionId: section.id,
+        mode: 'author',
+        instruction: 'Continue.',
+      }, { maxContext: 2200, maxOutput: 100 });
+    } catch (error) {
+      budgetError = error;
+    }
+    expect(String(budgetError)).toContain('约超出');
+    expect(String(budgetError)).toContain('写作风格指导');
+    expect(String(budgetError)).not.toContain('required brief');
+  });
+
+  it('keeps the full target when no positive tail fits the budget', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    const original = section.content;
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    }, { maxContext: 769, maxOutput: 1 });
+    const target = plan.included.find((item) => item.semanticRole === 'target');
+    expect(target?.content).toBe(original);
+    expect(target?.charCount).toBe(Array.from(original).length);
+    expect(target?.truncated).toBe(false);
+    expect(plan.budget.overflow).toBe(true);
+  });
+
+  it('never truncates the target for summary generation', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.content = '完整摘要正文。'.repeat(2_000);
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Summarize.',
+      generationKind: 'summarize-section',
+    }, { maxContext: 1_000, maxOutput: 100 });
+    const target = plan.included.find((item) => item.semanticRole === 'target');
+    expect(target?.content).toBe(section.content);
+    expect(target?.truncated).toBe(false);
+    expect(plan.budget.overflow).toBe(true);
+    expect(() => fakeGenerate(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Summarize.',
+      generationKind: 'summarize-section',
+    }, { maxContext: 1_000, maxOutput: 100 })).toThrow('约超出');
   });
 
   it('loads scoped character cards and world settings only for matching sections', () => {
@@ -169,7 +654,7 @@ describe('context plan', () => {
     expect(forcedCharacterPlan.included.map((item) => item.sourceId)).toContain(disabledCharacter.id);
   });
 
-  it('places a transient author note before the manuscript and ignores legacy Section notes', () => {
+  it('places transient notes after manuscript and migrates only the current legacy note to a future plan', () => {
     const book = makeBook('book-a', 'ALPHA');
     const current = book.chapters[0]?.sections[0];
     if (!current) throw new Error('fixture section missing');
@@ -190,12 +675,16 @@ describe('context plan', () => {
     const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
     const manuscriptIndex = plan.included.findIndex((item) => item.layer === 'manuscript');
 
-    expect(noteIndex).toBe(manuscriptIndex - 1);
+    const planIndex = plan.included.findIndex((item) => item.semanticRole === 'outline-future'
+      && item.source?.sectionId === current.id);
+    expect(planIndex).toBeLessThan(manuscriptIndex);
+    expect(noteIndex).toBe(manuscriptIndex + 1);
     expect(plan.included[noteIndex]?.title).toBe('小节注释');
     expect(plan.included[noteIndex]?.sourceId).toBe('request:author-note');
     expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
+    expect(plan.included[planIndex]?.content).toContain('Legacy persisted section note');
     expect(plan.prompt).toContain('请让灯光熄灭后');
-    expect(plan.prompt).not.toContain('Legacy persisted section note');
+    expect(plan.prompt).toContain('Legacy persisted section note');
     expect(plan.prompt).not.toContain('Other legacy section note');
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
   });

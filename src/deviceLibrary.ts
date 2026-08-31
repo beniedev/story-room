@@ -1,5 +1,10 @@
 import { createExampleBooks } from './fixtures';
 import { buildContextPlan } from './contextPlan';
+import {
+  normalizeBook,
+  serializeSectionMemoryDraft,
+  syntheticSectionMemoryDraft,
+} from './sectionMemory';
 import type {
   Book,
   BookIndexEntry,
@@ -92,11 +97,11 @@ const loadBook = (bookId: string): Book => {
   const book = readJson<unknown>(bookKey(bookId));
   if (!book) throw new Error(`找不到 Book：${bookId}`);
   if (!isBook(book)) throw new Error(`Book 数据已损坏：${bookId}`);
-  return book;
+  return normalizeBook(book);
 };
 
 const saveBook = (book: Book): Book => {
-  const saved = { ...book, updatedAt: new Date().toISOString() };
+  const saved = { ...normalizeBook(book), updatedAt: new Date().toISOString() };
   localStorage.setItem(bookKey(saved.id), JSON.stringify(saved));
   const library = ensureLibrary();
   writeLibrary([
@@ -149,6 +154,8 @@ export const deviceLibrary = {
   ),
   generate: async (request: GenerationRequest): Promise<GenerationResult> => ({
     plan: buildContextPlan(loadBook(request.bookId), request),
-    draft: fakeDraft(request.mode),
+    draft: request.generationKind === 'summarize-section'
+      ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
+      : fakeDraft(request.mode),
   }),
 };

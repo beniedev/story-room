@@ -67,21 +67,26 @@ describe('local provider store', () => {
   });
 
   it('keeps credentials server-side and uses them for test and generation', async () => {
-    const requests: Array<{ url: string; authorization: string }> = [];
+    const requests: Array<{ url: string; authorization: string; body: string }> = [];
     const server = createServer((request, response) => {
-      requests.push({
-        url: request.url ?? '',
-        authorization: request.headers.authorization ?? '',
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        requests.push({
+          url: request.url ?? '',
+          authorization: request.headers.authorization ?? '',
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/v1/models') {
+          response.end(JSON.stringify({ data: [{ id: 'test-model' }] }));
+          return;
+        }
+        response.end(JSON.stringify({
+          model: 'test-model',
+          choices: [{ message: { content: '续写正文' } }],
+        }));
       });
-      response.setHeader('content-type', 'application/json');
-      if (request.url === '/v1/models') {
-        response.end(JSON.stringify({ data: [{ id: 'test-model' }] }));
-        return;
-      }
-      response.end(JSON.stringify({
-        model: 'test-model',
-        choices: [{ message: { content: '续写正文' } }],
-      }));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
@@ -105,11 +110,19 @@ describe('local provider store', () => {
       await store.save(profile, 'private-test-key');
       expect((await store.list()).find((item) => item.id === profile.id)).toEqual(profile);
       expect(await store.test(profile)).toEqual({ ok: true, modelId: 'test-model' });
-      expect(await store.generate(profile.id, '继续写')).toBe('续写正文');
-      expect(requests).toEqual([
+      const messages = [
+        { role: 'system' as const, content: 'synthetic system contract', blockIds: ['system:block'] },
+        { role: 'user' as const, content: JSON.stringify({ target: 'synthetic-target', text: '继续写' }), blockIds: ['user:block'] },
+      ];
+      expect(await store.generate(profile.id, messages)).toBe('续写正文');
+      expect(requests.map(({ url, authorization }) => ({ url, authorization }))).toEqual([
         { url: '/v1/models', authorization: 'Bearer private-test-key' },
         { url: '/v1/chat/completions', authorization: 'Bearer private-test-key' },
       ]);
+      const generationBody = JSON.parse(requests[1]?.body ?? '{}') as { messages?: unknown };
+      expect(generationBody.messages).toEqual(messages.map(({ role, content }) => ({ role, content })));
+      expect(JSON.stringify(generationBody)).not.toContain('blockIds');
+      expect(JSON.stringify(generationBody)).not.toContain('private-test-key');
       expect(await readFile(file, 'utf8')).toContain('private-test-key');
       expect(JSON.stringify(await store.list())).not.toContain('private-test-key');
     } finally {

@@ -58,6 +58,14 @@ export const deleteDirectorySelection = (
       ? source
       : { ...source, loadedSectionIds: source.loadedSectionIds.filter((id) => !removedSectionIds.has(id)) }
   );
+  const removeDeletedContextReferences = (section: Book['chapters'][number]['sections'][number]) => (
+    section.contextReferences === undefined
+      ? section
+      : {
+          ...section,
+          contextReferences: section.contextReferences.filter((reference) => !removedSectionIds.has(reference.sectionId)),
+        }
+  );
 
   return {
     book: {
@@ -68,7 +76,9 @@ export const deleteDirectorySelection = (
         .filter((chapter) => !selection.chapterIds.has(chapter.id))
         .map((chapter) => ({
           ...chapter,
-          sections: chapter.sections.filter((section) => !removedSectionIds.has(section.id)),
+          sections: chapter.sections
+            .filter((section) => !removedSectionIds.has(section.id))
+            .map(removeDeletedContextReferences),
         })),
       summaries: book.summaries.map((summary) => ({
         ...summary,

@@ -30,9 +30,23 @@ describe('source selection', () => {
   });
 
   it('deletes only selected character cards', () => {
-    const next = deleteSourceSelection(book, 'character', new Set(['character-a']));
+    const withPlan: Book = {
+      ...book,
+      chapters: [{
+        id: 'chapter-a',
+        title: 'Chapter',
+        sections: [{
+          id: 'section-a',
+          title: 'Section',
+          content: 'Text',
+          plan: { goal: 'Goal', intendedBeats: [], povCharacterId: 'character-a' },
+        }],
+      }],
+    };
+    const next = deleteSourceSelection(withPlan, 'character', new Set(['character-a']));
     expect(next.characters.map((item) => item.id)).toEqual(['character-b']);
     expect(next.worldRules).toEqual(book.worldRules);
+    expect(next.chapters[0]?.sections[0]?.plan).toEqual({ goal: 'Goal', intendedBeats: [] });
   });
 
   it('deletes multiple world rules without changing characters', () => {

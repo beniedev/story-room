@@ -4,7 +4,14 @@ import { readFile, stat } from 'node:fs/promises';
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildContextPlan, fakeGenerate, RequestValidationError } from './domain.ts';
+import {
+  assertContextBudget,
+  assertGenerationExecutable,
+  buildContextPlan,
+  fakeGenerate,
+  normalizeSectionMemoryResponse,
+  RequestValidationError,
+} from './domain.ts';
 import { BookNotFoundError, StoreInputError, StoryStore } from './store.ts';
 import type { Book, GenerationRequest } from '../src/types.ts';
 import type { ProviderProfile } from '../src/providerProfiles.ts';
@@ -17,6 +24,7 @@ import {
 const host = process.env.STORY_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
 const MAX_BODY_BYTES = 1_000_000;
+const generationKinds = new Set(['continue-section', 'regenerate-block', 'rewrite-selection', 'summarize-section']);
 
 export type StoryServerOptions = {
   accessToken?: string;
@@ -184,7 +192,9 @@ const readGenerationRequest = async (request: IncomingMessage): Promise<Generati
     || (body.providerProfileId !== undefined && typeof body.providerProfileId !== 'string')
     || (body.mode !== 'author' && body.mode !== 'character')
     || (body.authorNote !== undefined && typeof body.authorNote !== 'string')
-    || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')) {
+    || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')
+    || (body.generationKind !== undefined && (typeof body.generationKind !== 'string' || !generationKinds.has(body.generationKind)))
+    || (body.targetBlockId !== undefined && typeof body.targetBlockId !== 'string')) {
     throw new RequestValidationError('生成请求数据无效。');
   }
   return body as unknown as GenerationRequest;
@@ -327,19 +337,28 @@ export const createStoryServer = (
       if (request.method === 'POST' && url.pathname === '/api/context-plan') {
         const body = await readGenerationRequest(request);
         const book = await storyStore.loadBook(body.bookId);
-        return sendJson(response, 200, buildContextPlan(book, body));
+        const limits = await providerStore.getContextLimits(body.providerProfileId);
+        return sendJson(response, 200, buildContextPlan(book, body, limits));
       }
       if (request.method === 'POST' && url.pathname === '/api/generate') {
         const body = await readGenerationRequest(request);
         const book = await storyStore.loadBook(body.bookId);
-        const plan = buildContextPlan(book, body);
+        const limits = await providerStore.getContextLimits(body.providerProfileId);
+        const plan = buildContextPlan(book, body, limits);
+        assertGenerationExecutable(body);
+        assertContextBudget(plan);
         const generated = body.providerProfileId
-          ? await providerStore.generate(body.providerProfileId, plan.prompt)
+          ? await providerStore.generate(body.providerProfileId, plan.messages)
           : null;
         if (generated !== null) {
-          return sendJson(response, 200, { plan, draft: generated });
+          return sendJson(response, 200, {
+            plan,
+            draft: body.generationKind === 'summarize-section'
+              ? normalizeSectionMemoryResponse(generated)
+              : generated,
+          });
         }
-        return sendJson(response, 200, fakeGenerate(book, body));
+        return sendJson(response, 200, fakeGenerate(book, body, limits));
       }
       if (knownRouteMethods[url.pathname]) {
         response.setHeader('allow', knownRouteMethods[url.pathname].join(', '));

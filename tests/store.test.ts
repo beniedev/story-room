@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StoryStore } from '../server/store.ts';
 import { createLegacyFixtureBook } from '../src/fixtures.ts';
+import { createSectionMemory } from '../src/sectionMemory';
 import type { Book } from '../src/types.ts';
 
 const temporaryRoots: string[] = [];
@@ -48,16 +49,35 @@ describe('story store', () => {
       chapters: [{
         id: 'chapter-one',
         title: 'Chapter',
-        sections: [{
-          id: 'section-one',
-          title: 'Section',
-          content,
-          note: '只在当前 Section 生效。',
-          blocks: [
-            { id: 'section-one-user', kind: 'user', content: '先观察窗外。' },
-            { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
-          ],
-        }],
+        sections: [
+          { id: 'section-zero', title: 'Earlier Section', content: 'Earlier manuscript.' },
+          {
+            id: 'section-one',
+            title: 'Section',
+            content,
+            note: '只在当前 Section 生效。',
+            plan: { goal: '未来目标', intendedBeats: ['下一拍'] },
+            memory: createSectionMemory({
+              synopsis: '当前摘要',
+              beats: ['当前节拍'],
+              continuityFacts: [],
+              characterStateChanges: [],
+              foreshadowingCandidates: [],
+            }, content, 'model-confirmed', '2026-01-01T00:00:00.000Z'),
+            previousMemory: createSectionMemory({
+              synopsis: '上一版摘要',
+              beats: [],
+              continuityFacts: [],
+              characterStateChanges: [],
+              foreshadowingCandidates: [],
+            }, content, 'manual', '2025-12-31T00:00:00.000Z'),
+            blocks: [
+              { id: 'section-one-user', kind: 'user', content: '先观察窗外。' },
+              { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
+            ],
+            contextReferences: [{ sectionId: 'section-zero', mode: 'full', reason: 'manual' }],
+          },
+        ],
       }],
       branches: [],
       updatedAt: '2026-01-01T00:00:00.000Z',
@@ -65,18 +85,103 @@ describe('story store', () => {
 
     await store.saveBook(book);
     const loaded = await store.loadBook(book.id);
+    const loadedTarget = loaded.chapters[0]?.sections.find((item) => item.id === 'section-one');
 
-    expect(loaded.chapters[0]?.sections[0]?.content).toBe(content);
-    expect(loaded.chapters[0]?.sections[0]?.note).toBe('只在当前 Section 生效。');
-    expect(loaded.chapters[0]?.sections[0]?.blocks).toEqual([
+    expect(loadedTarget?.content).toBe(content);
+    expect(loadedTarget?.note).toBe('只在当前 Section 生效。');
+    expect(loadedTarget?.plan).toEqual({ goal: '未来目标', intendedBeats: ['下一拍'] });
+    expect(loadedTarget?.memory?.provenance).toBe('model-confirmed');
+    expect(loadedTarget?.memory?.status).toBe('fresh');
+    expect(loadedTarget?.previousMemory?.synopsis).toBe('上一版摘要');
+    expect(loadedTarget?.blocks).toEqual([
       { id: 'section-one-user', kind: 'user', content: '先观察窗外。' },
       { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
     ]);
+    expect(loadedTarget?.contextReferences).toEqual([{ sectionId: 'section-zero', mode: 'full', reason: 'manual' }]);
     expect(loaded.plotOutline).toBe('Follow the signal.');
     expect(loaded.worldRules[0]?.loadedSectionIds).toEqual(['section-one']);
     expect(await readFile(path.join(root, 'books', book.id, 'canon', 'fact-one.json'), 'utf8')).toContain('A fact.');
     expect(await readFile(path.join(root, 'books', book.id, 'summaries', 'summary-one.json'), 'utf8')).toContain('sourceSectionIds');
     expect(await readFile(path.join(root, 'books', book.id, 'world', 'rule-one.md'), 'utf8')).toBe('A rule.');
+  });
+
+  it('migrates a legacy note on save and marks changed memory stale', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const original = 'Original manuscript.';
+    const book: Book = {
+      id: 'legacy-memory-book',
+      title: 'Legacy Memory',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'legacy-memory-chapter',
+        title: 'Chapter',
+        sections: [{
+          id: 'legacy-memory-section',
+          title: 'Section',
+          content: 'Changed manuscript.',
+          note: '  exact legacy goal\nsecond line  ',
+          memory: createSectionMemory({
+            synopsis: 'Old synopsis',
+            beats: [],
+            continuityFacts: [],
+            characterStateChanges: [],
+            foreshadowingCandidates: [],
+          }, original),
+        }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const store = new StoryStore(root);
+    await store.saveBook(book);
+    const loaded = await store.loadBook(book.id);
+    const section = loaded.chapters[0]?.sections[0];
+    expect(section?.note).toBeUndefined();
+    expect(section?.plan).toEqual({ goal: '  exact legacy goal\nsecond line  ', intendedBeats: [] });
+    expect(section?.memory?.status).toBe('stale');
+    const manifest = await readFile(path.join(root, 'books', book.id, 'book.json'), 'utf8');
+    expect(manifest).toContain('exact legacy goal');
+    expect(manifest).not.toContain('"note"');
+  });
+
+  it('rejects duplicate context reference source IDs at the host boundary', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const book: Book = {
+      id: 'duplicate-reference-book',
+      title: 'Duplicate Reference',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'duplicate-reference-chapter',
+        title: 'Chapter',
+        sections: [
+          { id: 'duplicate-reference-source', title: 'Source', content: 'Source.' },
+          {
+            id: 'duplicate-reference-target',
+            title: 'Target',
+            content: 'Target.',
+            contextReferences: [
+              { sectionId: 'duplicate-reference-source', mode: 'full', reason: 'manual' },
+              { sectionId: 'duplicate-reference-source', mode: 'summary', reason: 'manual' },
+            ],
+          },
+        ],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    await expect(new StoryStore(root).saveBook(book)).rejects.toThrow('不得重复');
   });
 
   it('serializes concurrent saves so the library keeps both Books', async () => {

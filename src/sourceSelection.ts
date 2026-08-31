@@ -13,6 +13,22 @@ export const deleteSourceSelection = (
   book: Book,
   kind: SourceSelectionKind,
   ids: Set<string>,
-): Book => kind === 'character'
-  ? { ...book, characters: book.characters.filter((item) => !ids.has(item.id)) }
-  : { ...book, worldRules: book.worldRules.filter((item) => !ids.has(item.id)) };
+): Book => {
+  if (kind === 'world') return {
+    ...book,
+    worldRules: book.worldRules.filter((item) => !ids.has(item.id)),
+  };
+
+  return {
+    ...book,
+    characters: book.characters.filter((item) => !ids.has(item.id)),
+    chapters: book.chapters.map((chapter) => ({
+      ...chapter,
+      sections: chapter.sections.map((section) => {
+        if (!section.plan?.povCharacterId || !ids.has(section.plan.povCharacterId)) return section;
+        const { povCharacterId: _removed, ...plan } = section.plan;
+        return { ...section, plan };
+      }),
+    })),
+  };
+};

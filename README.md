@@ -55,6 +55,14 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 - EPUB, Markdown, TXT, and complete JSON exports
 - Responsive controls for desktop and mobile-sized viewports
 
+### Context planning
+
+The writing page's Context drawer shows the active Provider limits, the estimated input budget, the ordered included material, and the exact system message plus structured user packet sent for the current request. The preview is Provider input, not hidden model reasoning. When an OpenAI-compatible local-host Provider is selected, it receives the selected manuscript and context material for that generation.
+
+Each Section can keep a future-facing Section Plan (goal, intended beats, and optional POV character). Earlier Sections can be selected as `full`, `summary`, or `both` references. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; only a manual, author-confirmed, or edited memory is eligible for summary references. Freshness follows the source manuscript, and the UI supports cancel, confirm, and rollback without silently replacing the current memory.
+
+Model-generated memory is never inserted into ordinary continuation until it is confirmed. Hosted/device generation remains Fake, and there is no automatic cloud storage or synchronization. Provider keys and endpoints remain a trust boundary: only enter a temporary device test key when you trust the current page and destination URL; local-host keys are stored as described above.
+
 ## Current limits
 
 - A Book `PUT` request is limited to 1 MB, and autosave currently writes the whole Book. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); it is not implemented.

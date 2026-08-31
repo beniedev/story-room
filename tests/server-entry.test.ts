@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
 import { api, HOST_ACCESS_TOKEN_STORAGE_KEY } from '../src/api';
+import { createSectionMemory } from '../src/sectionMemory';
 
 const requestWithHost = (port: number, pathname: string, host: string) => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
   const request = httpRequest({ host: '127.0.0.1', port, path: pathname, headers: { host } }, (response) => {
@@ -96,6 +97,156 @@ describe('local server entry', () => {
       expect(rejected.status).toBe(413);
       expect(await rejected.text()).toContain('1 MB');
       expect(storyStore.saveBook).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('passes the structured context messages through the generation route', async () => {
+    const book = {
+      id: 'book-a',
+      title: 'Synthetic Book',
+      plotOutline: 'Synthetic outline.',
+      writingBrief: 'Synthetic style.',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'chapter-a',
+        title: 'Synthetic Chapter',
+        sections: [{ id: 'section-a', title: 'Synthetic Section', content: 'Existing text.' }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const storyStore = {
+      loadBook: vi.fn(async () => book),
+    };
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate: vi.fn(async (_profileId: string, messages: unknown[]) => {
+        expect(messages).toHaveLength(2);
+        expect(messages.map((message) => (message as { role: string }).role)).toEqual(['system', 'user']);
+        expect(JSON.stringify(messages)).toContain('Existing text.');
+        return 'Synthetic generated text.';
+      }),
+    };
+    const server = createStoryServer(storyStore as never, providerStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          bookId: book.id,
+          sectionId: 'section-a',
+          providerProfileId: 'synthetic-provider',
+          mode: 'author',
+          instruction: 'Continue synthetic text.',
+          generationKind: 'continue-section',
+        }),
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ draft: 'Synthetic generated text.' });
+      expect(providerStore.getContextLimits).toHaveBeenCalledWith('synthetic-provider');
+      expect(providerStore.generate).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('parses provider summary drafts strictly without writing memory', async () => {
+    const previousMemory = createSectionMemory({
+      synopsis: 'Existing memory',
+      beats: [],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    }, 'Existing section text');
+    const book = {
+      id: 'summary-book',
+      title: 'Summary Book',
+      plotOutline: 'Should not enter summary input.',
+      writingBrief: 'Should not enter summary input.',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [{
+        id: 'summary-source',
+        title: 'Other summary',
+        content: 'Should not enter summary input.',
+        includeInPrompt: true,
+        sourceSectionIds: [],
+      }],
+      chapters: [{
+        id: 'summary-chapter',
+        title: 'Summary Chapter',
+        sections: [{
+          id: 'summary-section',
+          title: 'Summary Section',
+          content: 'Only this text is summarized.',
+          memory: previousMemory,
+        }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const validDraft = JSON.stringify({
+      synopsis: 'Synthetic synopsis',
+      beats: ['Synthetic beat'],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    });
+    const storyStore = {
+      loadBook: vi.fn(async () => book),
+      saveBook: vi.fn(),
+    };
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate: vi.fn()
+        .mockResolvedValueOnce(validDraft)
+        .mockResolvedValueOnce('{"synopsis":"not enough"}'),
+    };
+    const server = createStoryServer(storyStore as never, providerStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const origin = `http://127.0.0.1:${address.port}`;
+      const body = JSON.stringify({
+        bookId: book.id,
+        sectionId: 'summary-section',
+        providerProfileId: 'synthetic-provider',
+        mode: 'author',
+        instruction: '',
+        generationKind: 'summarize-section',
+      });
+      const first = await fetch(`${origin}/api/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      expect(first.status).toBe(200);
+      await expect(first.json()).resolves.toMatchObject({ draft: validDraft });
+      const messages = providerStore.generate.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
+      expect(messages[1]?.content).toContain('Only this text is summarized.');
+      expect(messages[1]?.content).not.toContain('Should not enter summary input.');
+      expect(storyStore.saveBook).not.toHaveBeenCalled();
+
+      const second = await fetch(`${origin}/api/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      expect(second.status).toBe(400);
+      expect(await second.text()).toContain('Section memory draft');
+      expect(storyStore.saveBook).not.toHaveBeenCalled();
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

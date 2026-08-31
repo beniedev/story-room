@@ -7,6 +7,7 @@ import {
   renderBookText,
 } from '../src/bookExport';
 import { createExampleBooks } from '../src/fixtures';
+import { createSectionMemory } from '../src/sectionMemory';
 
 describe('book exports', () => {
   const book = createExampleBooks()[0];
@@ -69,5 +70,27 @@ describe('book exports', () => {
     const file = createBookExport(book, 'json');
     expect(file.filename).toBe(`${book.title}.json`);
     expect(JSON.parse(String(file.content))).toEqual(book);
+  });
+
+  it('keeps plan and memory in JSON but excludes them from reading formats', () => {
+    const complete = structuredClone(book);
+    const section = complete.chapters[0]?.sections[0];
+    if (!section) throw new Error('section fixture missing');
+    section.plan = { goal: 'Synthetic future plan', intendedBeats: ['Synthetic beat'] };
+    section.memory = createSectionMemory({
+      synopsis: 'Synthetic memory synopsis',
+      beats: [],
+      continuityFacts: [],
+      characterStateChanges: [],
+      foreshadowingCandidates: [],
+    }, section.content);
+
+    expect(JSON.parse(String(createBookExport(complete, 'json').content))).toEqual(complete);
+    expect(renderBookMarkdown(complete)).not.toContain('Synthetic future plan');
+    expect(renderBookText(complete)).not.toContain('Synthetic memory synopsis');
+    const epub = unzipSync(renderBookEpub(complete));
+    const sectionDocument = strFromU8(epub[`EPUB/text/${section.id}.xhtml`]);
+    expect(sectionDocument).not.toContain('Synthetic future plan');
+    expect(sectionDocument).not.toContain('Synthetic memory synopsis');
   });
 });

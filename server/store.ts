@@ -21,6 +21,12 @@ import type {
   Summary,
   WorldRule,
 } from '../src/types.ts';
+import {
+  MAX_SECTION_MEMORY_ITEM_LENGTH,
+  MAX_SECTION_MEMORY_ITEMS,
+  MAX_SECTION_MEMORY_TEXT_LENGTH,
+  normalizeBook,
+} from '../src/sectionMemory.ts';
 import { createExampleBooks, createLegacyFixtureBook, upgradeExampleBookContent } from '../src/fixtures.ts';
 
 type BookFile = Omit<Book, 'characters' | 'worldRules' | 'canonFacts' | 'summaries' | 'chapters'> & {
@@ -89,6 +95,63 @@ const requiredArray = (value: unknown, label: string): unknown[] => {
   return value;
 };
 
+const validateMemoryText = (value: unknown, label: string, maxLength: number) => {
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new StoreInputError(`${label}必须是 ${maxLength} 字以内的文本。`);
+  }
+};
+
+const validateMemoryTextList = (value: unknown, label: string) => {
+  const items = requiredArray(value, label);
+  if (items.length > MAX_SECTION_MEMORY_ITEMS) {
+    throw new StoreInputError(`${label}必须是最多 ${MAX_SECTION_MEMORY_ITEMS} 项的文本数组。`);
+  }
+  for (const item of items) validateMemoryText(item, `${label}元素`, MAX_SECTION_MEMORY_ITEM_LENGTH);
+};
+
+const validateSectionPlan = (value: unknown) => {
+  if (!isRecord(value)) throw new StoreInputError('Section 计划数据无效。');
+  requiredString(value.goal, 'Section 计划目标');
+  for (const beat of requiredArray(value.intendedBeats, 'Section 计划节拍')) {
+    requiredString(beat, 'Section 计划节拍元素');
+  }
+  if (value.povCharacterId !== undefined) validId(requiredString(value.povCharacterId, 'Section 计划 POV 角色 ID'));
+};
+
+const validateSectionMemory = (value: unknown, label: string) => {
+  if (!isRecord(value)) throw new StoreInputError(`${label}数据无效。`);
+  const fields = [
+    'synopsis',
+    'beats',
+    'continuityFacts',
+    'characterStateChanges',
+    'foreshadowingCandidates',
+    'sourceContentHash',
+    'status',
+    'provenance',
+    'updatedAt',
+  ];
+  if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.prototype.hasOwnProperty.call(value, field))) {
+    throw new StoreInputError(`${label}字段不完整或包含未知字段。`);
+  }
+  validateMemoryText(value.synopsis, `${label} synopsis`, MAX_SECTION_MEMORY_TEXT_LENGTH);
+  validateMemoryTextList(value.beats, `${label} beats`);
+  validateMemoryTextList(value.continuityFacts, `${label} continuityFacts`);
+  validateMemoryTextList(value.characterStateChanges, `${label} characterStateChanges`);
+  validateMemoryTextList(value.foreshadowingCandidates, `${label} foreshadowingCandidates`);
+  if (typeof value.sourceContentHash !== 'string' || !/^[0-9a-f]{16}$/.test(value.sourceContentHash)) {
+    throw new StoreInputError(`${label} sourceContentHash 无效。`);
+  }
+  if (value.status !== 'fresh' && value.status !== 'stale') {
+    throw new StoreInputError(`${label} freshness 状态无效。`);
+  }
+  if (value.provenance !== 'manual' && value.provenance !== 'model-draft'
+    && value.provenance !== 'model-confirmed' && value.provenance !== 'model-edited') {
+    throw new StoreInputError(`${label} provenance 无效。`);
+  }
+  validateMemoryText(value.updatedAt, `${label} updatedAt`, 128);
+};
+
 const validateSource = (value: unknown, label: string) => {
   if (!isRecord(value)) throw new StoreInputError(`${label}数据无效。`);
   validId(requiredString(value.id, `${label} ID`));
@@ -118,6 +181,24 @@ const validateSection = (value: unknown) => {
       requiredString(block.content, 'Section block 正文');
     }
   }
+  if (value.contextReferences !== undefined) {
+    const referenceIds = new Set<string>();
+    for (const reference of requiredArray(value.contextReferences, 'Section 前文参考')) {
+      if (!isRecord(reference)) throw new StoreInputError('Section 前文参考数据无效。');
+      const referenceId = validId(requiredString(reference.sectionId, 'Section 前文参考 Section ID'));
+      if (referenceIds.has(referenceId)) throw new StoreInputError('Section 前文参考不得重复引用同一个 Section。');
+      referenceIds.add(referenceId);
+      if (reference.mode !== 'summary' && reference.mode !== 'full' && reference.mode !== 'both') {
+        throw new StoreInputError('Section 前文参考模式无效。');
+      }
+      if (reference.reason !== 'manual' && reference.reason !== 'previous-section' && reference.reason !== 'chapter-preset') {
+        throw new StoreInputError('Section 前文参考来源无效。');
+      }
+    }
+  }
+  if (value.plan !== undefined) validateSectionPlan(value.plan);
+  if (value.memory !== undefined) validateSectionMemory(value.memory, 'Section memory');
+  if (value.previousMemory !== undefined) validateSectionMemory(value.previousMemory, 'Section previousMemory');
 };
 
 const validateBook = (book: Book) => {
@@ -444,16 +525,17 @@ export class StoryStore {
       }))),
     })));
 
-    const loaded = { ...meta, characters, worldRules, canonFacts, summaries, chapters };
+    const loaded = normalizeBook({ ...meta, characters, worldRules, canonFacts, summaries, chapters });
     validateBook(loaded);
     return loaded;
   }
 
   async saveBook(book: Book): Promise<Book> {
-    validateBook(book);
+    const normalizedBook = normalizeBook(book);
+    validateBook(normalizedBook);
     const operation = async () => {
-      const root = this.bookRoot(book.id);
-      const saved = { ...book, updatedAt: new Date().toISOString() };
+      const root = this.bookRoot(normalizedBook.id);
+      const saved = { ...normalizedBook, updatedAt: new Date().toISOString() };
       const meta: BookFile = {
         id: saved.id,
         title: saved.title,

@@ -51,6 +51,16 @@ import {
   type ProviderProfile,
 } from './providerProfiles';
 import { parseProseFormatting } from './proseFormatting';
+import {
+  commitSectionMemoryDraft,
+  draftFromSectionMemory,
+  isEligibleSectionMemory,
+  normalizeBook,
+  parseSectionMemoryDraft,
+  rollbackSectionMemory,
+  sectionMemoryFreshness,
+  serializeSectionMemoryDraft,
+} from './sectionMemory';
 import { countWords, estimateTokens } from './textMetrics';
 import type {
   Book,
@@ -58,9 +68,14 @@ import type {
   CharacterCard,
   ContextPlan,
   GenerationMode,
+  GenerationRequest,
   PromptCacheBand,
   PromptLayer,
+  SectionMemoryDraft,
+  SectionMemoryProvenance,
+  SectionPlan,
   SectionBlock,
+  SectionContextReferenceMode,
   ThemeName,
   WorldRule,
 } from './types';
@@ -89,19 +104,6 @@ const clampManuscriptFontSize = (value: number) => Math.min(
   maxManuscriptFontSize,
   Math.max(minManuscriptFontSize, Math.round(value)),
 );
-const generalPromptOrder = [
-  { id: 'template-contract', layer: 'system', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
-  { id: 'template-book', layer: 'book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
-  { id: 'template-style', layer: 'book', title: '写作风格指导', reason: '全书共用的行文风格', cacheBand: 'stable' },
-  { id: 'template-world', layer: 'world', title: '世界观设定', reason: '当前小节加载的世界设定', cacheBand: 'stable' },
-  { id: 'template-characters', layer: 'character', title: '角色卡', reason: '当前小节加载或当前扮演必需的角色设定', cacheBand: 'stable' },
-  { id: 'template-outline', layer: 'book', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
-  { id: 'template-mode', layer: 'mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
-  { id: 'template-note', layer: 'note', title: '小节注释', reason: '只指导当前小节的下一次续写，位于正文前', cacheBand: 'dynamic' },
-  { id: 'template-manuscript', layer: 'manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
-  { id: 'template-instruction', layer: 'instruction', title: '本轮输入', reason: '作者接龙正文或角色输入', cacheBand: 'dynamic' },
-] satisfies Array<{ id: string; layer: PromptLayer; title: string; reason: string; cacheBand: PromptCacheBand }>;
-
 type PromptCompositionItem = {
   id: string;
   layer: PromptLayer;
@@ -190,7 +192,7 @@ const readCachedBook = (bookId: string) => {
     const value = localStorage.getItem(bookCacheKey(bookId));
     if (!value) return null;
     const parsed = JSON.parse(value) as unknown;
-    return isCachedBook(parsed, bookId) ? parsed : null;
+    return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
   } catch {
     return null;
   }
@@ -199,7 +201,7 @@ const readCachedBook = (bookId: string) => {
 const cacheBook = (book: Book) => {
   if (api.runtime !== 'device') return false;
   try {
-    localStorage.setItem(bookCacheKey(book.id), JSON.stringify(book));
+    localStorage.setItem(bookCacheKey(book.id), JSON.stringify(normalizeBook(book)));
     return true;
   } catch {
     return false;
@@ -236,12 +238,14 @@ const clearHostBookCaches = () => {
 };
 
 const newerBook = (stored: Book, cached: Book | null) => {
-  if (!cached) return stored;
-  const storedTime = Date.parse(stored.updatedAt);
-  const cachedTime = Date.parse(cached.updatedAt);
+  const normalizedStored = normalizeBook(stored);
+  if (!cached) return normalizedStored;
+  const normalizedCached = normalizeBook(cached);
+  const storedTime = Date.parse(normalizedStored.updatedAt);
+  const cachedTime = Date.parse(normalizedCached.updatedAt);
   return Number.isFinite(cachedTime) && (!Number.isFinite(storedTime) || cachedTime > storedTime)
-    ? cached
-    : stored;
+    ? normalizedCached
+    : normalizedStored;
 };
 
 function App() {
@@ -277,6 +281,9 @@ function App() {
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
   const exportTrigger = useRef<HTMLElement | null>(null);
+  const contextDialog = useRef<HTMLDialogElement>(null);
+  const contextTrigger = useRef<HTMLElement | null>(null);
+  const [contextOpen, setContextOpen] = useState(false);
   const mainContent = useRef<HTMLElement>(null);
   const restoreShelfFocus = useRef(false);
   const restoreWriterFocus = useRef(false);
@@ -289,6 +296,8 @@ function App() {
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
+  const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
+    ?? providerProfiles[0];
   const promptPreview = useMemo(() => {
     if (view !== 'write' || !book || !section) return null;
     try {
@@ -298,13 +307,14 @@ function App() {
         selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
         authorNote: mode === 'author' ? authorNote : undefined,
         instruction,
-      });
+      }, activeProviderProfile ? {
+        maxContext: activeProviderProfile.maxContext,
+        maxOutput: activeProviderProfile.maxOutput,
+      } : undefined);
     } catch {
       return null;
     }
-  }, [authorNote, book, instruction, mode, section, selectedCharacterId, view]);
-  const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
-    ?? providerProfiles[0];
+  }, [activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, view]);
   useEffect(() => {
     clearHostBookCaches();
   }, []);
@@ -374,7 +384,8 @@ function App() {
 
   useEffect(() => {
     if (!book || !dirty) return;
-    const cachedLocally = api.runtime === 'device' ? cacheBook(book) : false;
+    const candidate = normalizeBook(book);
+    const cachedLocally = api.runtime === 'device' ? cacheBook(candidate) : false;
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
@@ -383,13 +394,14 @@ function App() {
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
-      const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(book));
+      const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(candidate));
       saveQueue.current = task.then(() => undefined, () => undefined);
       void task.then((saved) => {
         if (saveRevision.current !== revision) return;
-        if (api.runtime === 'device') cacheBook(saved);
-        setBook((current) => current?.id === saved.id ? saved : current);
-        setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
+        const normalizedSaved = normalizeBook(saved);
+        if (api.runtime === 'device') cacheBook(normalizedSaved);
+        setBook((current) => current?.id === normalizedSaved.id ? normalizedSaved : current);
+        setLibrary((items) => [{ id: normalizedSaved.id, title: normalizedSaved.title, updatedAt: normalizedSaved.updatedAt },
           ...items.filter((item) => item.id !== saved.id)]);
         setDirty(false);
         setStatus(api.runtime === 'device'
@@ -409,9 +421,9 @@ function App() {
   }, [book, dirty]);
 
   const openBook = async (bookId: string) => {
-    const stored = await api.loadBook(bookId);
+    const stored = normalizeBook(await api.loadBook(bookId));
     const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
-    const loaded = newerBook(stored, cached);
+    const loaded = normalizeBook(newerBook(stored, cached));
     if (api.runtime === 'device') cacheBook(loaded);
     saveRevision.current += 1;
     setBook(loaded);
@@ -419,14 +431,14 @@ function App() {
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setInstruction('');
     setAuthorNote('');
-    setDirty(loaded === cached && loaded.updatedAt !== stored.updatedAt);
+    setDirty(Boolean(cached && loaded.updatedAt !== stored.updatedAt));
     setView('shelf');
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
     saveRevision.current += 1;
     setBook((current) => current
-      ? { ...recipe(current), updatedAt: new Date().toISOString() }
+      ? normalizeBook({ ...recipe(current), updatedAt: new Date().toISOString() })
       : current);
     setDirty(true);
   };
@@ -439,9 +451,10 @@ function App() {
 
   const saveCurrent = async () => {
     if (!book) throw new Error('请先打开一本书。');
+    const candidate = normalizeBook(book);
     const revision = saveRevision.current;
     if (api.runtime === 'device') cacheBook(book);
-    const saved = await queueBookSave(book);
+    const saved = normalizeBook(await queueBookSave(candidate));
     if (saveRevision.current === revision) {
       if (api.runtime === 'device') cacheBook(saved);
       setBook(saved);
@@ -469,8 +482,9 @@ function App() {
   const exportCurrentBook = (format: BookExportFormat) => {
     if (!book) return;
     try {
-      if (api.runtime === 'device') cacheBook(book);
-      const file = createBookExport(book, format);
+      const normalized = normalizeBook(book);
+      if (api.runtime === 'device') cacheBook(normalized);
+      const file = createBookExport(normalized, format);
       const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
       const link = document.createElement('a');
       link.href = url;
@@ -489,7 +503,10 @@ function App() {
     }
   };
 
-  const generationRequest = (saved: Book) => ({
+  const generationRequest = (
+    saved: Book,
+    options: Pick<GenerationRequest, 'generationKind' | 'targetBlockId'> = {},
+  ) => ({
     bookId: saved.id,
     sectionId,
     providerProfileId: activeProviderProfile?.id,
@@ -497,7 +514,23 @@ function App() {
     selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
     authorNote: mode === 'author' ? authorNote : undefined,
     instruction,
+    ...options,
   });
+
+  const assertGenerationBudget = (saved: Book, request: GenerationRequest) => {
+    const { bookId: _bookId, ...planRequest } = request;
+    const plan = composeContextPlan(saved, planRequest, activeProviderProfile ? {
+      maxContext: activeProviderProfile.maxContext,
+      maxOutput: activeProviderProfile.maxOutput,
+    } : undefined);
+    if (!plan.budget.overflow) return plan;
+    const largest = [...plan.included]
+      .sort((left, right) => right.estimatedTokens - left.estimatedTokens)
+      .slice(0, 3)
+      .map((item) => item.title)
+      .join('、');
+    throw new Error(`上下文预算不足：约超出 ${plan.budget.overflowTokens.toLocaleString()} tokens。占用较大的内容：${largest || '当前输入'}。`);
+  };
 
   const withBusy = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -524,7 +557,7 @@ function App() {
     const modeSnapshot = mode;
     const characterSnapshot = selectedCharacterId;
     const saved = await saveCurrent();
-    const result = await api.generate({
+    const generation = {
       bookId: saved.id,
       sectionId: targetSectionId,
       providerProfileId: activeProviderProfile?.id,
@@ -532,7 +565,10 @@ function App() {
       selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
       authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined,
       instruction: inputSnapshot,
-    });
+      generationKind: 'continue-section',
+    } satisfies GenerationRequest;
+    assertGenerationBudget(saved, generation);
+    const result = await api.generate(generation);
     const additions: SectionBlock[] = [
       ...(inputSnapshot.trim()
         ? [{ id: makeId('block'), kind: 'user' as const, content: inputSnapshot.trim() }]
@@ -575,7 +611,12 @@ function App() {
     if (!target || target.kind !== 'assistant') return;
     void withBusy(async () => {
       const saved = await saveCurrent();
-      const result = await api.generate(generationRequest(saved));
+      const generation = generationRequest(saved, {
+        generationKind: 'regenerate-block',
+        targetBlockId: blockId,
+      });
+      assertGenerationBudget(saved, generation);
+      const result = await api.generate(generation);
       changeBook((current) => ({
         ...current,
         chapters: current.chapters.map((chapter) => ({
@@ -596,9 +637,10 @@ function App() {
   const createBook = (title: string) => {
     void withBusy(async () => {
       const created = await api.createBook(title);
-      setLibrary((items) => [{ id: created.id, title: created.title, updatedAt: created.updatedAt }, ...items]);
-      setBook(created);
-      if (api.runtime === 'device') cacheBook(created);
+      const normalizedCreated = normalizeBook(created);
+      setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
+      setBook(normalizedCreated);
+      if (api.runtime === 'device') cacheBook(normalizedCreated);
       saveRevision.current += 1;
       setSectionId('');
       setSelectedCharacterId('');
@@ -708,6 +750,116 @@ function App() {
       : chapter),
   }));
 
+  const referenceLocation = (current: Book, sourceSectionId: string) => {
+    let ordinal = 0;
+    for (const chapter of current.chapters) {
+      const sectionIndex = chapter.sections.findIndex((item) => item.id === sourceSectionId);
+      if (sectionIndex >= 0) return { chapter, section: chapter.sections[sectionIndex], sectionIndex, ordinal: ordinal + sectionIndex };
+      ordinal += chapter.sections.length;
+    }
+    return undefined;
+  };
+
+  const updateContextReferences = (references: Book['chapters'][number]['sections'][number]['contextReferences']) => {
+    if (!section) return;
+    const targetSectionId = section.id;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => {
+          if (item.id !== targetSectionId) return item;
+          if (!references?.length) {
+            const { contextReferences: _removed, ...withoutReferences } = item;
+            return withoutReferences;
+          }
+          const unique = new Map(references.map((reference) => [reference.sectionId, reference] as const));
+          return { ...item, contextReferences: [...unique.values()] };
+        }),
+      })),
+    }));
+  };
+
+  const updateContextReference = (sourceSectionId: string, mode: SectionContextReferenceMode | 'none') => {
+    if (!book || !section) return;
+    if (mode !== 'full' && mode !== 'none' && mode !== 'summary' && mode !== 'both') return;
+    const source = referenceLocation(book, sourceSectionId);
+    const targetOrdinal = book
+      ? book.chapters.flatMap((chapter) => chapter.sections).findIndex((item) => item.id === section.id)
+      : -1;
+    if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) return;
+    if ((mode === 'summary' || mode === 'both')
+      && !isEligibleSectionMemory(source.section.memory, source.section.content)) return;
+    const references = (section.contextReferences ?? [])
+      .filter((reference) => reference.sectionId !== sourceSectionId);
+    // mode: 'full' remains the default manual reference selection.
+    if (mode !== 'none') references.push({ sectionId: sourceSectionId, mode, reason: 'manual' });
+    updateContextReferences(references);
+  };
+
+  const updateSectionPlan = (nextPlan: SectionPlan | undefined) => {
+    if (!section) return;
+    const targetSectionId = section.id;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === targetSectionId
+          ? nextPlan ? { ...item, plan: nextPlan } : (() => {
+              const { plan: _removed, ...withoutPlan } = item;
+              return withoutPlan;
+            })()
+          : item),
+      })),
+    }));
+  };
+
+  const updateSectionMemory = (draft: SectionMemoryDraft, provenance: SectionMemoryProvenance) => {
+    if (!section) return;
+    const targetSectionId = section.id;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === targetSectionId
+          ? commitSectionMemoryDraft(item, draft, provenance)
+          : item),
+      })),
+    }));
+  };
+
+  const rollbackCurrentSectionMemory = () => {
+    if (!section?.previousMemory) return;
+    const targetSectionId = section.id;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === targetSectionId
+          ? rollbackSectionMemory(item)
+          : item),
+      })),
+    }));
+  };
+
+  const generateSectionMemory = async () => {
+    if (!section) throw new Error('请先选择一个 Section。');
+    const targetSectionId = section.id;
+    const saved = await saveCurrent();
+    const generation = {
+      bookId: saved.id,
+      sectionId: targetSectionId,
+      providerProfileId: activeProviderProfile?.id,
+      mode: 'author',
+      instruction: '',
+      generationKind: 'summarize-section',
+    } satisfies GenerationRequest;
+    assertGenerationBudget(saved, generation);
+    const result = await api.generate(generation);
+    parseSectionMemoryDraft(result.draft);
+    return result.draft;
+  };
+
   const deleteSelection = (selection: DirectorySelection) => {
     if (!book) return;
     const result = deleteDirectorySelection(book, selection);
@@ -760,6 +912,14 @@ function App() {
     settingsDialog.current?.showModal();
   };
 
+  const openContext = () => {
+    const dialog = contextDialog.current;
+    if (!dialog || dialog.open) return;
+    if (document.activeElement instanceof HTMLElement) contextTrigger.current = document.activeElement;
+    dialog.showModal();
+    setContextOpen(true);
+  };
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
@@ -802,8 +962,8 @@ function App() {
             instruction={instruction}
             authorNote={authorNote}
             busy={busy}
-            contextTokens={promptPreview?.estimatedTokens ?? 0}
-            maxContext={activeProviderProfile?.maxContext ?? 0}
+            contextPlan={promptPreview}
+            contextOpen={contextOpen}
             providerName={activeProviderProfile?.name ?? '未选择方案'}
             modelId={activeProviderProfile?.modelId ?? '未选择模型'}
             onBack={navigateFromHeader}
@@ -814,6 +974,7 @@ function App() {
             }}
             onExport={openExport}
             onOpenSettings={openSettings}
+            onOpenContext={openContext}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
             onInstructionChange={setInstruction}
@@ -883,9 +1044,28 @@ function App() {
         onSaveProviderProfile={saveProviderProfile}
         onTestProviderProfile={api.testProviderProfile}
         providerRuntime={api.runtime}
-        promptPlan={promptPreview}
         onClose={() => settingsTrigger.current?.focus()}
       />
+
+      {book && section && promptPreview && (
+        <ContextDrawer
+          dialogRef={contextDialog}
+          book={book}
+          section={section}
+          plan={promptPreview}
+          activeProviderProfile={activeProviderProfile}
+          onContextReferenceChange={updateContextReference}
+          onContextReferencesChange={updateContextReferences}
+          onSectionPlanChange={updateSectionPlan}
+          onGenerateMemory={generateSectionMemory}
+          onMemoryChange={updateSectionMemory}
+          onMemoryRollback={rollbackCurrentSectionMemory}
+          onClose={() => {
+            setContextOpen(false);
+            window.requestAnimationFrame(() => contextTrigger.current?.focus());
+          }}
+        />
+      )}
 
       <ExportDialog
         bookTitle={book?.title ?? ''}
@@ -895,6 +1075,522 @@ function App() {
       />
 
     </div>
+  );
+}
+
+function ContextDrawer({
+  dialogRef,
+  book,
+  section,
+  plan,
+  activeProviderProfile,
+  onContextReferenceChange,
+  onContextReferencesChange,
+  onSectionPlanChange,
+  onGenerateMemory,
+  onMemoryChange,
+  onMemoryRollback,
+  onClose,
+}: {
+  dialogRef: React.RefObject<HTMLDialogElement | null>;
+  book: Book;
+  section: Book['chapters'][number]['sections'][number];
+  plan: ContextPlan;
+  activeProviderProfile?: ProviderProfile;
+  onContextReferenceChange: (sourceSectionId: string, mode: SectionContextReferenceMode | 'none') => void;
+  onContextReferencesChange: (references: Book['chapters'][number]['sections'][number]['contextReferences']) => void;
+  onSectionPlanChange: (plan: SectionPlan | undefined) => void;
+  onGenerateMemory: () => Promise<string>;
+  onMemoryChange: (draft: SectionMemoryDraft, provenance: SectionMemoryProvenance) => void;
+  onMemoryRollback: () => void;
+  onClose: () => void;
+}) {
+  const [memoryDraft, setMemoryDraft] = useState<SectionMemoryDraft | undefined>();
+  const [memoryDraftSource, setMemoryDraftSource] = useState<'model' | 'manual' | undefined>();
+  const [memoryDraftEdited, setMemoryDraftEdited] = useState(false);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryError, setMemoryError] = useState('');
+  const [lastAppliedPreset, setLastAppliedPreset] = useState('');
+  useEffect(() => {
+    setMemoryDraft(undefined);
+    setMemoryDraftSource(undefined);
+    setMemoryDraftEdited(false);
+    setMemoryError('');
+  }, [section.id, section.memory?.updatedAt, section.previousMemory?.updatedAt]);
+
+  const currentReferences = new Map((section.contextReferences ?? [])
+    .map((reference) => [reference.sectionId, reference.mode] as const));
+  const targetLocation = book.chapters.flatMap((chapter, chapterIndex) => chapter.sections.map((item, sectionIndex) => ({
+    chapter,
+    section: item,
+    chapterIndex,
+    sectionIndex,
+  }))).find((item) => item.section.id === section.id);
+  const targetOrdinal = targetLocation
+    ? book.chapters.slice(0, targetLocation.chapterIndex)
+      .reduce((total, chapter) => total + chapter.sections.length, 0) + targetLocation.sectionIndex
+    : 0;
+  const referenceSections = book.chapters.flatMap((chapter, chapterIndex) => chapter.sections.map((item, sectionIndex) => ({
+    chapter,
+    section: item,
+    chapterIndex,
+    sectionIndex,
+    ordinal: book.chapters.slice(0, chapterIndex)
+      .reduce((total, previousChapter) => total + previousChapter.sections.length, 0) + sectionIndex,
+  }))).filter((item) => item.ordinal < targetOrdinal);
+  const referenceStatus = (item: typeof referenceSections[number]) => {
+    const freshness = sectionMemoryFreshness(item.section.memory, item.section.content);
+    const provenance = item.section.memory?.provenance;
+    return `${freshness}${provenance ? ` · ${provenance}` : ''}`;
+  };
+  const referenceStatusLabel = (item: typeof referenceSections[number]) => {
+    const status = referenceStatus(item);
+    return status === 'missing' ? 'Memory：missing' : `Memory：${status}`;
+  };
+  const referenceEligible = (item: typeof referenceSections[number]) => isEligibleSectionMemory(
+    item.section.memory,
+    item.section.content,
+  );
+  const sameChapterReferences = referenceSections.filter((item) => (
+    item.chapter.id === targetLocation?.chapter.id
+  ));
+  const linearPreviousReference = referenceSections[referenceSections.length - 1];
+  const sameChapterPreviousReference = sameChapterReferences[sameChapterReferences.length - 1];
+  const allSameChapterReferencesEligible = sameChapterReferences.length > 0
+    && sameChapterReferences.every(referenceEligible);
+  const compositionItems = combinePromptSources(plan.included.map((item) => ({
+    id: item.id,
+    layer: item.layer,
+    title: item.title,
+    reason: item.reason,
+    cacheBand: item.cacheBand,
+    estimatedTokens: item.estimatedTokens,
+  })));
+  const stablePrefixCount = compositionItems.filter((item) => item.cacheBand === 'stable').length;
+  const stablePrefixTokens = plan.included
+    .filter((item) => item.cacheBand === 'stable')
+    .reduce((total, item) => total + item.estimatedTokens, 0);
+  const totalPromptTokens = plan.estimatedTokens;
+  const promptWeights = compositionItems.map((item) => (
+    totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens : 1 / Math.max(1, compositionItems.length)
+  ));
+  let promptWeightCursor = 0;
+  const promptSegmentCenters = promptWeights.map((weight) => {
+    const center = (promptWeightCursor + weight / 2) * 100;
+    promptWeightCursor += weight;
+    return center;
+  });
+  const sourceLabel = (item: ContextPlan['included'][number]) => {
+    const source = item.source;
+    if (!source) return '未标注来源';
+    const parts = [
+      source.chapterIndex === undefined ? '' : `第${source.chapterIndex + 1}章`,
+      source.sectionIndex === undefined ? '' : `第${source.sectionIndex + 1}节`,
+      source.blockId ? `block ${source.blockId}` : '',
+      source.sourceId ? `id ${source.sourceId}` : '',
+    ].filter(Boolean);
+    return parts.join(' · ') || `Book ${source.bookId}`;
+  };
+  const emptyMemoryDraft = (): SectionMemoryDraft => ({
+    synopsis: '',
+    beats: [],
+    continuityFacts: [],
+    characterStateChanges: [],
+    foreshadowingCandidates: [],
+  });
+  const resetMemoryDraft = () => {
+    setMemoryDraft(undefined);
+    setMemoryDraftSource(undefined);
+    setMemoryDraftEdited(false);
+    setMemoryError('');
+  };
+  const closeDrawer = () => {
+    resetMemoryDraft();
+    dialogRef.current?.close();
+  };
+  const startManualMemoryDraft = () => {
+    setMemoryDraft(draftFromSectionMemory(section.memory) ?? emptyMemoryDraft());
+    setMemoryDraftSource('manual');
+    setMemoryDraftEdited(false);
+    setMemoryError('');
+  };
+  const updateMemoryDraft = (patch: Partial<SectionMemoryDraft>) => {
+    setMemoryDraft((current) => current ? { ...current, ...patch } : current);
+    setMemoryDraftEdited(true);
+  };
+  const generateMemoryDraft = async () => {
+    setMemoryBusy(true);
+    setMemoryError('');
+    try {
+      const parsed = parseSectionMemoryDraft(await onGenerateMemory());
+      setMemoryDraft(parsed);
+      setMemoryDraftSource('model');
+      setMemoryDraftEdited(false);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : '本节记忆生成失败。');
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
+  const confirmMemoryDraft = () => {
+    if (!memoryDraft) return;
+    try {
+      serializeSectionMemoryDraft(memoryDraft);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : '记忆内容不符合格式限制。');
+      return;
+    }
+    const provenance: SectionMemoryProvenance = memoryDraftSource === 'model'
+      ? memoryDraftEdited ? 'model-edited' : 'model-confirmed'
+      : 'manual';
+    onMemoryChange(memoryDraft, provenance);
+    resetMemoryDraft();
+  };
+  const rollbackMemory = () => {
+    resetMemoryDraft();
+    onMemoryRollback();
+  };
+  const applyReferencePreset = (
+    references: NonNullable<Book['chapters'][number]['sections'][number]['contextReferences']>,
+    label: string,
+  ) => {
+    onContextReferencesChange(references);
+    setLastAppliedPreset(label);
+  };
+  const clearReferences = () => applyReferencePreset([], '已清空前文参考');
+  const applyPreviousBothReference = () => {
+    if (!linearPreviousReference || !referenceEligible(linearPreviousReference)) return;
+    applyReferencePreset([{
+      sectionId: linearPreviousReference.section.id,
+      mode: 'both',
+      reason: 'previous-section',
+    }], '已加载前一节梗概+全文');
+  };
+  const applyRecommendedReferences = () => {
+    const references = [] as NonNullable<Book['chapters'][number]['sections'][number]['contextReferences']>;
+    if (sameChapterPreviousReference) {
+      references.push({
+        sectionId: sameChapterPreviousReference.section.id,
+        mode: referenceEligible(sameChapterPreviousReference) ? 'both' : 'full',
+        reason: 'previous-section',
+      });
+    }
+    sameChapterReferences
+      .filter((item) => item.section.id !== sameChapterPreviousReference?.section.id && referenceEligible(item))
+      .forEach((item) => references.push({
+        sectionId: item.section.id,
+        mode: 'summary',
+        reason: 'chapter-preset',
+      }));
+    applyReferencePreset(references, '已应用当前建议');
+  };
+  const applyChapterSummaryReferences = () => applyReferencePreset(
+    sameChapterReferences.map((item) => ({
+      sectionId: item.section.id,
+      mode: 'summary' as const,
+      reason: 'chapter-preset' as const,
+    })),
+    '已应用本章此前小节梗概',
+  );
+
+  return (
+    <dialog
+      id="context-drawer"
+      className="context-drawer"
+      ref={dialogRef}
+      onClick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
+      onClose={onClose}
+      onCancel={(event) => { event.preventDefault(); closeDrawer(); }}
+      aria-labelledby="context-drawer-title"
+    >
+      <div className="context-drawer-scroll">
+        <header className="drawer-heading">
+          <div>
+            <p className="eyebrow">当前输入预览</p>
+            <h2 id="context-drawer-title">本次生成输入</h2>
+          </div>
+          <button type="button" className="icon-button" autoFocus onClick={closeDrawer} aria-label="关闭本次输入预览" title="关闭">
+            <X aria-hidden="true" />
+          </button>
+        </header>
+
+        <section className="context-target-card" aria-labelledby="context-target-heading">
+          <h3 id="context-target-heading">TARGET</h3>
+          <p><strong>Book</strong> · {book.title} <small>（{book.id}）</small></p>
+          <p><strong>Chapter</strong> · 第{plan.target.chapterIndex + 1}章 · {targetLocation?.chapter.title ?? '未知'} <small>（{plan.target.chapterId}）</small></p>
+          <p><strong>Section</strong> · 第{plan.target.sectionIndex + 1}节 · {section.title} <small>（{plan.target.sectionId}）</small></p>
+        </section>
+
+        <section className="context-plan-editor" aria-labelledby="context-plan-heading">
+          <div className="context-section-heading">
+            <h3 id="context-plan-heading">本节计划</h3>
+            <small>修改后自动保存</small>
+          </div>
+          <label htmlFor="context-plan-goal">本节目标</label>
+          <textarea
+            id="context-plan-goal"
+            rows={2}
+            value={section.plan?.goal ?? ''}
+            onChange={(event) => onSectionPlanChange({
+              goal: event.target.value,
+              intendedBeats: section.plan?.intendedBeats ?? [],
+              ...(section.plan?.povCharacterId ? { povCharacterId: section.plan.povCharacterId } : {}),
+            })}
+            placeholder="这一节希望完成什么？"
+          />
+          <label htmlFor="context-plan-beats">预期节拍（每行一项）</label>
+          <textarea
+            id="context-plan-beats"
+            rows={3}
+            value={(section.plan?.intendedBeats ?? []).join('\n')}
+            onChange={(event) => onSectionPlanChange({
+              goal: section.plan?.goal ?? '',
+              intendedBeats: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+              ...(section.plan?.povCharacterId ? { povCharacterId: section.plan.povCharacterId } : {}),
+            })}
+            placeholder="每行写一个预期变化……"
+          />
+          <label htmlFor="context-plan-pov">POV 角色</label>
+          <select
+            id="context-plan-pov"
+            value={section.plan?.povCharacterId ?? ''}
+            onChange={(event) => {
+              const povCharacterId = event.target.value;
+              onSectionPlanChange({
+                goal: section.plan?.goal ?? '',
+                intendedBeats: section.plan?.intendedBeats ?? [],
+                ...(povCharacterId ? { povCharacterId } : {}),
+              });
+            }}
+          >
+            <option value="">不指定 POV 角色</option>
+            {book.characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
+          </select>
+        </section>
+
+        <section className="context-memory-section" aria-labelledby="context-memory-heading">
+          <div className="context-section-heading">
+            <h3 id="context-memory-heading">本节记忆</h3>
+            <small>正文变化后需重新确认</small>
+          </div>
+          <p className="context-memory-status" role="status">
+            当前状态：{sectionMemoryFreshness(section.memory, section.content)}
+            {section.memory ? ` · ${section.memory.provenance}` : ''}
+          </p>
+          {section.memory ? (
+            <div className="context-memory-current">
+              <strong>当前摘要</strong>
+              <p>{section.memory.synopsis}</p>
+              <small>记忆是有损索引；如与正文冲突，以正文为准。</small>
+            </div>
+          ) : <p className="helper-copy">还没有本节记忆。可先生成草稿或手动创建。</p>}
+          <div className="context-memory-actions">
+            <button type="button" onClick={() => void generateMemoryDraft()} disabled={memoryBusy}>
+              {memoryBusy ? '正在生成本节记忆…' : '更新本节记忆'}
+            </button>
+            <button type="button" onClick={startManualMemoryDraft} disabled={memoryBusy}>
+              {section.memory ? '编辑当前记忆' : '手动创建记忆'}
+            </button>
+            {section.previousMemory && <button type="button" onClick={rollbackMemory} disabled={memoryBusy}>回滚上一版记忆</button>}
+          </div>
+          {memoryError && <p className="context-memory-error" role="alert">{memoryError}</p>}
+          {memoryDraft && (
+            <fieldset className="context-memory-draft">
+              <legend>{memoryDraftSource === 'model' ? '待确认的模型草稿' : '手动编辑记忆'}</legend>
+              <label htmlFor="memory-draft-synopsis">摘要</label>
+              <textarea
+                id="memory-draft-synopsis"
+                rows={3}
+                value={memoryDraft.synopsis}
+                onChange={(event) => updateMemoryDraft({ synopsis: event.target.value })}
+              />
+              <label htmlFor="memory-draft-beats">关键节拍（每行一项）</label>
+              <textarea
+                id="memory-draft-beats"
+                rows={3}
+                value={memoryDraft.beats.join('\n')}
+                onChange={(event) => updateMemoryDraft({ beats: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+              />
+              <label htmlFor="memory-draft-continuity">连续性事实（每行一项）</label>
+              <textarea
+                id="memory-draft-continuity"
+                rows={3}
+                value={memoryDraft.continuityFacts.join('\n')}
+                onChange={(event) => updateMemoryDraft({ continuityFacts: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+              />
+              <label htmlFor="memory-draft-character-state">角色状态变化（每行一项）</label>
+              <textarea
+                id="memory-draft-character-state"
+                rows={3}
+                value={memoryDraft.characterStateChanges.join('\n')}
+                onChange={(event) => updateMemoryDraft({ characterStateChanges: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+              />
+              <label htmlFor="memory-draft-foreshadowing">候选伏笔（不会自动成为 Canon，每行一项）</label>
+              <textarea
+                id="memory-draft-foreshadowing"
+                rows={3}
+                value={memoryDraft.foreshadowingCandidates.join('\n')}
+                onChange={(event) => updateMemoryDraft({ foreshadowingCandidates: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+              />
+              <p className="helper-copy">生成的草稿只留在这里；确认后才会写入当前 Book。</p>
+              <div className="context-memory-actions">
+                <button type="button" className="primary-action" onClick={confirmMemoryDraft}>确认并保存记忆</button>
+                <button type="button" onClick={resetMemoryDraft}>取消</button>
+              </div>
+            </fieldset>
+          )}
+        </section>
+
+        <section className="context-budget" aria-labelledby="context-budget-heading">
+          <div className="context-section-heading">
+            <h3 id="context-budget-heading">输入预算</h3>
+            <small>{activeProviderProfile?.name ?? '当前 Provider'} · 估算值</small>
+          </div>
+          <dl className="context-budget-grid">
+            <div><dt>模型总 Context</dt><dd>{plan.budget.maxContext.toLocaleString()}</dd></div>
+            <div><dt>输出预留</dt><dd>{plan.budget.reservedOutput.toLocaleString()}</dd></div>
+            <div><dt>可用输入</dt><dd>{plan.budget.availableInput.toLocaleString()}</dd></div>
+            <div><dt>已估算输入</dt><dd>{plan.budget.estimatedInput.toLocaleString()}</dd></div>
+            <div><dt>剩余输入</dt><dd data-over-limit={plan.budget.overflow || undefined}>{plan.budget.remainingInput.toLocaleString()}</dd></div>
+          </dl>
+          <p className="context-budget-note">分母为 availableInput；协议开销 {plan.budget.protocolOverhead.toLocaleString()} + 安全余量 {plan.budget.safetyMargin.toLocaleString()} 已预留。{plan.budget.overflow ? `当前约超出 ${plan.budget.overflowTokens.toLocaleString()} tokens，生成会拒绝。` : '仅为近似估算。'}</p>
+          <p className="context-budget-note">稳定前缀（stable）是 Book 级固定规则；模式层（session）是本次会话设置；每轮变化（dynamic）是本次正文、注释和输入。</p>
+        </section>
+
+        <section className="context-reference-section" aria-labelledby="context-reference-heading">
+          <div className="context-section-heading">
+            <h3 id="context-reference-heading">前文参考</h3>
+            <small>仅列 TARGET 之前的 Section · 选择会自动保存</small>
+          </div>
+          <p id="context-reference-shortcut-help" className="context-reference-preset-help">
+            整本书线性前一节梗概+全文仅在已有新鲜、已确认记忆时可用；本章此前全部梗概需要每个适用小节都有新鲜、已确认记忆。应用后会立即保存当前选择。
+          </p>
+          <div className="context-reference-presets" aria-label="前文参考快捷项">
+            <button type="button" onClick={applyPreviousBothReference} disabled={!linearPreviousReference || !referenceEligible(linearPreviousReference)} aria-describedby="context-reference-shortcut-help" title={linearPreviousReference && referenceEligible(linearPreviousReference) ? '加载整本书线性前一节的新鲜梗概与全文' : '需要整本书线性前一节有新鲜、已确认的记忆'}>前一节：梗概 + 全文</button>
+            <button type="button" onClick={clearReferences} aria-describedby="context-reference-shortcut-help">清空前文参考</button>
+            <button
+              type="button"
+              onClick={applyRecommendedReferences}
+              disabled={!sameChapterPreviousReference}
+              aria-describedby="context-reference-shortcut-help"
+              title={sameChapterPreviousReference ? '只根据同章此前小节生成建议；没有新鲜记忆时前一节只使用全文' : '当前没有同章更早的 Section'}
+            >
+              应用建议
+            </button>
+            <button
+              type="button"
+              onClick={applyChapterSummaryReferences}
+              disabled={!allSameChapterReferencesEligible}
+              aria-describedby="context-reference-shortcut-help"
+              title={allSameChapterReferencesEligible ? '仅加载本章较早且已有新鲜记忆的小节梗概' : '需要本章此前所有适用小节都有新鲜、已确认的记忆'}
+            >本章此前小节：全部梗概</button>
+          </div>
+          {lastAppliedPreset && <p className="context-reference-preset-status" role="status">{lastAppliedPreset}；当前选择已保存。</p>}
+          {referenceSections.length === 0 ? <p className="helper-copy">当前没有可选的前文 Section。</p> : (
+            <ul className="context-reference-list">
+              {referenceSections.map((item) => {
+                const selectedMode = currentReferences.get(item.section.id) ?? 'none';
+                const eligible = referenceEligible(item);
+                return (
+                  <li className="context-reference-row" key={item.section.id}>
+                    <div>
+                      <strong>第{item.chapterIndex + 1}章 / 第{item.sectionIndex + 1}节 · {item.section.title}</strong>
+                      <small>{countWords(item.section.content).toLocaleString()} 字 · 约 {estimateTokens(item.section.content).toLocaleString()} tokens · {referenceStatusLabel(item)} · {item.section.id}</small>
+                    </div>
+                    <label>
+                      <span className="sr-only">{item.section.title}加载方式</span>
+                      <select
+                        value={selectedMode}
+                        onChange={(event) => {
+                          setLastAppliedPreset('');
+                          onContextReferenceChange(item.section.id, event.target.value as SectionContextReferenceMode | 'none');
+                        }}
+                        aria-label={`${item.section.title}加载方式`}
+                      >
+                        <option value="none">不加载</option>
+                        {/* option value="summary" disabled when memory is not eligible */}
+                        <option value="summary" disabled={!eligible}>{eligible ? '梗概' : '梗概（需先生成并确认记忆）'}</option>
+                        <option value="full">全文</option>
+                        {/* option value="both" disabled when memory is not eligible */}
+                        <option value="both" disabled={!eligible}>{eligible ? '两者' : '两者（需先生成并确认记忆）'}</option>
+                      </select>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <section className="context-included-section" aria-labelledby="context-included-heading">
+          <div className="context-section-heading">
+            <h3 id="context-included-heading">已装入内容</h3>
+            <small>{plan.included.length} 项 · 实际发送顺序</small>
+          </div>
+          <ol className="context-included-list">
+            {plan.included.map((item, index) => (
+              <li key={item.id}>
+                <div className="context-included-title-row">
+                  <strong><span className="context-included-index">{String(index + 1).padStart(2, '0')}</span>{item.title}</strong>
+                  <small>约 {item.estimatedTokens.toLocaleString()} tokens</small>
+                </div>
+                <small>{item.messageRole} / {item.semanticRole} · {cacheBandLabel(item.cacheBand)} · {sourceLabel(item)}</small>
+                <small>{item.reason}{item.manualSelection ? ' · manual' : ''}{item.freshness ? ` · freshness:${item.freshness}` : ''}{item.truncated ? ` · 已截断：${item.truncationReason ?? '预算限制'}` : ''}</small>
+              </li>
+            ))}
+          </ol>
+          {plan.excluded.length > 0 && <details className="context-excluded-details">
+            <summary>未发送内容（{plan.excluded.length} 项）</summary>
+            <ul>
+              {plan.excluded.map((item) => <li key={item.id}><strong>{item.title}</strong><small>{item.reason}</small></li>)}
+            </ul>
+          </details>}
+        </section>
+
+        <details className="context-exact-messages">
+          <summary>查看实际发送内容（默认折叠）</summary>
+          <p className="helper-copy">这是 Provider 输入预览，不是隐藏推理；此处不包含 API Key 或 Authorization。</p>
+          <div className="context-message-list">
+            {plan.messages.map((message, index) => (
+              <article key={`${message.role}-${index}`}>
+                <strong>{message.role}</strong>
+                <pre>{message.content}</pre>
+              </article>
+            ))}
+          </div>
+        </details>
+
+        <details className="context-composition-details">
+          <summary><Layers3 aria-hidden="true" /><span><strong>组合图</strong><small>{compositionItems.length} 组 · 稳定前缀约 {stablePrefixTokens.toLocaleString()} tokens</small></span><ChevronDown aria-hidden="true" /></summary>
+          <div className="prompt-composition-content">
+            <p className="prompt-composition-note">竖条按估算 tokens 比例显示，右侧按实际发送顺序排列。</p>
+            <div className="prompt-composition-chart" style={{ '--prompt-item-count': compositionItems.length } as CSSProperties}>
+              <div className="prompt-composition-map">
+                <div className="prompt-proportion-bar" aria-hidden="true">
+                  {compositionItems.map((item, index) => {
+                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                    return <span className="prompt-proportion-segment" data-cache-band={item.cacheBand} data-small={share < 6} key={item.id} style={{ '--prompt-color': promptTone(index), flexGrow: Math.max(item.estimatedTokens, 0.01) } as CSSProperties}><span>{String(index + 1).padStart(2, '0')}</span></span>;
+                  })}
+                </div>
+                <svg className="prompt-connector-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                  {compositionItems.map((item, index) => <line key={item.id} x1="8" y1={promptSegmentCenters[index]} x2="25" y2={(index + 0.5) / compositionItems.length * 100} style={{ stroke: promptTone(index) }} />)}
+                </svg>
+                <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
+                  {compositionItems.map((item, index) => {
+                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                    return <li key={item.id} data-cache-band={item.cacheBand} style={{ '--prompt-color': promptTone(index) } as CSSProperties}>
+                      <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
+                      <span className="prompt-composition-copy"><span className="prompt-composition-title-row"><strong>{item.title}</strong><span className="prompt-composition-meta"><strong>{promptShareLabel(share)}</strong><small>约 {item.estimatedTokens.toLocaleString()} tokens</small></span></span><small>{cacheBandLabel(item.cacheBand)} · {item.reason}</small>{item.includedNames?.length ? <small className="prompt-included-names">包含：{item.includedNames.join('、')}</small> : null}{index === stablePrefixCount - 1 && <small className="cache-prefix-boundary">稳定前缀到这里</small>}</span>
+                    </li>;
+                  })}
+                </ol>
+              </div>
+              <p className="prompt-map-caption">段高 = 当前 tokens 占比</p>
+            </div>
+          </div>
+        </details>
+      </div>
+    </dialog>
   );
 }
 
@@ -971,14 +1667,15 @@ interface WriterProps {
   instruction: string;
   authorNote: string;
   busy: boolean;
-  contextTokens: number;
-  maxContext: number;
+  contextPlan: ContextPlan | null;
+  contextOpen: boolean;
   providerName: string;
   modelId: string;
   onBack: () => void;
   onOpenBookSettings: () => void;
   onExport: () => void;
   onOpenSettings: () => void;
+  onOpenContext: () => void;
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
@@ -1014,11 +1711,13 @@ function Writer(props: WriterProps) {
   const manuscriptWordCount = countWords(manuscriptText);
   const manuscriptTokenCount = estimateTokens(manuscriptText);
 
-  const contextPercent = props.maxContext > 0
-    ? Math.round((props.contextTokens / props.maxContext) * 100)
+  const contextTokens = props.contextPlan?.budget.estimatedInput ?? 0;
+  const availableInput = props.contextPlan?.budget.availableInput ?? 0;
+  const contextPercent = availableInput > 0
+    ? Math.round((contextTokens / availableInput) * 100)
     : 0;
-  const progressMax = Math.max(1, props.maxContext);
-  const progressValue = Math.min(props.contextTokens, progressMax);
+  const progressMax = Math.max(1, availableInput);
+  const progressValue = Math.min(contextTokens, progressMax);
 
   useEffect(() => () => {
     if (resizePressTimer.current !== null) window.clearTimeout(resizePressTimer.current);
@@ -1162,18 +1861,28 @@ function Writer(props: WriterProps) {
             <span aria-hidden="true"> | </span>
             token <strong>{compactTokenCount(manuscriptTokenCount)}</strong>
           </span>
-          <progress
-            className="writer-context-progress"
-            max={progressMax}
-            value={progressValue}
-            aria-label={`当前 Context ${props.contextTokens}，模型上限 ${props.maxContext}`}
-          />
-          <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
-            {compactTokenCount(props.contextTokens)} / {compactTokenCount(props.maxContext)} · {contextPercent}%
-          </span>
-          <small className="writer-provider-line">
-            <span>{props.providerName}</span><span aria-hidden="true">|</span><span>{props.modelId}</span>
-          </small>
+          <button
+            type="button"
+            className="writer-context-trigger"
+            onClick={props.onOpenContext}
+            aria-haspopup="dialog"
+            aria-expanded={props.contextOpen}
+            aria-controls="context-drawer"
+            aria-label={`查看当前 Context：已估算 ${contextTokens} tokens，可用输入 ${availableInput} tokens`}
+          >
+            <progress
+              className="writer-context-progress"
+              max={progressMax}
+              value={progressValue}
+              aria-hidden="true"
+            />
+            <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
+              {compactTokenCount(contextTokens)} / {compactTokenCount(availableInput)} · {contextPercent}%
+            </span>
+            <small className="writer-provider-line">
+              <span>{props.providerName}</span><span aria-hidden="true">|</span><span>{props.modelId}</span>
+            </small>
+          </button>
         </div>
 
         <div className="writer-tool-row" role="group" aria-label="写作工具">
@@ -2342,7 +3051,6 @@ function SettingsDrawer({
   onSaveProviderProfile,
   onTestProviderProfile,
   providerRuntime,
-  promptPlan,
   onClose,
 }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
@@ -2358,7 +3066,6 @@ function SettingsDrawer({
   onSaveProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<ProviderProfile>;
   onTestProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<{ ok: true; modelId: string }>;
   providerRuntime: 'host' | 'device';
-  promptPlan: ContextPlan | null;
   onClose: () => void;
 }) {
   const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
@@ -2383,28 +3090,6 @@ function SettingsDrawer({
     setEditingId(currentProfile.id);
     setProfileDraft({ ...currentProfile });
   }, [currentProfile, editingId]);
-  const compositionItems = combinePromptSources(promptPlan?.included.map((item) => ({
-    id: item.id,
-    layer: item.layer,
-    title: item.title,
-    reason: item.reason,
-    cacheBand: item.cacheBand,
-    estimatedTokens: item.estimatedTokens,
-  })) ?? generalPromptOrder.map((item) => ({ ...item, estimatedTokens: 0 })));
-  const stablePrefixCount = compositionItems.filter((item) => item.cacheBand === 'stable').length;
-  const stablePrefixTokens = promptPlan?.included
-    .filter((item) => item.cacheBand === 'stable')
-    .reduce((total, item) => total + item.estimatedTokens, 0) ?? 0;
-  const totalPromptTokens = promptPlan?.estimatedTokens ?? 0;
-  const promptWeights = compositionItems.map((item) => (
-    totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens : 1 / compositionItems.length
-  ));
-  let promptWeightCursor = 0;
-  const promptSegmentCenters = promptWeights.map((weight) => {
-    const center = (promptWeightCursor + weight / 2) * 100;
-    promptWeightCursor += weight;
-    return center;
-  });
   const closeDrawer = () => dialogRef.current?.close();
   const clearConnectionResult = () => {
     setConnectionStatus('');
@@ -2614,90 +3299,6 @@ function SettingsDrawer({
                 {connectionStatus && <><span className="provider-status-dot" aria-hidden="true" />{connectionStatus}</>}
               </p>
             </form>
-          </div>
-        </details>
-        <details className="settings-subdrawer prompt-composition-drawer">
-          <summary>
-            <Layers3 aria-hidden="true" />
-            <span>
-              <strong>Prompt 组合</strong>
-              <small>{promptPlan ? `${compositionItems.length} 组 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '通用顺序 · 选中小节后显示占比'}</small>
-            </span>
-            <ChevronDown aria-hidden="true" />
-          </summary>
-          <div className="prompt-composition-content">
-            <p className="prompt-composition-note">{promptPlan
-              ? '当前小节 · 竖条按估算 tokens 比例显示，右侧按实际发送顺序排列。'
-              : '主页概览 · 竖条等高表示通用顺序；进入小节后切换为当前 Prompt 占比。'}</p>
-            <div
-              className="prompt-composition-chart"
-              style={{ '--prompt-item-count': compositionItems.length } as CSSProperties}
-            >
-              <div className="prompt-composition-map">
-                <div className="prompt-proportion-bar" aria-hidden="true" data-template={!promptPlan}>
-                  {compositionItems.map((item, index) => {
-                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
-                    const tone = promptTone(index);
-                    return (
-                      <span
-                        className="prompt-proportion-segment"
-                        data-cache-band={item.cacheBand}
-                        data-small={Boolean(promptPlan && share < 6)}
-                        key={item.id}
-                        style={{
-                          '--prompt-color': tone,
-                          flexGrow: promptPlan ? Math.max(item.estimatedTokens, 0.01) : 1,
-                        } as CSSProperties}
-                      >
-                        <span>{String(index + 1).padStart(2, '0')}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-                <svg className="prompt-connector-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                  {compositionItems.map((item, index) => (
-                    <line
-                      key={item.id}
-                      x1="8"
-                      y1={promptSegmentCenters[index]}
-                      x2="25"
-                      y2={(index + 0.5) / compositionItems.length * 100}
-                      style={{ stroke: promptTone(index) }}
-                    />
-                  ))}
-                </svg>
-                <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
-                  {compositionItems.map((item, index) => {
-                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
-                    return (
-                      <li
-                        key={item.id}
-                        data-cache-band={item.cacheBand}
-                        style={{ '--prompt-color': promptTone(index) } as CSSProperties}
-                      >
-                        <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
-                        <span className="prompt-composition-copy">
-                          <span className="prompt-composition-title-row">
-                            <strong>{item.title}</strong>
-                            <span className="prompt-composition-meta">
-                              <strong>{promptPlan ? promptShareLabel(share) : '顺序'}</strong>
-                              <small>{promptPlan ? `约 ${item.estimatedTokens.toLocaleString()} tokens` : `${index + 1} / ${compositionItems.length}`}</small>
-                            </span>
-                          </span>
-                          <small>{cacheBandLabel(item.cacheBand)} · {item.reason}</small>
-                          {item.includedNames?.length ? <small className="prompt-included-names">包含：{item.includedNames.join('、')}</small> : null}
-                          {index === stablePrefixCount - 1 && <small className="cache-prefix-boundary">稳定前缀到这里</small>}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </div>
-              <p className="prompt-map-caption">{promptPlan ? '段高 = 当前 tokens 占比' : '等高 = 通用拼接顺序'}</p>
-            </div>
-            <p className="prompt-composition-footnote">{promptPlan
-              ? `${promptPlan.excluded.length > 0 ? `${promptPlan.excluded.length} 项关闭或为空，不会发送。` : '当前资料已全部装入。'}缓存是否命中仍由所选模型服务决定。`
-              : '主页只显示结构，不计算虚假的 tokens 占比。'}</p>
           </div>
         </details>
       </section>

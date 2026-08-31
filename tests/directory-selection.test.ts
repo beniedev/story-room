@@ -93,4 +93,23 @@ describe('directory selection', () => {
     expect(result.book.worldRules[0].loadedSectionIds).toEqual([]);
     expect([...result.removedSectionIds].sort()).toEqual(['section-a', 'section-b', 'section-c']);
   });
+
+  it('clears deleted source sections from surviving context references', () => {
+    const withReferences = structuredClone(book);
+    const surviving = withReferences.chapters[0]?.sections[1];
+    if (!surviving) throw new Error('surviving section fixture missing');
+    surviving.contextReferences = [
+      { sectionId: 'section-a', mode: 'full', reason: 'manual' },
+      { sectionId: 'section-c', mode: 'full', reason: 'manual' },
+    ];
+
+    const result = deleteDirectorySelection(withReferences, {
+      chapterIds: new Set(),
+      sectionIds: new Set(['section-a']),
+    });
+
+    expect(result.book.chapters[0]?.sections[0]?.contextReferences).toEqual([
+      { sectionId: 'section-c', mode: 'full', reason: 'manual' },
+    ]);
+  });
 });

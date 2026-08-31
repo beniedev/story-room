@@ -169,10 +169,19 @@ describe('writing UI contract', () => {
     expect(source).toContain('role="status"');
   });
 
-  it('groups prompt layers and renders the distribution as non-card callouts', async () => {
+  it('keeps the Context drawer as the single prompt composition surface', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const settingsStart = source.indexOf('function SettingsDrawer');
+    const settings = source.slice(settingsStart);
 
+    expect(source).toContain('function ContextDrawer');
+    expect(source).toContain('id="context-drawer"');
+    expect(source).toContain('className="writer-context-trigger"');
+    expect(source).toContain('aria-haspopup="dialog"');
+    expect(source).toContain('aria-controls="context-drawer"');
+    expect(source).toMatch(/className="writer-context-progress"[\s\S]{0,180}aria-hidden="true"/);
+    expect(settings).not.toContain('prompt-composition');
     expect(source).toMatch(/layer[\s\S]{0,160}character/);
     expect(source).toMatch(/layer[\s\S]{0,160}world/);
     expect(source).toContain('角色卡');
@@ -194,6 +203,87 @@ describe('writing UI contract', () => {
     expect(promptListStyles).not.toContain('border-radius: var(--radius-card)');
     expect(styles).toContain('--prompt-tone-1');
     expect(styles).toContain('var(--prompt-color)');
+  });
+
+  it('exposes active input limits, exact-message preview, and Phase 2 reference gates', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(source).toContain('模型总 Context');
+    expect(source).toContain('输出预留');
+    expect(source).toContain('可用输入');
+    expect(source).toContain('已估算输入');
+    expect(source).toContain('剩余输入');
+    expect(source).toContain('分母为 availableInput');
+    expect(source).toContain('查看实际发送内容');
+    expect(source).toContain('Provider 输入预览，不是隐藏推理');
+    expect(source).toContain('不包含 API Key 或 Authorization');
+    expect(source).toContain('option value="summary" disabled');
+    expect(source).toContain('option value="both" disabled');
+    expect(source).toContain('需先生成并确认记忆');
+    expect(source).toContain('Memory：missing');
+    expect(source).toContain("mode: 'full'");
+    expect(source).toContain("mode !== 'full' && mode !== 'none'");
+    expect(source).toContain('className="context-excluded-details"');
+    expect(source).toContain('{item.title}</strong><small>{item.reason}');
+    expect(styles).toContain('.context-drawer');
+    expect(styles).toContain('.context-drawer-scroll');
+    expect(styles).toContain('.context-drawer .drawer-heading');
+    expect(styles).toContain('env(safe-area-inset-top)');
+    expect(styles).toContain('env(safe-area-inset-bottom)');
+    expect(styles).toContain('.context-reference-row');
+  });
+
+  it('keeps Section plans and memory behind the normalized save path', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(source).toContain('commitSectionMemoryDraft');
+    expect(source).toContain('normalizeBook(await api.loadBook(bookId))');
+    expect(source).toContain('const candidate = normalizeBook(book);');
+    expect(source).toContain('onSectionPlanChange');
+    expect(source).toContain('id="context-plan-goal"');
+    expect(source).toContain('id="context-plan-beats"');
+    expect(source).toContain('id="context-plan-pov"');
+    expect(source).toContain('更新本节记忆');
+    expect(source).toContain('parseSectionMemoryDraft(await onGenerateMemory())');
+    expect(source).toContain("generationKind: 'summarize-section'");
+    expect(source).toContain('确认并保存记忆');
+    expect(source).toContain('model-confirmed');
+    expect(source).toContain('model-edited');
+    expect(source).toContain('回滚上一版记忆');
+    expect(source).toContain('候选伏笔（不会自动成为 Canon');
+    expect(source).toContain('应用建议');
+    expect(source).toContain('前一节：梗概 + 全文');
+    expect(source).toContain('清空前文参考');
+    expect(source).toContain('const linearPreviousReference = referenceSections[referenceSections.length - 1];');
+    const previousShortcutStart = source.indexOf('const applyPreviousBothReference');
+    const recommendationStart = source.indexOf('const applyRecommendedReferences', previousShortcutStart);
+    const previousShortcut = source.slice(previousShortcutStart, recommendationStart);
+    expect(previousShortcut).toContain('linearPreviousReference');
+    expect(previousShortcut).not.toContain('sameChapterPreviousReference');
+    const recommendationEnd = source.indexOf('const applyChapterSummaryReferences', recommendationStart);
+    const recommendation = source.slice(recommendationStart, recommendationEnd);
+    expect(recommendation).toContain('sameChapterPreviousReference');
+    expect(recommendation).not.toContain('linearPreviousReference');
+    expect(source).toContain("eligible ? '梗概' : '梗概（需先生成并确认记忆）'");
+    expect(source).toContain("eligible ? '两者' : '两者（需先生成并确认记忆）'");
+    expect(source).toContain('context-reference-shortcut-help');
+    expect(source).toContain('aria-describedby="context-reference-shortcut-help"');
+    expect(source).toContain('本章此前小节：全部梗概');
+    expect(source).toContain('sectionMemoryFreshness(item.section.memory, item.section.content)');
+    expect(source).toContain('referenceEligible');
+    expect(source).toContain('assertGenerationBudget(saved, generation)');
+    expect(source).toContain('onContextReferencesChange');
+    const summaryStart = source.indexOf('const generateSectionMemory');
+    const summaryEnd = source.indexOf('const deleteSelection', summaryStart);
+    const summaryPath = source.slice(summaryStart, summaryEnd);
+    expect(summaryPath).toMatch(/const generation[\s\S]*generationKind: 'summarize-section'[\s\S]*assertGenerationBudget\(saved, generation\)[\s\S]*api\.generate\(generation\)/);
+    expect(source).toContain('稳定前缀（stable）是 Book 级固定规则；模式层（session）是本次会话设置；每轮变化（dynamic）是本次正文、注释和输入。');
+    expect(source).toContain('上下文预算不足：约超出');
+    expect(source).toContain('const dialog = contextDialog.current;');
+    expect(source).toContain('if (!dialog || dialog.open) return;');
+    expect(styles).toContain('.context-plan-editor');
+    expect(styles).toContain('.context-memory-section');
+    expect(styles).toContain('.context-reference-presets');
   });
 
   it('combines character and world prompt sources without losing names or token totals', async () => {
@@ -404,11 +494,11 @@ describe('writing UI contract', () => {
     expect(source).toContain('最大上下文');
     expect(source).toContain('最大输出');
     expect(source).toContain('保存连接方案');
-    expect(source).toContain('Prompt 组合');
+    expect(source).not.toContain('Prompt 组合');
     expect(source).toContain("if (view !== 'write' || !book || !section) return null;");
-    expect(source).toContain('通用顺序 · 选中小节后显示占比');
-    expect(source).toContain('主页概览 · 竖条等高表示通用顺序');
-    expect(source).toContain('当前小节 · 竖条按估算 tokens 比例显示');
+    expect(source).toContain('activeProviderProfile.maxContext');
+    expect(source).toContain('activeProviderProfile.maxOutput');
+    expect(source).toContain('availableInput');
     expect(source).toContain('prompt-proportion-bar');
     expect(source).toContain('promptShareLabel(share)');
     expect(source).toContain('稳定前缀到这里');
