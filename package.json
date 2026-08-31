@@ -7,13 +7,17 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "prepare:font": "node scripts/materialize-font.mjs",
+    "predev": "npm run prepare:font",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch server/main.ts",
     "dev:web": "vite",
     "server": "node server/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "prebuild": "npm run prepare:font",
     "build": "tsc --noEmit && vite build --mode site",
+    "prebuild:local": "npm run prepare:font",
     "build:local": "tsc --noEmit && vite build --mode local-build --outDir dist-local",
     "db:generate": "drizzle-kit generate"
   },

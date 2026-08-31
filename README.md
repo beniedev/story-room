@@ -59,4 +59,4 @@ Current status: functional DEMO with local-host and private Sites build paths, n
 
 ## Typeface credit
 
-The optional **霞鹜文楷（LXGW WenKai）** manuscript font comes from [lxgw/LxgwWenKai](https://github.com/lxgw/LxgwWenKai). Its warm, handwritten rhythm gives long-form drafts a wonderfully literary page feel. The unmodified Regular font is bundled under the [SIL Open Font License 1.1](public/fonts/OFL.txt); thank you to lxgw and every contributor who made this beautiful open-source Chinese typeface available.
+The optional **霞鹜文楷（LXGW WenKai）** manuscript font comes from [lxgw/LxgwWenKai](https://github.com/lxgw/LxgwWenKai). Its warm, handwritten rhythm gives long-form drafts a wonderfully literary page feel. The official [Lite Regular](https://github.com/lxgw/LxgwWenKai-Lite) build is bundled under the [SIL Open Font License 1.1](public/fonts/OFL.txt); thank you to lxgw and every contributor who made this beautiful open-source Chinese typeface available.

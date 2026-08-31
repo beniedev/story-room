@@ -238,6 +238,8 @@ describe('writing UI contract', () => {
   it('bundles and persists the optional LXGW WenKai manuscript font', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const packageJson = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+    const materializer = await readFile(new URL('../scripts/materialize-font.mjs', import.meta.url), 'utf8');
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
     expect(source).toContain('id="manuscript-font-select"');
@@ -245,9 +247,12 @@ describe('writing UI contract', () => {
     expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
     expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
     expect(styles).toContain('@font-face');
-    expect(styles).toContain('/fonts/LXGWWenKai-Regular.ttf');
+    expect(styles).toContain('/fonts/LXGWWenKaiLite-Regular.ttf');
     expect(styles).toContain(':root[data-manuscript-font="wenkai"]');
     expect(styles).toContain('font-family: var(--manuscript-font-family)');
+    expect(packageJson).toContain('"prepare:font": "node scripts/materialize-font.mjs"');
+    expect(materializer).toContain('brotliDecompressSync');
+    expect(materializer).toContain('LXGWWenKaiLite-Regular.ttf.br');
     expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1');
   });
 
