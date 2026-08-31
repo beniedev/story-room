@@ -194,6 +194,7 @@ const readGenerationRequest = async (request: Request): Promise<GenerationReques
     || typeof body.sectionId !== 'string'
     || typeof body.instruction !== 'string'
     || (body.mode !== 'author' && body.mode !== 'character')
+    || (body.authorNote !== undefined && typeof body.authorNote !== 'string')
     || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')) {
     throw new HttpError('生成请求数据无效。');
   }

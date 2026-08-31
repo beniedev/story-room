@@ -111,6 +111,7 @@ export interface GenerationRequest {
   sectionId: string;
   mode: GenerationMode;
   selectedCharacterId?: string;
+  authorNote?: string;
   instruction: string;
 }
 

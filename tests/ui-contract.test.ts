@@ -54,12 +54,18 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('查看当前 Prompt');
   });
 
-  it('keeps section notes and editable turns inside the continuous manuscript', async () => {
+  it('keeps author relay input and temporary notes inside the continuous manuscript', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(app).toContain('className="writer-section-note"');
-    expect(app).toContain('本节注释');
-    expect(app).toContain('发送时排列在当前正文前');
+    expect(app).toContain('作者注释');
+    expect(app).toContain('authorNote');
+    expect(app).toContain('onAuthorNoteChange');
+    expect(app).toContain('只指导下一次续写，不进入正文；应用后自动清空。');
+    expect(app).toContain('不进入正文；应用后自动清空。');
+    expect(app).toContain('写下一段正文，让 AI 从这里接着写');
+    expect(app).not.toContain('props.section?.note');
+    expect(app).not.toContain('onSectionNoteChange');
     expect(app).toContain('className="manuscript-block-group"');
     expect(app).toContain('className="manuscript-block"');
     expect(app).toContain('className="manuscript-block-actions"');
@@ -73,6 +79,16 @@ describe('writing UI contract', () => {
     expect(styles).toContain('--manuscript-ai: #73539a');
     expect(styles).toContain('--manuscript-dialogue: #94600d');
     expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
+  });
+
+  it('sends author notes as transient request context and clears both inputs only on apply', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(app).toContain("authorNote: mode === 'author' ? authorNote : undefined");
+    expect(app).toContain('setDraftAuthorNote(authorNote)');
+    expect(app).toContain("setAuthorNote((current) => current === draftAuthorNote ? '' : current)");
+    expect(app).toContain("setInstruction((current) => current === draftInstruction ? '' : current)");
+    expect(app).toContain("setDraftAuthorNote('')");
+    expect(app).toContain('onDiscardDraft={() => {');
   });
 
   it('opens a selected block in a full-screen editor with immediate autosave', async () => {

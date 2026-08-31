@@ -88,9 +88,9 @@ const generalPromptOrder = [
   { id: 'template-characters', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
   { id: 'template-outline', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
   { id: 'template-mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
-  { id: 'template-note', title: '本节注释', reason: '只指导当前小节，位于正文前', cacheBand: 'dynamic' },
+  { id: 'template-note', title: '作者注释', reason: '只指导下一次续写，位于正文前', cacheBand: 'dynamic' },
   { id: 'template-manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
-  { id: 'template-instruction', title: '本轮指令', reason: '当前这一次的写作输入', cacheBand: 'dynamic' },
+  { id: 'template-instruction', title: '本轮输入', reason: '作者接龙正文或角色输入', cacheBand: 'dynamic' },
 ] satisfies Array<{ id: string; title: string; reason: string; cacheBand: PromptCacheBand }>;
 
 const cacheBandLabel = (band: PromptCacheBand) => (
@@ -168,9 +168,11 @@ function App() {
   const [view, setView] = useState<ViewName>('shelf');
   const [mode, setMode] = useState<GenerationMode>('author');
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
-  const [instruction, setInstruction] = useState('让观测站出现一个必须由人物回应的新变化。');
+  const [instruction, setInstruction] = useState('');
+  const [authorNote, setAuthorNote] = useState('');
   const [draft, setDraft] = useState('');
   const [draftInstruction, setDraftInstruction] = useState('');
+  const [draftAuthorNote, setDraftAuthorNote] = useState('');
   const [theme, setTheme] = useState<ThemeName>(() =>
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
   const [manuscriptFontSize, setManuscriptFontSize] = useState(() => {
@@ -207,12 +209,13 @@ function App() {
         sectionId: section.id,
         mode,
         selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
+        authorNote: mode === 'author' ? authorNote : undefined,
         instruction,
       });
     } catch {
       return null;
     }
-  }, [book, instruction, mode, section, selectedCharacterId, view]);
+  }, [authorNote, book, instruction, mode, section, selectedCharacterId, view]);
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
   useEffect(() => {
@@ -307,8 +310,11 @@ function App() {
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
+    setInstruction('');
+    setAuthorNote('');
     setDraft('');
     setDraftInstruction('');
+    setDraftAuthorNote('');
     setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
     setView('shelf');
   };
@@ -365,6 +371,7 @@ function App() {
     sectionId,
     mode,
     selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
+    authorNote: mode === 'author' ? authorNote : undefined,
     instruction,
   });
 
@@ -391,6 +398,7 @@ function App() {
     const result = await api.generate(generationRequest(saved));
     setDraft(result.draft);
     setDraftInstruction(instruction);
+    setDraftAuthorNote(authorNote);
     setStatus('Fake Provider 已生成待应用正文。');
   });
 
@@ -416,7 +424,10 @@ function App() {
     }));
     setDraft('');
     setDraftInstruction('');
-    setStatus('待应用正文已加入当前 Section；请保存。');
+    setDraftAuthorNote('');
+    setInstruction((current) => current === draftInstruction ? '' : current);
+    setAuthorNote((current) => current === draftAuthorNote ? '' : current);
+    setStatus('接龙正文已加入当前 Section。');
   };
 
   const updateSectionBlocks = (blocks: SectionBlock[]) => {
@@ -428,17 +439,6 @@ function App() {
         sections: chapter.sections.map((item) => item.id === section.id
           ? { ...item, blocks, content: blocksAsContent(blocks) }
           : item),
-      })),
-    }));
-  };
-
-  const updateSectionNote = (note: string) => {
-    if (!section) return;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === section.id ? { ...item, note } : item),
       })),
     }));
   };
@@ -476,6 +476,11 @@ function App() {
       saveRevision.current += 1;
       setSectionId('');
       setSelectedCharacterId('');
+      setInstruction('');
+      setAuthorNote('');
+      setDraft('');
+      setDraftInstruction('');
+      setDraftAuthorNote('');
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'cloud' ? '新 Book 已建立在私有云端书库。' : '新 Book 已建立在本机。');
@@ -584,7 +589,14 @@ function App() {
     if (!book) return;
     const result = deleteDirectorySelection(book, selection);
     changeBook(() => result.book);
-    if (result.removedSectionIds.has(sectionId)) setSectionId('');
+    if (result.removedSectionIds.has(sectionId)) {
+      setSectionId('');
+      setInstruction('');
+      setAuthorNote('');
+      setDraft('');
+      setDraftInstruction('');
+      setDraftAuthorNote('');
+    }
   };
 
   const updateCharacter = (id: string, patch: Partial<CharacterCard>) => changeBook((current) => ({
@@ -677,6 +689,7 @@ function App() {
             mode={mode}
             selectedCharacterId={selectedCharacterId}
             instruction={instruction}
+            authorNote={authorNote}
             draft={draft}
             busy={busy}
             contextTokens={promptPreview?.estimatedTokens ?? 0}
@@ -692,8 +705,8 @@ function App() {
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
             onInstructionChange={setInstruction}
+            onAuthorNoteChange={setAuthorNote}
             onSectionBlocksChange={updateSectionBlocks}
-            onSectionNoteChange={updateSectionNote}
             onRegenerateBlock={regenerateBlock}
             onSectionTitleChange={(title) => {
               if (sectionChapter && section) renameSection(sectionChapter.id, section.id, title);
@@ -703,6 +716,7 @@ function App() {
             onDiscardDraft={() => {
               setDraft('');
               setDraftInstruction('');
+              setDraftAuthorNote('');
             }}
           />
         ) : book ? (
@@ -722,8 +736,11 @@ function App() {
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => {
               if (id !== sectionId) {
+                setInstruction('');
+                setAuthorNote('');
                 setDraft('');
                 setDraftInstruction('');
+                setDraftAuthorNote('');
               }
               setSectionId(id);
               setView('write');
@@ -776,6 +793,7 @@ interface WriterProps {
   mode: GenerationMode;
   selectedCharacterId: string;
   instruction: string;
+  authorNote: string;
   draft: string;
   busy: boolean;
   contextTokens: number;
@@ -787,8 +805,8 @@ interface WriterProps {
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
+  onAuthorNoteChange: (value: string) => void;
   onSectionBlocksChange: (blocks: SectionBlock[]) => void;
-  onSectionNoteChange: (note: string) => void;
   onRegenerateBlock: (blockId: string) => void;
   onSectionTitleChange: (value: string) => void;
   onGenerate: () => void;
@@ -1071,7 +1089,7 @@ function Writer(props: WriterProps) {
                 className="writer-menu-action"
                 aria-pressed={props.mode === 'author'}
                 onClick={() => runMenuAction(() => props.onModeChange('author'))}
-              ><BookOpenText aria-hidden="true" />作者模式</button>
+              ><BookOpenText aria-hidden="true" />作者模式 · 接龙</button>
               <button
                 type="button"
                 className="writer-menu-action"
@@ -1100,27 +1118,29 @@ function Writer(props: WriterProps) {
                 </p>
               </div>
             )}
-            <label className="writer-section-note" htmlFor="section-note-input">
-              <span><MessageSquareText aria-hidden="true" />本节注释</span>
-              <textarea
-                id="section-note-input"
-                rows={4}
-                value={props.section?.note ?? ''}
-                onChange={(event) => props.onSectionNoteChange(event.target.value)}
-                placeholder="只写给当前小节的续写提示……"
-                spellCheck
-              />
-              <small>仅作用于本节；发送时排列在当前正文前。</small>
-            </label>
+            {props.mode === 'author' && (
+              <label className="writer-section-note" htmlFor="author-note-input">
+                <span><MessageSquareText aria-hidden="true" />作者注释</span>
+                <textarea
+                  id="author-note-input"
+                  rows={4}
+                  value={props.authorNote}
+                  onChange={(event) => props.onAuthorNoteChange(event.target.value)}
+                  placeholder="例如：跳过路程，直接写抵达后的重逢……"
+                  spellCheck
+                />
+                <small>只指导下一次续写，不进入正文；应用后自动清空。</small>
+              </label>
+            )}
           </div>
         </details>
-        <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '写作指令' : '角色行动或台词'}</label>
+        <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '接龙正文' : '角色行动或台词'}</label>
         <textarea
           id="writing-instruction"
           rows={1}
           value={props.instruction}
           onChange={(event) => props.onInstructionChange(event.target.value)}
-          placeholder={props.mode === 'author' ? '例如：让场景出现一个新的变化…' : '以当前角色输入行动、台词或选择…'}
+          placeholder={props.mode === 'author' ? '写下一段正文，让 AI 从这里接着写……' : '以当前角色输入行动、台词或选择……'}
         />
         <button
           type="submit"

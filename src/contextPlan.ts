@@ -22,7 +22,9 @@ const BASE_CONTRACT = [
 
 const AUTHOR_POLICY = [
   '用户是本书作者，对全书拥有最高写作指令权。',
-  '按照作者指令续写、改写或扩写，同时遵守本书已启用的资料。',
+  '作者模式采用正文接龙：用户本轮输入是作者刚写下的连续小说正文，AI 从它的结尾继续写下一段。',
+  '作者注释只是本轮的幕后指导，不属于正文；不要把它复述成聊天说明或写进故事。',
+  '如果用户没有写接龙正文，就依据作者注释与当前正文直接续写。',
 ].join('\n');
 
 const characterPolicy = (name: string) => [
@@ -133,11 +135,11 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
       book.id,
       'note',
       'dynamic',
-      `${section.id}:note`,
-      '本节注释',
-      section.note ?? '',
-      '仅对当前 Section 生效的写作注释',
-      Boolean(section.note?.trim()),
+      'request:author-note',
+      '作者注释',
+      request.mode === 'author' ? request.authorNote ?? '' : '',
+      '仅指导本轮续写，位于正文前且不写入正文',
+      request.mode === 'author' && Boolean(request.authorNote?.trim()),
       false,
     ),
     block(
@@ -151,7 +153,17 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
       Boolean(section.content.trim()),
       true,
     ),
-    block(book.id, 'instruction', 'dynamic', 'request:instruction', '本轮指令', request.instruction, '本次生成的直接输入', Boolean(request.instruction.trim()), false),
+    block(
+      book.id,
+      'instruction',
+      'dynamic',
+      'request:instruction',
+      request.mode === 'author' ? '作者接龙正文' : '角色本轮输入',
+      request.instruction,
+      request.mode === 'author' ? '作者刚写下、等待 AI 接写的正文' : '所选角色本轮的行动、台词或选择',
+      Boolean(request.instruction.trim()),
+      false,
+    ),
   ];
 
   const included = blocks.filter((item) => item.included);

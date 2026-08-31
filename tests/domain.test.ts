@@ -82,31 +82,49 @@ describe('context plan', () => {
     ]);
   });
 
-  it('places only the active Section note before its manuscript', () => {
+  it('places a transient author note before the manuscript and ignores legacy Section notes', () => {
     const book = makeBook('book-a', 'ALPHA');
     const current = book.chapters[0]?.sections[0];
     if (!current) throw new Error('fixture section missing');
-    current.note = 'Current section note';
+    current.note = 'Legacy persisted section note';
     book.chapters[0]?.sections.push({
       id: 'book-a-other-section',
       title: 'Other section',
       content: 'Other manuscript',
-      note: 'Other section note',
+      note: 'Other legacy section note',
     });
 
     const plan = buildContextPlan(book, {
       sectionId: current.id,
       mode: 'author',
-      instruction: 'Continue ALPHA',
+      authorNote: '请让灯光熄灭后，人物听见门外的脚步。',
+      instruction: '',
     });
     const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
     const manuscriptIndex = plan.included.findIndex((item) => item.layer === 'manuscript');
 
     expect(noteIndex).toBe(manuscriptIndex - 1);
-    expect(plan.included[noteIndex]?.sourceId).toBe('book-a-section:note');
+    expect(plan.included[noteIndex]?.title).toBe('作者注释');
+    expect(plan.included[noteIndex]?.sourceId).toBe('request:author-note');
     expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
-    expect(plan.prompt).toContain('Current section note');
-    expect(plan.prompt).not.toContain('Other section note');
+    expect(plan.prompt).toContain('请让灯光熄灭后');
+    expect(plan.prompt).not.toContain('Legacy persisted section note');
+    expect(plan.prompt).not.toContain('Other legacy section note');
+    expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
+  });
+
+  it('describes author mode as a user-to-AI prose relay', () => {
+    const plan = buildContextPlan(makeBook('book-a', 'ALPHA'), {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: '我推开观测站的门。',
+    });
+
+    const mode = plan.included.find((item) => item.layer === 'mode');
+    expect(mode?.content).toContain('正文接龙');
+    expect(mode?.content).toContain('用户本轮输入');
+    expect(mode?.content).toContain('AI 从它的结尾继续写');
+    expect(plan.included.find((item) => item.layer === 'instruction')?.title).toBe('作者接龙正文');
   });
 
   it('rejects a character that is not in the active Book', () => {
