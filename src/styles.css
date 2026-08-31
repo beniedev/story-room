@@ -741,23 +741,9 @@ h3 {
   touch-action: none;
 }
 
-.instruction-resize-handle::before,
-.instruction-resize-handle::after,
-.instruction-resize-handle > span {
-  position: absolute;
-  width: 1.35rem;
-  height: 2px;
-  border-radius: 999px;
-  background: currentColor;
-  content: '';
-}
-
-.instruction-resize-handle::before {
-  translate: 0 -5px;
-}
-
-.instruction-resize-handle::after {
-  translate: 0 5px;
+.instruction-resize-handle svg {
+  width: 1.1rem;
+  height: 1.1rem;
 }
 
 .instruction-resize-handle[data-resizing="true"] {

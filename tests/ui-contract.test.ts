@@ -450,6 +450,7 @@ describe('writing UI contract', () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('className="instruction-resize-handle"');
+    expect(source).toContain('<MoveVertical aria-hidden="true" />');
     expect(source).toContain('调整输入框高度：电脑上下拖动，手机长按后拖动');
     expect(source).toContain("event.pointerType === 'mouse'");
     expect(source).toContain('setPointerCapture');
