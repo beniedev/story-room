@@ -1241,16 +1241,28 @@ function GuideEditor({ title, description, placeholder, value, onChange }: {
   );
 }
 
-function SourceLoadScope({ chapters, loadedSectionIds, sourceLabel, onChange }: {
+function SourceLoadScope({
+  sourceId,
+  title,
+  enabled,
+  chapters,
+  loadedSectionIds,
+  onEnabledChange,
+  onScopeChange,
+}: {
+  sourceId: string;
+  title: string;
+  enabled: boolean;
   chapters: Book['chapters'];
   loadedSectionIds?: string[];
-  sourceLabel: string;
-  onChange: (loadedSectionIds: string[] | undefined) => void;
+  onEnabledChange: (enabled: boolean) => void;
+  onScopeChange: (loadedSectionIds: string[] | undefined) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const sectionIds = chapters.flatMap((chapter) => chapter.sections.map((section) => section.id));
   const validSectionIds = new Set(sectionIds);
-  const selectedIds = new Set((loadedSectionIds ?? []).filter((id) => validSectionIds.has(id)));
   const loadsEverywhere = loadedSectionIds === undefined;
+  const selectedIds = new Set((loadedSectionIds ?? sectionIds).filter((id) => validSectionIds.has(id)));
   const scopeSummary = loadsEverywhere
     ? '全书全部小节'
     : selectedIds.size
@@ -1261,27 +1273,45 @@ function SourceLoadScope({ chapters, loadedSectionIds, sourceLabel, onChange }: 
     const nextIds = new Set(selectedIds);
     if (selected) nextIds.add(sectionId);
     else nextIds.delete(sectionId);
-    onChange(sectionIds.filter((id) => nextIds.has(id)));
+    const next = sectionIds.filter((id) => nextIds.has(id));
+    onScopeChange(next.length === sectionIds.length ? undefined : next);
   };
 
+  const panelId = `${sourceId}-load-scope`;
+
   return (
-    <details className="source-scope-drawer">
-      <summary>
-        <ListChecks aria-hidden="true" />
-        <span><strong>加载范围</strong><small>{scopeSummary}</small></span>
-        <ChevronDown aria-hidden="true" />
-      </summary>
-      <div className="source-scope-content">
+    <div className="source-scope-drawer" data-open={open || undefined} data-enabled={enabled || undefined}>
+      <div className="source-load-tab">
+        <label className="source-load-toggle" title={title}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => onEnabledChange(event.target.checked)}
+          />
+          <span className="sr-only">{title}</span>
+        </label>
+        <button
+          type="button"
+          className="source-scope-disclosure"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span><strong>{title}</strong><small>加载范围 · {scopeSummary}</small></span>
+          <ChevronDown aria-hidden="true" />
+        </button>
         <label className="source-scope-all">
+          <span>全书全部小节</span>
           <input
             type="checkbox"
             checked={loadsEverywhere}
-            onChange={(event) => onChange(event.target.checked ? undefined : [])}
+            onChange={(event) => onScopeChange(event.target.checked ? undefined : [])}
           />
-          <span><strong>全书全部小节</strong><small>新建小节也会自动加载。</small></span>
         </label>
-        {!loadsEverywhere && (
-          <div className="source-scope-chapters" aria-label={`${sourceLabel}指定小节`}>
+      </div>
+      {open && (
+        <div className="source-scope-content" id={panelId}>
+          <div className="source-scope-chapters" aria-label={`${title}指定小节`}>
             {chapters.map((chapter) => (
               <fieldset key={chapter.id}>
                 <legend>{chapter.title}</legend>
@@ -1299,9 +1329,9 @@ function SourceLoadScope({ chapters, loadedSectionIds, sourceLabel, onChange }: 
               </fieldset>
             ))}
           </div>
-        )}
-      </div>
-    </details>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1322,15 +1352,14 @@ function CharacterEditor({ bookTitle, chapters, character, onChange }: {
         <label>角色名<input value={character.name} onChange={(event) => onChange({ name: event.target.value })} /></label>
         <label>角色要点<input value={character.role} onChange={(event) => onChange({ role: event.target.value })} /></label>
         <label>角色设定<textarea value={character.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
-        <label className="source-prompt-setting">
-          <input type="checkbox" checked={character.includeInPrompt} onChange={(event) => onChange({ includeInPrompt: event.target.checked })} />
-          <span><strong>加载角色卡</strong><small>开启后，角色设定将被加载进入 Prompt。</small></span>
-        </label>
         <SourceLoadScope
+          sourceId={character.id}
+          title="加载角色卡"
+          enabled={character.includeInPrompt}
           chapters={chapters}
           loadedSectionIds={character.loadedSectionIds}
-          sourceLabel={`角色卡${character.name}`}
-          onChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
+          onEnabledChange={(includeInPrompt) => onChange({ includeInPrompt })}
+          onScopeChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
         />
       </section>
     </article>
@@ -1353,15 +1382,14 @@ function WorldRuleEditor({ bookTitle, chapters, rule, onChange }: {
       <section className="source-editor-fields" aria-label={`${rule.title}世界观设定内容`}>
         <label>设定名称<input value={rule.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
         <label>设定内容<textarea value={rule.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
-        <label className="source-prompt-setting">
-          <input type="checkbox" checked={rule.includeInPrompt} onChange={(event) => onChange({ includeInPrompt: event.target.checked })} />
-          <span><strong>加载世界观设定</strong><small>开启后，这条设定将被加载进入 Prompt。</small></span>
-        </label>
         <SourceLoadScope
+          sourceId={rule.id}
+          title="加载世界观设定"
+          enabled={rule.includeInPrompt}
           chapters={chapters}
           loadedSectionIds={rule.loadedSectionIds}
-          sourceLabel={`世界观设定${rule.title}`}
-          onChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
+          onEnabledChange={(includeInPrompt) => onChange({ includeInPrompt })}
+          onScopeChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
         />
       </section>
     </article>

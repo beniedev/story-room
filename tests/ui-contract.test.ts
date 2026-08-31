@@ -346,9 +346,12 @@ describe('writing UI contract', () => {
 
   it('uses the updated character and world-setting vocabulary and exposes section loading scope', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const scopeEditorStart = source.indexOf('function SourceLoadScope');
     const characterEditorStart = source.indexOf('function CharacterEditor');
     const worldEditorStart = source.indexOf('function WorldRuleEditor');
     const missingEditorStart = source.indexOf('function MissingSettingsItem');
+    const scopeEditor = source.slice(scopeEditorStart, characterEditorStart);
     const characterEditor = source.slice(characterEditorStart, worldEditorStart);
     const worldEditor = source.slice(worldEditorStart, missingEditorStart);
 
@@ -357,18 +360,23 @@ describe('writing UI contract', () => {
     expect(characterEditor).not.toContain('角色职责');
     expect(characterEditor).not.toContain('角色资料');
     expect(characterEditor).toContain('加载角色卡');
-    expect(characterEditor).toMatch(/加载角色卡[\s\S]{0,260}角色设定[\s\S]{0,260}Prompt/);
     expect(characterEditor).toContain('<SourceLoadScope');
-    expect(characterEditor).toContain('type="checkbox"');
 
     expect(worldEditor).toContain('世界观设定');
     expect(worldEditor).toContain('设定名称');
     expect(worldEditor).toContain('设定内容');
     expect(worldEditor).not.toContain('世界观条例');
     expect(worldEditor).toContain('加载世界观设定');
-    expect(worldEditor).toMatch(/加载世界观设定[\s\S]{0,260}(?:设定|内容)[\s\S]{0,260}Prompt/);
     expect(worldEditor).toContain('<SourceLoadScope');
-    expect(worldEditor).toContain('type="checkbox"');
+    expect(scopeEditor).toContain('className="source-load-tab"');
+    expect(scopeEditor.indexOf('className="source-load-toggle"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-disclosure"'));
+    expect(scopeEditor.indexOf('className="source-scope-disclosure"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-all"'));
+    expect(scopeEditor).toContain('checked={enabled}');
+    expect(scopeEditor).toContain('checked={loadsEverywhere}');
+    expect(scopeEditor).toContain('loadedSectionIds ?? sectionIds');
+    expect(scopeEditor).toContain('open &&');
+    expect(scopeEditor).not.toContain('!loadsEverywhere &&');
+    expect(styles).toMatch(/\.source-load-tab\s*\{[\s\S]{0,180}grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
     expect(source).toContain('loadedSectionIds');
     expect(source).toContain('function SourceLoadScope');
     expect(source).toContain('className="source-scope-drawer"');
