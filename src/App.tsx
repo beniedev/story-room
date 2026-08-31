@@ -231,8 +231,9 @@ function App() {
     const parsed = Number(stored);
     return Number.isFinite(parsed) ? clampManuscriptFontSize(parsed) : defaultManuscriptFontSize;
   });
-  const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() =>
-    readProviderProfiles(localStorage.getItem(providerProfilesKey)));
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() => api.runtime === 'device'
+    ? readProviderProfiles(localStorage.getItem(providerProfilesKey))
+    : []);
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
   const [dirty, setDirty] = useState(false);
@@ -286,6 +287,7 @@ function App() {
   }, [manuscriptFontFamily]);
 
   useEffect(() => {
+    if (api.runtime !== 'device') return;
     try {
       localStorage.setItem(providerProfilesKey, JSON.stringify(providerProfiles));
       localStorage.setItem(activeProviderProfileKey, activeProviderProfileId);
@@ -315,7 +317,14 @@ function App() {
   useEffect(() => {
     void (async () => {
       try {
-        const entries = await api.listBooks();
+        const [entries, profiles] = await Promise.all([
+          api.listBooks(),
+          api.listProviderProfiles(),
+        ]);
+        setProviderProfiles(profiles);
+        setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
+          ? current
+          : profiles[0]?.id ?? '');
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
         setStatus(api.runtime === 'device' ? '此设备的书库已打开。' : '本机书库已打开。');
@@ -444,6 +453,7 @@ function App() {
   const generationRequest = (saved: Book) => ({
     bookId: saved.id,
     sectionId,
+    providerProfileId: activeProviderProfile?.id,
     mode,
     selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
     authorNote: mode === 'author' ? authorNote : undefined,
@@ -478,6 +488,7 @@ function App() {
     const result = await api.generate({
       bookId: saved.id,
       sectionId: targetSectionId,
+      providerProfileId: activeProviderProfile?.id,
       mode: modeSnapshot,
       selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
       authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined,
@@ -690,9 +701,11 @@ function App() {
     }
   };
 
-  const saveProviderProfile = (profile: ProviderProfile) => {
-    setProviderProfiles((current) => upsertProviderProfile(current, profile));
-    setActiveProviderProfileId(profile.id);
+  const saveProviderProfile = async (profile: ProviderProfile, apiKey?: string) => {
+    const saved = await api.saveProviderProfile(profile, apiKey);
+    setProviderProfiles((current) => upsertProviderProfile(current, saved));
+    setActiveProviderProfileId(saved.id);
+    return saved;
   };
 
   const navigateFromHeader = () => {
@@ -829,6 +842,8 @@ function App() {
         activeProviderProfileId={activeProviderProfileId}
         onSelectProviderProfile={setActiveProviderProfileId}
         onSaveProviderProfile={saveProviderProfile}
+        onTestProviderProfile={api.testProviderProfile}
+        providerRuntime={api.runtime}
         promptPlan={promptPreview}
         onClose={() => settingsTrigger.current?.focus()}
       />
@@ -2273,6 +2288,8 @@ function SettingsDrawer({
   activeProviderProfileId,
   onSelectProviderProfile,
   onSaveProviderProfile,
+  onTestProviderProfile,
+  providerRuntime,
   promptPlan,
   onClose,
 }: {
@@ -2286,7 +2303,9 @@ function SettingsDrawer({
   providerProfiles: ProviderProfile[];
   activeProviderProfileId: string;
   onSelectProviderProfile: (id: string) => void;
-  onSaveProviderProfile: (profile: ProviderProfile) => void;
+  onSaveProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<ProviderProfile>;
+  onTestProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<{ ok: true; modelId: string }>;
+  providerRuntime: 'host' | 'device';
   promptPlan: ContextPlan | null;
   onClose: () => void;
 }) {
@@ -2295,6 +2314,7 @@ function SettingsDrawer({
   const blankProfile = (): ProviderProfile => ({
     id: '',
     name: '',
+    kind: 'openai-compatible',
     baseUrl: '',
     modelId: '',
     maxContext: 128000,
@@ -2306,6 +2326,11 @@ function SettingsDrawer({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
   const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  useEffect(() => {
+    if (!currentProfile || editingId) return;
+    setEditingId(currentProfile.id);
+    setProfileDraft({ ...currentProfile });
+  }, [currentProfile, editingId]);
   const compositionItems = combinePromptSources(promptPlan?.included.map((item) => ({
     id: item.id,
     layer: item.layer,
@@ -2348,7 +2373,7 @@ function SettingsDrawer({
     setConnectionStatus('');
     setConnectionState('idle');
   };
-  const submitProfile = (event: React.FormEvent) => {
+  const submitProfile = async (event: React.FormEvent) => {
     event.preventDefault();
     const id = editingId || makeId('provider');
     const profile: ProviderProfile = {
@@ -2360,19 +2385,30 @@ function SettingsDrawer({
       maxContext: Math.max(1, Number(profileDraft.maxContext)),
       maxOutput: Math.max(1, Number(profileDraft.maxOutput)),
     };
-    onSaveProviderProfile(profile);
-    setEditingId(id);
-    setProfileDraft(profile);
-    setSessionKeys((current) => ({ ...current, [id]: apiKeyDraft }));
-    setConnectionStatus('连接方案已保存。API Key 只在当前页面临时保留。');
-    setConnectionState('idle');
+    try {
+      const saved = await onSaveProviderProfile(profile, apiKeyDraft || undefined);
+      setEditingId(saved.id);
+      setProfileDraft(saved);
+      if (providerRuntime === 'device') {
+        setSessionKeys((current) => ({ ...current, [saved.id]: apiKeyDraft }));
+      } else {
+        setApiKeyDraft('');
+      }
+      setConnectionStatus(providerRuntime === 'host'
+        ? '连接方案已保存到本机私有配置。'
+        : '连接方案已保存。API Key 只在当前页面临时保留。');
+      setConnectionState('idle');
+    } catch (error) {
+      setConnectionState('error');
+      setConnectionStatus(error instanceof Error ? error.message : '连接方案保存失败。');
+    }
   };
   const testProfileConnection = async () => {
     const baseUrl = profileDraft.baseUrl.trim().replace(/\/+$/, '');
     const modelId = profileDraft.modelId.trim();
-    if (!baseUrl || !modelId || !apiKeyDraft.trim()) {
+    if (!baseUrl || !modelId) {
       setConnectionState('error');
-      setConnectionStatus('请先填写 URL、模型 ID 和 API Key。');
+      setConnectionStatus('请先填写 URL 和模型 ID。');
       return;
     }
 
@@ -2389,35 +2425,12 @@ function SettingsDrawer({
     setConnectionState('testing');
     setConnectionStatus('正在测试连接…');
     try {
-      const response = await fetch(endpoint, {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${apiKeyDraft.trim()}`,
-        },
-      });
-      if (!response.ok) {
-        setConnectionState('error');
-        setConnectionStatus(response.status === 401 || response.status === 403
-          ? '连接失败：API Key 无效或没有权限。'
-          : `连接失败：服务返回 HTTP ${response.status}。`);
-        return;
-      }
-
-      const payload = await response.json() as { data?: Array<{ id?: unknown }> };
-      const modelIds = Array.isArray(payload.data)
-        ? payload.data.map((item) => item?.id).filter((id): id is string => typeof id === 'string')
-        : [];
-      if (modelIds.length > 0 && !modelIds.includes(modelId)) {
-        setConnectionState('error');
-        setConnectionStatus('连接成功，但模型列表中没有这个模型 ID。');
-        return;
-      }
-
+      await onTestProviderProfile({ ...profileDraft, baseUrl, modelId }, apiKeyDraft || undefined);
       setConnectionState('success');
       setConnectionStatus('连接有效，模型 ID 可用。');
-    } catch {
+    } catch (error) {
       setConnectionState('error');
-      setConnectionStatus('无法连接。请检查地址，或确认服务允许浏览器访问 /models。');
+      setConnectionStatus(error instanceof Error ? error.message : '无法连接。');
     }
   };
 
@@ -2532,7 +2545,9 @@ function SettingsDrawer({
                 <label>最大输出<input name="provider-max-output" type="number" inputMode="numeric" min="1" required value={profileDraft.maxOutput} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, maxOutput: Number(event.target.value) })); }} /></label>
               </div>
 
-              <p className="provider-secret-note">API Key 不会写入书稿、私有书库或浏览器持久化；测试时只会直接发送到你填写的 URL。</p>
+              <p className="provider-secret-note">{providerRuntime === 'host'
+                ? 'API Key 只保存在本机的私有 Provider 配置中，不会写入书稿、浏览器或 Git。留空可继续使用已保存的 Key。'
+                : 'API Key 不会写入书稿或浏览器持久化；测试时只会直接发送到你填写的 URL。'}</p>
               <div className="provider-form-actions">
                 <button
                   type="button"

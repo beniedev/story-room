@@ -110,6 +110,7 @@ export interface ContextPlan {
 export interface GenerationRequest {
   bookId: string;
   sectionId: string;
+  providerProfileId?: string;
   mode: GenerationMode;
   selectedCharacterId?: string;
   authorNote?: string;

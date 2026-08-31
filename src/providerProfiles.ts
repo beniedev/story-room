@@ -1,6 +1,7 @@
 export interface ProviderProfile {
   id: string;
   name: string;
+  kind: 'fake' | 'openai-compatible';
   baseUrl: string;
   modelId: string;
   maxContext: number;
@@ -11,6 +12,7 @@ export const defaultProviderProfiles: ProviderProfile[] = [
   {
     id: 'provider-primary',
     name: '主要模型',
+    kind: 'fake',
     baseUrl: 'https://api.example.com/v1',
     modelId: 'example-model',
     maxContext: 128000,
@@ -19,6 +21,7 @@ export const defaultProviderProfiles: ProviderProfile[] = [
   {
     id: 'provider-draft',
     name: '快速草稿',
+    kind: 'fake',
     baseUrl: 'https://api.example.com/v1',
     modelId: 'example-model-fast',
     maxContext: 32000,
@@ -31,6 +34,7 @@ const isProviderProfile = (value: unknown): value is ProviderProfile => {
   const candidate = value as Partial<ProviderProfile>;
   return typeof candidate.id === 'string'
     && typeof candidate.name === 'string'
+    && (candidate.kind === 'fake' || candidate.kind === 'openai-compatible')
     && typeof candidate.baseUrl === 'string'
     && typeof candidate.modelId === 'string'
     && Number.isFinite(candidate.maxContext)
@@ -42,6 +46,7 @@ const isProviderProfile = (value: unknown): value is ProviderProfile => {
 const normalizeProviderProfile = (profile: ProviderProfile): ProviderProfile => ({
   id: profile.id,
   name: profile.name,
+  kind: profile.kind,
   baseUrl: profile.baseUrl,
   modelId: profile.modelId,
   maxContext: Number(profile.maxContext),

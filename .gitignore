@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-local/
 .data/
+.env*.local
 public/fonts/LXGWWenKaiLite-Regular.ttf
 coverage/
 .wrangler/

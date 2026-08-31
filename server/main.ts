@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { buildContextPlan, fakeGenerate, RequestValidationError } from './domain.ts';
 import { BookNotFoundError, StoreInputError, StoryStore } from './store.ts';
 import type { Book, GenerationRequest } from '../src/types.ts';
+import type { ProviderProfile } from '../src/providerProfiles.ts';
+import {
+  ProviderConnectionError,
+  ProviderInputError,
+  ProviderStore,
+} from './providers.ts';
 
 const host = process.env.STORY_HOST ?? '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
@@ -54,6 +60,7 @@ const readGenerationRequest = async (request: IncomingMessage): Promise<Generati
     || typeof body.bookId !== 'string'
     || typeof body.sectionId !== 'string'
     || typeof body.instruction !== 'string'
+    || (body.providerProfileId !== undefined && typeof body.providerProfileId !== 'string')
     || (body.mode !== 'author' && body.mode !== 'character')
     || (body.authorNote !== undefined && typeof body.authorNote !== 'string')
     || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')) {
@@ -62,15 +69,29 @@ const readGenerationRequest = async (request: IncomingMessage): Promise<Generati
   return body as unknown as GenerationRequest;
 };
 
+const readProviderBody = async (request: IncomingMessage) => {
+  const body = await readBody(request);
+  if (!isRecord(body) || !isRecord(body.profile)
+    || (body.apiKey !== undefined && typeof body.apiKey !== 'string')) {
+    throw new RequestValidationError('Provider 请求数据无效。');
+  }
+  return { profile: body.profile as unknown as ProviderProfile, apiKey: body.apiKey as string | undefined };
+};
+
 const knownRouteMethods: Record<string, string[]> = {
   '/api/health': ['GET'],
   '/api/library': ['GET'],
   '/api/books': ['POST'],
+  '/api/providers': ['GET', 'POST'],
+  '/api/provider-test': ['POST'],
   '/api/context-plan': ['POST'],
   '/api/generate': ['POST'],
 };
 
-export const createStoryServer = (storyStore = new StoryStore()) => {
+export const createStoryServer = (
+  storyStore = new StoryStore(),
+  providerStore = new ProviderStore(),
+) => {
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
@@ -79,6 +100,17 @@ export const createStoryServer = (storyStore = new StoryStore()) => {
       }
       if (request.method === 'GET' && url.pathname === '/api/library') {
         return sendJson(response, 200, await storyStore.listBooks());
+      }
+      if (request.method === 'GET' && url.pathname === '/api/providers') {
+        return sendJson(response, 200, await providerStore.list());
+      }
+      if (request.method === 'POST' && url.pathname === '/api/providers') {
+        const body = await readProviderBody(request);
+        return sendJson(response, 200, await providerStore.save(body.profile, body.apiKey));
+      }
+      if (request.method === 'POST' && url.pathname === '/api/provider-test') {
+        const body = await readProviderBody(request);
+        return sendJson(response, 200, await providerStore.test(body.profile, body.apiKey));
       }
       if (request.method === 'POST' && url.pathname === '/api/books') {
         const body = await readBody(request);
@@ -115,6 +147,13 @@ export const createStoryServer = (storyStore = new StoryStore()) => {
       if (request.method === 'POST' && url.pathname === '/api/generate') {
         const body = await readGenerationRequest(request);
         const book = await storyStore.loadBook(body.bookId);
+        const plan = buildContextPlan(book, body);
+        const generated = body.providerProfileId
+          ? await providerStore.generate(body.providerProfileId, plan.prompt)
+          : null;
+        if (generated !== null) {
+          return sendJson(response, 200, { plan, draft: generated });
+        }
         return sendJson(response, 200, fakeGenerate(book, body));
       }
       if (knownRouteMethods[url.pathname]) {
@@ -129,11 +168,15 @@ export const createStoryServer = (storyStore = new StoryStore()) => {
           ? error.statusCode
           : error instanceof RequestValidationError || error instanceof StoreInputError
             ? error.statusCode
-            : 500;
+            : error instanceof ProviderInputError || error instanceof ProviderConnectionError
+              ? error.statusCode
+              : 500;
       const message = error instanceof PayloadTooLargeError
         || error instanceof BookNotFoundError
         || error instanceof RequestValidationError
         || error instanceof StoreInputError
+        || error instanceof ProviderInputError
+        || error instanceof ProviderConnectionError
         ? error.message
         : '服务器内部错误。';
       if (statusCode >= 500) console.error('Story host request failed:', error);

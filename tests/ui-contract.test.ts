@@ -337,7 +337,8 @@ describe('writing UI contract', () => {
     expect(source).toContain('promptShareLabel(share)');
     expect(source).toContain('稳定前缀到这里');
     expect(source).toContain('每轮变化');
-    expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
+    expect(source).toContain('API Key 只保存在本机的私有 Provider 配置中');
+    expect(source).toContain('API Key 不会写入书稿或浏览器持久化');
     expect(source).toContain('type="password"');
     expect(source).toContain('event.target === event.currentTarget');
     expect(styles).toContain('.instruction-dock textarea:focus');

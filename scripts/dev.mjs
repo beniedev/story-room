@@ -11,6 +11,11 @@ if (!host || host.startsWith('--')) {
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+try {
+  process.loadEnvFile(path.join(root, '.env.local'));
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
 const env = {
   ...process.env,
   STORY_HOST: host,
