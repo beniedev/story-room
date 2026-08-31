@@ -21,10 +21,18 @@ export interface Summary extends PromptSource {
   sourceSectionIds: string[];
 }
 
+export interface SectionBlock {
+  id: string;
+  kind: 'user' | 'assistant';
+  content: string;
+}
+
 export interface Section {
   id: string;
   title: string;
   content: string;
+  note?: string;
+  blocks?: SectionBlock[];
 }
 
 export interface Chapter {
@@ -67,6 +75,7 @@ export type PromptLayer =
   | 'world'
   | 'canon'
   | 'summary'
+  | 'note'
   | 'manuscript'
   | 'instruction';
 

@@ -87,6 +87,24 @@ const validateSource = (value: unknown, label: string) => {
   requiredBoolean(value.includeInPrompt, `${label}启用状态`);
 };
 
+const validateSection = (value: unknown) => {
+  if (!isRecord(value)) throw new StoreInputError('Section 数据无效。');
+  validId(requiredString(value.id, 'Section ID'));
+  requiredString(value.title, 'Section 标题');
+  requiredString(value.content, 'Section 正文');
+  if (value.note !== undefined) requiredString(value.note, 'Section 注释');
+  if (value.blocks !== undefined) {
+    for (const block of requiredArray(value.blocks, 'Section blocks')) {
+      if (!isRecord(block)) throw new StoreInputError('Section block 数据无效。');
+      validId(requiredString(block.id, 'Section block ID'));
+      if (block.kind !== 'user' && block.kind !== 'assistant') {
+        throw new StoreInputError('Section block kind 无效。');
+      }
+      requiredString(block.content, 'Section block 正文');
+    }
+  }
+};
+
 const validateBook = (book: Book) => {
   if (!isRecord(book)) throw new StoreInputError('Book 数据无效。');
   validId(requiredString(book.id, 'Book ID'));
@@ -113,12 +131,7 @@ const validateBook = (book: Book) => {
     if (!isRecord(chapter)) throw new StoreInputError('Chapter 数据无效。');
     validId(requiredString(chapter.id, 'Chapter ID'));
     requiredString(chapter.title, 'Chapter 标题');
-    for (const section of requiredArray(chapter.sections, 'Section')) {
-      if (!isRecord(section)) throw new StoreInputError('Section 数据无效。');
-      validId(requiredString(section.id, 'Section ID'));
-      requiredString(section.title, 'Section 标题');
-      requiredString(section.content, 'Section 正文');
-    }
+    for (const section of requiredArray(chapter.sections, 'Section')) validateSection(section);
   }
   for (const branch of requiredArray(book.branches, 'Branch')) {
     if (!isRecord(branch)) throw new StoreInputError('Branch 数据无效。');
@@ -251,7 +264,9 @@ export class StoryStore {
       }))),
     })));
 
-    return { ...meta, characters, worldRules, canonFacts, summaries, chapters };
+    const loaded = { ...meta, characters, worldRules, canonFacts, summaries, chapters };
+    validateBook(loaded);
+    return loaded;
   }
 
   async saveBook(book: Book): Promise<Book> {

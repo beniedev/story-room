@@ -16,16 +16,12 @@ describe('writing UI contract', () => {
     expect(source).toContain('.manuscript');
   });
 
-  it('makes the restricted first-person mode and prompt plan visible', async () => {
+  it('keeps the restricted first-person mode in the writing menu', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain('角色模式 · 第一视角');
     expect(source).toContain('第一人称连续正文生成');
     expect(source).toContain('selectedCharacterId');
-    expect(source).toContain('Prompt 计划');
-    expect(source).toContain('按实际装入顺序排列');
-    expect(source).toContain('aria-describedby="prompt-dialog-description"');
-    expect(source).toContain('data-dialog-close');
-    expect(source).toContain('onCancel=');
+    expect(source).toContain('className="writer-menu-modes"');
   });
 
   it('keeps mobile reflow and touch/focus contracts explicit', async () => {
@@ -43,6 +39,9 @@ describe('writing UI contract', () => {
     expect(source).toContain('className="writer-context-progress"');
     expect(source).toContain('className="writer-tool-row"');
     expect(source).toContain('role="group" aria-label="写作工具"');
+    expect(source).toContain('className="book-settings-button button-with-icon writer-book-settings-button"');
+    expect(source).toContain('<BookMarked aria-hidden="true" /><span>设定</span>');
+    expect(source).toContain('className="writer-tool-actions"');
     expect(source).toContain('className="writer-section-title"');
     expect(source).toContain('className="writer-action-menu"');
     expect(source).toContain('className="writer-menu-modes"');
@@ -52,6 +51,26 @@ describe('writing UI contract', () => {
     expect(source).toContain('restoreShelfFocus.current = true');
     expect(source).not.toContain('上一小节');
     expect(source).not.toContain('下一小节');
+    expect(source).not.toContain('查看当前 Prompt');
+  });
+
+  it('keeps section notes and editable turns inside the continuous manuscript', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(app).toContain('className="writer-section-note"');
+    expect(app).toContain('本节注释');
+    expect(app).toContain('发送时排列在当前正文前');
+    expect(app).toContain('className="manuscript-block"');
+    expect(app).toContain('className="writer-block-actions"');
+    expect(app).toContain('重新生成所选 AI 输出');
+    expect(app).toContain('编辑所选片段');
+    expect(app).toContain('删除所选片段');
+    expect(app).toContain('只会删除当前选中的这一块用户输入或 AI 输出');
+    expect(app).toContain('className="manuscript-dialogue"');
+    expect(styles).toContain('--manuscript-user: #4a354d');
+    expect(styles).toContain('--manuscript-ai: #73539a');
+    expect(styles).toContain('--manuscript-dialogue: #94600d');
+    expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
   });
 
   it('uses local-first autosave, a real export action, and a compact book drawer', async () => {
@@ -72,7 +91,8 @@ describe('writing UI contract', () => {
     expect(source).toContain("openNameDialog({ kind: 'rename-chapter'");
     expect(source).not.toContain("openNameDialog({ kind: 'rename-section'");
     expect(source).toContain('id="section-title-dialog-heading"');
-    expect(source).toContain("if (id !== sectionId) setDraft('')");
+    expect(source).toContain('if (id !== sectionId) {');
+    expect(source).toContain("setDraftInstruction('')");
     expect(source).toContain('toggleChapterSelection');
     expect(source).toContain('toggleSectionSelection');
     expect(source).toContain("kind: 'selection'");

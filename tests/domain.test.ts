@@ -82,6 +82,33 @@ describe('context plan', () => {
     ]);
   });
 
+  it('places only the active Section note before its manuscript', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const current = book.chapters[0]?.sections[0];
+    if (!current) throw new Error('fixture section missing');
+    current.note = 'Current section note';
+    book.chapters[0]?.sections.push({
+      id: 'book-a-other-section',
+      title: 'Other section',
+      content: 'Other manuscript',
+      note: 'Other section note',
+    });
+
+    const plan = buildContextPlan(book, {
+      sectionId: current.id,
+      mode: 'author',
+      instruction: 'Continue ALPHA',
+    });
+    const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
+    const manuscriptIndex = plan.included.findIndex((item) => item.layer === 'manuscript');
+
+    expect(noteIndex).toBe(manuscriptIndex - 1);
+    expect(plan.included[noteIndex]?.sourceId).toBe('book-a-section:note');
+    expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
+    expect(plan.prompt).toContain('Current section note');
+    expect(plan.prompt).not.toContain('Other section note');
+  });
+
   it('rejects a character that is not in the active Book', () => {
     const bookA = makeBook('book-a', 'ALPHA');
     expect(() => buildContextPlan(bookA, {

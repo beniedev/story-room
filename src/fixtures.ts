@@ -1,4 +1,4 @@
-import type { Book, CharacterCard, Chapter } from './types';
+import type { Book, CharacterCard, Chapter, SectionBlock } from './types';
 
 interface CharacterSeed {
   name: string;
@@ -13,7 +13,7 @@ interface BookSeed {
   characters: CharacterSeed[];
   worldRule: { title: string; content: string };
   canon: { title: string; content: string };
-  chapters: Array<{ title: string; sections: Array<{ title: string; content?: string }> }>;
+  chapters: Array<{ title: string; sections: Array<{ title: string; content?: string; note?: string; blocks?: SectionBlock[] }> }>;
 }
 
 const toCharacters = (bookId: string, seeds: CharacterSeed[]): CharacterCard[] => seeds.map((seed, index) => ({
@@ -32,6 +32,8 @@ const toChapters = (bookId: string, seeds: BookSeed['chapters']): Chapter[] => s
     id: `${bookId}-section-${chapterIndex + 1}-${sectionIndex + 1}`,
     title: section.title,
     content: section.content ?? '',
+    ...(section.note === undefined ? {} : { note: section.note }),
+    ...(section.blocks === undefined ? {} : { blocks: section.blocks }),
   })),
 }));
 
@@ -89,6 +91,7 @@ export const createExampleBooks = (): Book[] => [
           {
             title: '观测窗前',
             content: '夜班开始后的第七码，米拉发现了那束光。\n\n它没有出现在任何预报里，却沿着观测窗的边缘稳定移动，像一行被刻意留下的句子。她关掉自动校准，玻璃上的微光仍然没有消失。',
+            blocks: [{ id: 'the-observatory-block-1', kind: 'assistant', content: '玻璃上的微光仍然没有消失。' }],
           },
           { title: '迟到四小时的问候' },
           { title: '无人签收的坐标' },

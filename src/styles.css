@@ -14,6 +14,9 @@
   --muted: #6b6f73;
   --accent: #57466f;
   --accent-strong: #46345f;
+  --manuscript-user: #2f3437;
+  --manuscript-ai: #57466f;
+  --manuscript-dialogue: #8a5a08;
   --primary-text: #ffffff;
   --danger: #a01515;
   --focus: #6b4fa0;
@@ -31,6 +34,9 @@
   --muted: #765f78;
   --accent: #73539a;
   --accent-strong: #5e3f83;
+  --manuscript-user: #4a354d;
+  --manuscript-ai: #73539a;
+  --manuscript-dialogue: #94600d;
   --primary-text: #ffffff;
   --focus: #694292;
   --radius-card: 10px;
@@ -428,18 +434,26 @@ h3 {
 }
 
 .writer-tool-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   width: min(100%, 72ch);
   margin-inline: auto;
   padding: 0.2rem clamp(0.45rem, 2vw, 0.8rem);
 }
 
 .writer-tool-row .icon-button {
-  width: 100%;
+  width: 44px;
+  min-width: 44px;
   background: var(--surface);
   color: var(--accent-strong);
+}
+
+.writer-tool-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.3rem;
 }
 
 .writer-section-title {
@@ -493,7 +507,8 @@ h3 {
 }
 
 .manuscript {
-  display: block;
+  display: grid;
+  align-content: start;
   width: min(100%, 72ch);
   min-height: calc(100dvh - 9.5rem);
   margin-inline: auto;
@@ -506,6 +521,51 @@ h3 {
   line-height: 1.72;
   text-align: start;
   overflow-wrap: break-word;
+}
+
+.manuscript-block {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0.35rem 0.25rem;
+  border-radius: var(--radius-control);
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  line-height: inherit;
+  text-align: start;
+  white-space: pre-wrap;
+}
+
+.manuscript-block[data-kind="user"] {
+  color: var(--manuscript-user);
+  font-weight: 700;
+}
+
+.manuscript-block[data-kind="assistant"] {
+  color: var(--manuscript-ai);
+}
+
+.manuscript-block[data-kind="user"]:hover,
+.manuscript-block[data-kind="user"][aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--manuscript-user);
+}
+
+.manuscript-block[data-kind="assistant"]:hover,
+.manuscript-block[data-kind="assistant"][aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--manuscript-ai);
+}
+
+.manuscript-dialogue {
+  color: var(--manuscript-dialogue);
+}
+
+.empty-manuscript {
+  margin: 0;
+  color: var(--muted);
 }
 
 .draft-preview {
@@ -552,6 +612,21 @@ h3 {
   resize: none;
 }
 
+.writer-block-actions {
+  position: absolute;
+  inset-block-end: calc(100% + 0.55rem);
+  inset-inline-start: 0;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.writer-block-actions .icon-button {
+  background: transparent;
+}
+
 .writer-action-menu {
   position: relative;
 }
@@ -581,10 +656,12 @@ h3 {
   display: grid;
   gap: 0.25rem;
   width: min(18rem, calc(100vw - 1.2rem));
+  max-height: calc(100dvh - 6rem);
   padding: 0.4rem;
   border-radius: var(--radius-card);
   outline: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
   background: var(--surface);
+  overflow: auto;
 }
 
 .writer-menu-action {
@@ -613,6 +690,44 @@ h3 {
   padding: 0.55rem;
   border-radius: var(--radius-control);
   background: var(--surface-soft);
+}
+
+.writer-section-note {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.55rem;
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.writer-section-note > span {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text);
+}
+
+.writer-section-note svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.writer-section-note textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.writer-section-note small {
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+#edit-block-input {
+  min-height: 10rem;
+  resize: vertical;
 }
 
 .writer-send-button {
@@ -1279,19 +1394,6 @@ h3 {
   padding: 0.75rem;
   color: var(--muted);
   font-size: 0.82rem;
-}
-
-.prompt-dialog {
-  width: min(39rem, 96vw);
-  max-height: min(90vh, 58rem);
-  margin: auto 0 auto auto;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-card) 0 0 var(--radius-card);
-  background: var(--page);
-  color: var(--text);
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 
 .settings-drawer {
@@ -2024,14 +2126,6 @@ h3 {
 
   .book-rail {
     padding: 0.65rem;
-  }
-
-  .prompt-dialog {
-    width: 100vw;
-    max-height: 92vh;
-    margin: auto 0 0;
-    border-radius: var(--radius-card) var(--radius-card) 0 0;
-    padding-block-end: env(safe-area-inset-bottom);
   }
 
   .settings-drawer,

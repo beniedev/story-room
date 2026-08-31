@@ -62,6 +62,24 @@ const validateSource = (value: unknown, label: string) => {
   if (typeof value.includeInPrompt !== 'boolean') throw new HttpError(`${label}启用状态无效。`);
 };
 
+const validateSection = (value: unknown) => {
+  if (!isRecord(value)) throw new HttpError('Section 数据无效。');
+  validId(value.id, 'Section ID');
+  requiredString(value.title, 'Section 标题');
+  requiredString(value.content, 'Section 正文');
+  if (value.note !== undefined) requiredString(value.note, 'Section 注释');
+  if (value.blocks !== undefined) {
+    for (const block of requiredArray(value.blocks, 'Section blocks')) {
+      if (!isRecord(block)) throw new HttpError('Section block 数据无效。');
+      validId(block.id, 'Section block ID');
+      if (block.kind !== 'user' && block.kind !== 'assistant') {
+        throw new HttpError('Section block kind 无效。');
+      }
+      requiredString(block.content, 'Section block 正文');
+    }
+  }
+};
+
 function validateBook(value: unknown): asserts value is Book {
   if (!isRecord(value)) throw new HttpError('Book 数据无效。');
   validId(value.id, 'Book ID');
@@ -90,12 +108,7 @@ function validateBook(value: unknown): asserts value is Book {
     if (!isRecord(chapter)) throw new HttpError('Chapter 数据无效。');
     validId(chapter.id, 'Chapter ID');
     requiredString(chapter.title, 'Chapter 标题');
-    for (const section of requiredArray(chapter.sections, 'Section')) {
-      if (!isRecord(section)) throw new HttpError('Section 数据无效。');
-      validId(section.id, 'Section ID');
-      requiredString(section.title, 'Section 标题');
-      requiredString(section.content, 'Section 正文');
-    }
+    for (const section of requiredArray(chapter.sections, 'Section')) validateSection(section);
   }
   for (const branch of requiredArray(value.branches, 'Branch')) {
     if (!isRecord(branch)) throw new HttpError('Branch 数据无效。');

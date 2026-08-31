@@ -131,6 +131,17 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
     ),
     block(
       book.id,
+      'note',
+      'dynamic',
+      `${section.id}:note`,
+      '本节注释',
+      section.note ?? '',
+      '仅对当前 Section 生效的写作注释',
+      Boolean(section.note?.trim()),
+      false,
+    ),
+    block(
+      book.id,
       'manuscript',
       'dynamic',
       section.id,

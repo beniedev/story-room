@@ -35,7 +35,20 @@ describe('story store', () => {
         includeInPrompt: true,
         sourceSectionIds: ['section-one'],
       }],
-      chapters: [{ id: 'chapter-one', title: 'Chapter', sections: [{ id: 'section-one', title: 'Section', content }] }],
+      chapters: [{
+        id: 'chapter-one',
+        title: 'Chapter',
+        sections: [{
+          id: 'section-one',
+          title: 'Section',
+          content,
+          note: '只在当前 Section 生效。',
+          blocks: [
+            { id: 'section-one-user', kind: 'user', content: '先观察窗外。' },
+            { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
+          ],
+        }],
+      }],
       branches: [],
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
@@ -44,6 +57,11 @@ describe('story store', () => {
     const loaded = await store.loadBook(book.id);
 
     expect(loaded.chapters[0]?.sections[0]?.content).toBe(content);
+    expect(loaded.chapters[0]?.sections[0]?.note).toBe('只在当前 Section 生效。');
+    expect(loaded.chapters[0]?.sections[0]?.blocks).toEqual([
+      { id: 'section-one-user', kind: 'user', content: '先观察窗外。' },
+      { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
+    ]);
     expect(loaded.plotOutline).toBe('Follow the signal.');
     expect(await readFile(path.join(root, 'books', book.id, 'canon', 'fact-one.json'), 'utf8')).toContain('A fact.');
     expect(await readFile(path.join(root, 'books', book.id, 'summaries', 'summary-one.json'), 'utf8')).toContain('sourceSectionIds');
@@ -76,6 +94,31 @@ describe('story store', () => {
     expect((await store.listBooks()).map((item) => item.id)).toEqual(expect.arrayContaining(['book-one', 'book-two']));
     expect((await store.loadBook('book-one')).chapters[0]?.sections[0]?.content).toBe('One');
     expect((await store.loadBook('book-two')).chapters[0]?.sections[0]?.content).toBe('Two');
+  });
+
+  it('loads a legacy Section without optional note or blocks', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book: Book = {
+      id: 'legacy-section-book',
+      title: 'Legacy Section',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{ id: 'legacy-chapter', title: 'Chapter', sections: [{ id: 'legacy-section', title: 'Section', content: 'Old prose' }] }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    await store.saveBook(book);
+    const loaded = await store.loadBook(book.id);
+
+    expect(loaded.chapters[0]?.sections[0]?.content).toBe('Old prose');
+    expect(loaded.chapters[0]?.sections[0]?.note).toBeUndefined();
+    expect(loaded.chapters[0]?.sections[0]?.blocks).toBeUndefined();
   });
 
   it('upgrades present legacy fixtures without restoring a deliberately deleted example', async () => {

@@ -17,8 +17,10 @@ import {
   Library,
   ListChecks,
   Menu,
+  MessageSquareText,
   Pencil,
   Plus,
+  RefreshCw,
   ScrollText,
   Settings,
   Sparkles,
@@ -51,6 +53,7 @@ import type {
   ContextPlan,
   GenerationMode,
   PromptCacheBand,
+  SectionBlock,
   ThemeName,
   WorldRule,
 } from './types';
@@ -76,6 +79,7 @@ const generalPromptOrder = [
   { id: 'template-characters', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
   { id: 'template-outline', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
   { id: 'template-mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
+  { id: 'template-note', title: '本节注释', reason: '只指导当前小节，位于正文前', cacheBand: 'dynamic' },
   { id: 'template-manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
   { id: 'template-instruction', title: '本轮指令', reason: '当前这一次的写作输入', cacheBand: 'dynamic' },
 ] satisfies Array<{ id: string; title: string; reason: string; cacheBand: PromptCacheBand }>;
@@ -92,6 +96,18 @@ const compactTokenCount = (value: number) => new Intl.NumberFormat('en', {
   notation: 'compact',
   maximumFractionDigits: 1,
 }).format(value).toLowerCase();
+
+const sectionBlocks = (section: Book['chapters'][number]['sections'][number]): SectionBlock[] => {
+  if (section.blocks?.length) return section.blocks;
+  return section.content.trim()
+    ? [{ id: `${section.id}-legacy-block`, kind: 'assistant', content: section.content }]
+    : [];
+};
+
+const blocksAsContent = (blocks: SectionBlock[]) => blocks
+  .map((item) => item.content.trim())
+  .filter(Boolean)
+  .join('\n\n');
 
 const isCachedBook = (value: unknown, bookId: string): value is Book => {
   if (!value || typeof value !== 'object') return false;
@@ -145,7 +161,7 @@ function App() {
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [instruction, setInstruction] = useState('让观测站出现一个必须由人物回应的新变化。');
   const [draft, setDraft] = useState('');
-  const [promptPlan, setPromptPlan] = useState<ContextPlan | null>(null);
+  const [draftInstruction, setDraftInstruction] = useState('');
   const [theme, setTheme] = useState<ThemeName>(() =>
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() =>
@@ -155,12 +171,13 @@ function App() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(api.runtime === 'cloud' ? '正在打开私有云端书库…' : '正在打开本地书库…');
-  const promptDialog = useRef<HTMLDialogElement>(null);
-  const promptTrigger = useRef<HTMLElement | null>(null);
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const mainContent = useRef<HTMLElement>(null);
   const restoreShelfFocus = useRef(false);
+  const restoreWriterFocus = useRef(false);
+  const [bookSettingsRequest, setBookSettingsRequest] = useState(0);
+  const [returnToWriterAfterSettings, setReturnToWriterAfterSettings] = useState(false);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -210,6 +227,12 @@ function App() {
   }, [view]);
 
   useEffect(() => {
+    if (view !== 'write' || !restoreWriterFocus.current) return;
+    restoreWriterFocus.current = false;
+    mainContent.current?.querySelector<HTMLElement>('.writer-book-settings-button')?.focus();
+  }, [view]);
+
+  useEffect(() => {
     void (async () => {
       try {
         const entries = await api.listBooks();
@@ -255,14 +278,6 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [book, dirty]);
 
-  useEffect(() => {
-    const dialog = promptDialog.current;
-    if (promptPlan && dialog && !dialog.open) {
-      dialog.showModal();
-      dialog.querySelector<HTMLElement>('[data-dialog-close]')?.focus();
-    }
-  }, [promptPlan]);
-
   const openBook = async (bookId: string) => {
     const remote = await api.loadBook(bookId);
     const cached = readCachedBook(bookId);
@@ -273,6 +288,7 @@ function App() {
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setDraft('');
+    setDraftInstruction('');
     setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
     setView('shelf');
   };
@@ -346,17 +362,6 @@ function App() {
   const hasCharacterSelection = () => mode !== 'character'
     || Boolean(book?.characters.some((character) => character.id === selectedCharacterId));
 
-  const showPrompt = () => withBusy(async () => {
-    if (!hasCharacterSelection()) {
-      setStatus('角色模式需要先选择当前 Book 的角色。');
-      return;
-    }
-    promptTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const saved = await saveCurrent();
-    setPromptPlan(await api.contextPlan(generationRequest(saved)));
-    setStatus('Prompt 计划已按实际装入顺序生成。');
-  });
-
   const previewGeneration = () => withBusy(async () => {
     if (!hasCharacterSelection()) {
       setStatus('角色模式需要先选择当前 Book 的角色。');
@@ -364,37 +369,82 @@ function App() {
     }
     const saved = await saveCurrent();
     const result = await api.generate(generationRequest(saved));
-    setPromptPlan(result.plan);
     setDraft(result.draft);
-    promptDialog.current?.close();
-    setPromptPlan(null);
+    setDraftInstruction(instruction);
     setStatus('Fake Provider 已生成待应用正文。');
   });
 
   const applyDraft = () => {
     if (!draft || !section) return;
+    const additions: SectionBlock[] = [
+      ...(draftInstruction.trim()
+        ? [{ id: makeId('block'), kind: 'user' as const, content: draftInstruction.trim() }]
+        : []),
+      { id: makeId('block'), kind: 'assistant', content: draft },
+    ];
     changeBook((current) => ({
       ...current,
       chapters: current.chapters.map((chapter) => ({
         ...chapter,
         sections: chapter.sections.map((item) => item.id === section.id
-          ? { ...item, content: `${item.content.trimEnd()}\n\n${draft}` }
+          ? (() => {
+              const blocks = [...sectionBlocks(item), ...additions];
+              return { ...item, blocks, content: blocksAsContent(blocks) };
+            })()
           : item),
       })),
     }));
     setDraft('');
+    setDraftInstruction('');
     setStatus('待应用正文已加入当前 Section；请保存。');
   };
 
-  const updateSection = (content: string) => {
+  const updateSectionBlocks = (blocks: SectionBlock[]) => {
     if (!section) return;
     changeBook((current) => ({
       ...current,
       chapters: current.chapters.map((chapter) => ({
         ...chapter,
-        sections: chapter.sections.map((item) => item.id === section.id ? { ...item, content } : item),
+        sections: chapter.sections.map((item) => item.id === section.id
+          ? { ...item, blocks, content: blocksAsContent(blocks) }
+          : item),
       })),
     }));
+  };
+
+  const updateSectionNote = (note: string) => {
+    if (!section) return;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === section.id ? { ...item, note } : item),
+      })),
+    }));
+  };
+
+  const regenerateBlock = (blockId: string) => {
+    if (!section) return;
+    const target = sectionBlocks(section).find((item) => item.id === blockId);
+    if (!target || target.kind !== 'assistant') return;
+    void withBusy(async () => {
+      const saved = await saveCurrent();
+      const result = await api.generate(generationRequest(saved));
+      changeBook((current) => ({
+        ...current,
+        chapters: current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== section.id) return item;
+            const blocks = sectionBlocks(item).map((block) => block.id === blockId
+              ? { ...block, content: result.draft }
+              : block);
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        })),
+      }));
+      setStatus('已重新生成所选 AI 正文片段。');
+    });
   };
 
   const createBook = (title: string) => {
@@ -612,19 +662,28 @@ function App() {
             contextTokens={promptPreview?.estimatedTokens ?? 0}
             maxContext={activeProviderProfile?.maxContext ?? 0}
             onBack={navigateFromHeader}
+            onOpenBookSettings={() => {
+              setReturnToWriterAfterSettings(true);
+              setView('shelf');
+              setBookSettingsRequest((current) => current + 1);
+            }}
             onExport={exportCurrentBook}
             onOpenSettings={openSettings}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
             onInstructionChange={setInstruction}
-            onSectionChange={updateSection}
+            onSectionBlocksChange={updateSectionBlocks}
+            onSectionNoteChange={updateSectionNote}
+            onRegenerateBlock={regenerateBlock}
             onSectionTitleChange={(title) => {
               if (sectionChapter && section) renameSection(sectionChapter.id, section.id, title);
             }}
-            onShowPrompt={() => void showPrompt()}
             onGenerate={() => void previewGeneration()}
             onApplyDraft={applyDraft}
-            onDiscardDraft={() => setDraft('')}
+            onDiscardDraft={() => {
+              setDraft('');
+              setDraftInstruction('');
+            }}
           />
         ) : book ? (
           <Bookshelf
@@ -632,9 +691,20 @@ function App() {
             library={library}
             selectedSectionId={sectionId}
             selectedCharacterId={selectedCharacterId}
+            openBookSettingsRequest={bookSettingsRequest}
+            onBookSettingsOpened={() => setBookSettingsRequest(0)}
+            onBookSettingsClose={() => {
+              if (!returnToWriterAfterSettings || !sectionId) return;
+              setReturnToWriterAfterSettings(false);
+              restoreWriterFocus.current = true;
+              setView('write');
+            }}
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => {
-              if (id !== sectionId) setDraft('');
+              if (id !== sectionId) {
+                setDraft('');
+                setDraftInstruction('');
+              }
               setSectionId(id);
               setView('write');
             }}
@@ -673,15 +743,6 @@ function App() {
         onClose={() => settingsTrigger.current?.focus()}
       />
 
-      <PromptDialog
-        dialogRef={promptDialog}
-        plan={promptPlan}
-        onClose={() => {
-          setPromptPlan(null);
-          promptTrigger.current?.focus();
-          promptTrigger.current = null;
-        }}
-      />
     </div>
   );
 }
@@ -698,14 +759,16 @@ interface WriterProps {
   contextTokens: number;
   maxContext: number;
   onBack: () => void;
+  onOpenBookSettings: () => void;
   onExport: () => void;
   onOpenSettings: () => void;
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
-  onSectionChange: (value: string) => void;
+  onSectionBlocksChange: (blocks: SectionBlock[]) => void;
+  onSectionNoteChange: (note: string) => void;
+  onRegenerateBlock: (blockId: string) => void;
   onSectionTitleChange: (value: string) => void;
-  onShowPrompt: () => void;
   onGenerate: () => void;
   onApplyDraft: () => void;
   onDiscardDraft: () => void;
@@ -714,10 +777,17 @@ interface WriterProps {
 function Writer(props: WriterProps) {
   const selectedCharacter = props.book.characters.find((character) => character.id === props.selectedCharacterId);
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
+  const blocks = props.section ? sectionBlocks(props.section) : [];
   const [sectionTitle, setSectionTitle] = useState('');
+  const [selectedBlockId, setSelectedBlockId] = useState('');
+  const [blockDraft, setBlockDraft] = useState('');
   const titleDialog = useRef<HTMLDialogElement>(null);
   const titleTrigger = useRef<HTMLElement | null>(null);
   const actionMenu = useRef<HTMLDetailsElement>(null);
+  const editBlockDialog = useRef<HTMLDialogElement>(null);
+  const deleteBlockDialog = useRef<HTMLDialogElement>(null);
+  const blockActionTrigger = useRef<HTMLElement | null>(null);
+  const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
 
   const contextPercent = props.maxContext > 0
     ? Math.round((props.contextTokens / props.maxContext) * 100)
@@ -742,6 +812,35 @@ function Writer(props: WriterProps) {
   const runMenuAction = (action: () => void) => {
     closeActionMenu(true);
     action();
+  };
+
+  const openEditBlockDialog = () => {
+    if (!selectedBlock) return;
+    blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setBlockDraft(selectedBlock.content);
+    editBlockDialog.current?.showModal();
+  };
+
+  const openDeleteBlockDialog = () => {
+    if (!selectedBlock) return;
+    blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    deleteBlockDialog.current?.showModal();
+  };
+
+  const restoreBlockActionFocus = () => {
+    window.requestAnimationFrame(() => {
+      if (blockActionTrigger.current?.isConnected) blockActionTrigger.current.focus();
+      else document.querySelector<HTMLElement>('.writer-menu-trigger')?.focus();
+    });
+  };
+
+  const renderBlockContent = (block: SectionBlock) => {
+    if (block.kind === 'user') return block.content;
+    return block.content.split(/(“[^”]*”|"[^"\n]*")/g).map((part, index) => (
+      /^“[^”]*”$|^"[^"\n]*"$/.test(part)
+        ? <span className="manuscript-dialogue" key={`${block.id}-dialogue-${index}`}>{part}</span>
+        : part
+    ));
   };
 
   return (
@@ -769,34 +868,35 @@ function Writer(props: WriterProps) {
         <div className="writer-tool-row" role="group" aria-label="写作工具">
           <button
             type="button"
-            className="icon-button"
-            onClick={props.onShowPrompt}
-            disabled={props.busy}
-            aria-label="查看当前 Prompt"
-            title="查看当前 Prompt"
-          ><Layers3 aria-hidden="true" /></button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={openTitleDialog}
-            disabled={!props.section}
-            aria-label="修改小节名称"
-            title="修改小节名称"
-          ><Pencil aria-hidden="true" /></button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={props.onExport}
-            aria-label="导出当前书目"
-            title="导出当前书目"
-          ><Download aria-hidden="true" /></button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={props.onOpenSettings}
-            aria-label="打开设置"
-            title="设置"
-          ><Settings aria-hidden="true" /></button>
+            className="book-settings-button button-with-icon writer-book-settings-button"
+            onClick={props.onOpenBookSettings}
+            aria-label="打开本书设定"
+            title="本书设定"
+          ><BookMarked aria-hidden="true" /><span>设定</span></button>
+          <div className="writer-tool-actions">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={openTitleDialog}
+              disabled={!props.section}
+              aria-label="修改小节名称"
+              title="修改小节名称"
+            ><Pencil aria-hidden="true" /></button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={props.onExport}
+              aria-label="导出当前书目"
+              title="导出当前书目"
+            ><Download aria-hidden="true" /></button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={props.onOpenSettings}
+              aria-label="打开设置"
+              title="设置"
+            ><Settings aria-hidden="true" /></button>
+          </div>
         </div>
 
         <p className="writer-section-title" title={`${props.chapterTitle} · ${props.section?.title ?? ''}`}>
@@ -807,13 +907,26 @@ function Writer(props: WriterProps) {
 
       <section className="manuscript-wrap" aria-labelledby="manuscript-label">
         <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
-        <textarea
-          className="manuscript"
-          value={props.section?.content ?? ''}
-          onChange={(event) => props.onSectionChange(event.target.value)}
-          aria-label="连续小说正文"
-          spellCheck
-        />
+        <div className="manuscript" aria-label="连续小说正文">
+          {blocks.map((block) => (
+            <button
+              type="button"
+              className="manuscript-block"
+              data-kind={block.kind}
+              aria-pressed={selectedBlockId === block.id}
+              aria-label={`${block.kind === 'user' ? '用户输入' : 'AI 输出'}：${block.content}`}
+              onClick={() => {
+                actionMenu.current?.removeAttribute('open');
+                setSelectedBlockId((current) => current === block.id ? '' : block.id);
+              }}
+              key={block.id}
+            >
+              <span className="sr-only">{block.kind === 'user' ? '用户输入：' : 'AI 输出：'}</span>
+              <span className="manuscript-block-copy">{renderBlockContent(block)}</span>
+            </button>
+          ))}
+          {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
+        </div>
       </section>
 
       {props.draft && (
@@ -831,6 +944,35 @@ function Writer(props: WriterProps) {
       )}
 
       <form className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
+        {selectedBlock && (
+          <div className="writer-block-actions" role="group" aria-label={`所选${selectedBlock.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => props.onRegenerateBlock(selectedBlock.id)}
+              disabled={props.busy || selectedBlock.kind !== 'assistant'}
+              aria-label="重新生成所选 AI 输出"
+              title={selectedBlock.kind === 'assistant' ? '重新生成' : '只有 AI 输出可以重新生成'}
+            ><RefreshCw aria-hidden="true" /></button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={openEditBlockDialog}
+              disabled={props.busy}
+              aria-label="编辑所选片段"
+              title="编辑"
+            ><Pencil aria-hidden="true" /></button>
+            <button
+              type="button"
+              className="icon-button danger-icon"
+              onClick={openDeleteBlockDialog}
+              disabled={props.busy}
+              aria-haspopup="dialog"
+              aria-label="删除所选片段"
+              title="删除"
+            ><Trash2 aria-hidden="true" /></button>
+          </div>
+        )}
         <details
           ref={actionMenu}
           className="writer-action-menu"
@@ -840,7 +982,7 @@ function Writer(props: WriterProps) {
             closeActionMenu(true);
           }}
         >
-          <summary className="icon-button writer-menu-trigger" title="写作操作">
+          <summary className="icon-button writer-menu-trigger" title="写作操作" onClick={() => setSelectedBlockId('')}>
             <Menu aria-hidden="true" />
             <span className="sr-only">打开写作操作</span>
           </summary>
@@ -880,6 +1022,18 @@ function Writer(props: WriterProps) {
                 </p>
               </div>
             )}
+            <label className="writer-section-note" htmlFor="section-note-input">
+              <span><MessageSquareText aria-hidden="true" />本节注释</span>
+              <textarea
+                id="section-note-input"
+                rows={4}
+                value={props.section?.note ?? ''}
+                onChange={(event) => props.onSectionNoteChange(event.target.value)}
+                placeholder="只写给当前小节的续写提示……"
+                spellCheck
+              />
+              <small>仅作用于本节；发送时排列在当前正文前。</small>
+            </label>
           </div>
         </details>
         <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '写作指令' : '角色行动或台词'}</label>
@@ -898,6 +1052,67 @@ function Writer(props: WriterProps) {
           title={props.busy ? '正在准备…' : '预览续写'}
         ><Sparkles aria-hidden="true" /></button>
       </form>
+
+      <dialog
+        className="name-dialog"
+        ref={editBlockDialog}
+        onClose={restoreBlockActionFocus}
+        onCancel={(event) => { event.preventDefault(); editBlockDialog.current?.close(); }}
+        aria-labelledby="edit-block-dialog-heading"
+      >
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          const content = blockDraft.trim();
+          if (!content || !selectedBlock) return;
+          props.onSectionBlocksChange(blocks.map((item) => item.id === selectedBlock.id
+            ? { ...item, content }
+            : item));
+          editBlockDialog.current?.close();
+        }}>
+          <header className="dialog-heading">
+            <h2 id="edit-block-dialog-heading">编辑{selectedBlock?.kind === 'user' ? '用户输入' : 'AI 输出'}</h2>
+            <button type="button" className="icon-button" onClick={() => editBlockDialog.current?.close()} aria-label="取消编辑片段" title="取消"><X aria-hidden="true" /></button>
+          </header>
+          <div className="name-dialog-body">
+            <label htmlFor="edit-block-input">片段内容</label>
+            <textarea id="edit-block-input" autoFocus required value={blockDraft} onChange={(event) => setBlockDraft(event.target.value)} spellCheck />
+            <div className="dialog-actions">
+              <button type="button" className="quiet-action" onClick={() => editBlockDialog.current?.close()}>取消</button>
+              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
+            </div>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog
+        className="confirm-dialog"
+        ref={deleteBlockDialog}
+        onClose={restoreBlockActionFocus}
+        onCancel={(event) => { event.preventDefault(); deleteBlockDialog.current?.close(); }}
+        aria-labelledby="delete-block-dialog-heading"
+        aria-describedby="delete-block-dialog-description"
+      >
+        <header className="dialog-heading">
+          <h2 id="delete-block-dialog-heading">删除所选片段</h2>
+          <button type="button" className="icon-button" onClick={() => deleteBlockDialog.current?.close()} aria-label="取消删除片段" title="取消"><X aria-hidden="true" /></button>
+        </header>
+        <div className="confirm-dialog-body">
+          <p id="delete-block-dialog-description">只会删除当前选中的这一块用户输入或 AI 输出，其他正文不会改变。</p>
+          <div className="dialog-actions">
+            <button type="button" className="quiet-action" onClick={() => deleteBlockDialog.current?.close()}>取消</button>
+            <button
+              type="button"
+              className="danger-action button-with-icon"
+              onClick={() => {
+                if (!selectedBlock) return;
+                props.onSectionBlocksChange(blocks.filter((item) => item.id !== selectedBlock.id));
+                setSelectedBlockId('');
+                deleteBlockDialog.current?.close();
+              }}
+            ><Trash2 aria-hidden="true" />删除这一块</button>
+          </div>
+        </div>
+      </dialog>
 
       <dialog
         className="name-dialog"
@@ -1021,6 +1236,9 @@ interface BookshelfProps {
   library: BookIndexEntry[];
   selectedSectionId: string;
   selectedCharacterId: string;
+  openBookSettingsRequest: number;
+  onBookSettingsOpened: () => void;
+  onBookSettingsClose: () => void;
   onOpenBook: (id: string) => void;
   onOpenSection: (id: string) => void;
   onCreateBook: (title: string) => void;
@@ -1085,6 +1303,13 @@ function Bookshelf(props: BookshelfProps) {
       deleteDialogRef.current.showModal();
     }
   }, [deleteDialog]);
+
+  useEffect(() => {
+    if (!props.openBookSettingsRequest || !bookSettingsDialog.current || bookSettingsDialog.current.open) return;
+    setBookSettingsView({ kind: 'root' });
+    bookSettingsDialog.current.showModal();
+    props.onBookSettingsOpened();
+  }, [props.openBookSettingsRequest]);
 
   useEffect(() => {
     setSelectionMode(false);
@@ -1217,6 +1442,7 @@ function Bookshelf(props: BookshelfProps) {
   const resetBookSettings = () => {
     setBookSettingsView({ kind: 'root' });
     bookSettingsTrigger.current?.focus();
+    props.onBookSettingsClose();
   };
 
   const setSettingsSectionOpen = (section: SettingsSection, open: boolean) => {
@@ -1900,83 +2126,6 @@ function SettingsDrawer({
         <h3 id="storage-heading">当前存储</h3>
         <p className="helper-copy">正文和资料会先自动保存到当前设备。{api.runtime === 'cloud' ? '联网时同时同步到你的私有云端书库。' : '本机 host 同时写入故事目录。'}</p>
       </section>
-    </dialog>
-  );
-}
-
-function PromptDialog({ dialogRef, plan, onClose }: {
-  dialogRef: React.RefObject<HTMLDialogElement | null>;
-  plan: ContextPlan | null;
-  onClose: () => void;
-}) {
-  const closeDialog = () => dialogRef.current?.close();
-
-  return (
-    <dialog
-      className="prompt-dialog"
-      ref={dialogRef}
-      onClose={onClose}
-      onCancel={(event) => { event.preventDefault(); closeDialog(); }}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          closeDialog();
-        }
-      }}
-      aria-labelledby="prompt-dialog-title"
-      aria-describedby="prompt-dialog-description"
-    >
-      <div className="dialog-heading">
-        <div>
-          <p className="eyebrow">将发送给 Provider 的输入</p>
-          <h2 id="prompt-dialog-title">Prompt 计划</h2>
-        </div>
-        <button type="button" className="icon-button" data-dialog-close autoFocus onClick={closeDialog} aria-label="关闭 Prompt 计划" title="关闭 Prompt 计划"><X aria-hidden="true" /></button>
-      </div>
-      {plan && (
-        <div className="prompt-plan">
-          <div className="plan-summary">
-            <span>{plan.included.length} 个已装入区块</span>
-            <strong>约 {plan.estimatedTokens.toLocaleString()} tokens</strong>
-          </div>
-          <div className="plan-context" aria-label="本次 Prompt 上下文">
-            <span><strong>Book</strong>{plan.bookId}</span>
-            <span><strong>模式</strong>{plan.mode === 'author' ? '作者模式' : '角色模式 · 第一视角'}</span>
-            {plan.mode === 'character' && <span><strong>视角角色</strong>{plan.included.find((item) => item.sourceId === plan.selectedCharacterId)?.title ?? '未选择'}</span>}
-          </div>
-          <p id="prompt-dialog-description" className="helper-copy">这里显示的是本次 Provider 输入和粗略容量估算，不是模型隐藏推理或计费记录。区块按实际装入顺序排列。</p>
-          <ol className="prompt-blocks">
-            {plan.included.map((item, index) => (
-              <li key={item.id}>
-                <details>
-                  <summary>
-                    <span className="layer-index" aria-label={`第 ${index + 1} 个区块，${item.layer}`}>
-                      <strong>{String(index + 1).padStart(2, '0')}</strong>
-                      <small>{item.layer}</small>
-                    </span>
-                    <span><strong>{item.title}</strong><small>{item.reason}</small></span>
-                    <span className="block-size">{item.charCount} 字符 · 约 {item.estimatedTokens} tokens</span>
-                  </summary>
-                  <dl>
-                    <div><dt>Book</dt><dd>{item.bookId}</dd></div>
-                    <div><dt>来源</dt><dd>{item.sourceId}</dd></div>
-                    <div><dt>权限</dt><dd>{item.readOnly ? '系统只读' : '本书可管理'}</dd></div>
-                  </dl>
-                  <pre>{item.content}</pre>
-                </details>
-              </li>
-            ))}
-          </ol>
-          {plan.excluded.length > 0 && (
-            <details className="excluded-sources">
-              <summary>{plan.excluded.length} 项未装入资料</summary>
-              <ul>
-                {plan.excluded.map((item) => <li key={item.id}><strong>{item.title}</strong><span>{item.reason}</span></li>)}
-              </ul>
-            </details>
-          )}
-        </div>
-      )}
     </dialog>
   );
 }
