@@ -14,7 +14,7 @@ describe('writing UI contract', () => {
     expect(source).toContain(':root[data-theme="manga"]');
     expect(source).toContain(':root[data-theme="gray"]');
     expect(source).toContain(':root[data-theme="purple"]');
-    expect(source).toContain('--surface-active: #faecf1');
+    expect(source).toContain('--surface-active: #f8dfe9');
     expect(source).toContain('.manuscript');
   });
 
@@ -196,9 +196,9 @@ describe('writing UI contract', () => {
     expect(app).toContain('删除所选片段');
     expect(app).toContain('只会删除当前选中的这一块用户输入或 AI 输出');
     expect(app).toContain('className="manuscript-dialogue"');
-    expect(styles).toContain('--manuscript-user: #4a354d');
-    expect(styles).toContain('--manuscript-ai: #73539a');
-    expect(styles).toContain('--manuscript-dialogue: #94600d');
+    expect(styles).toContain('--manuscript-user: #4a304a');
+    expect(styles).toContain('--manuscript-ai: #7a4697');
+    expect(styles).toContain('--manuscript-dialogue: #955200');
     expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
     expect(styles).toContain('color: color-mix(in srgb, var(--muted) 48%, transparent)');
     expect(styles).toContain('.manuscript-block-actions .icon-button:focus-visible');

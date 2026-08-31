@@ -54,28 +54,28 @@
 }
 
 :root[data-theme="manga"] {
-  --page: rgba(255, 250, 252, 0.92);
-  --surface: rgba(255, 255, 255, 0.88);
-  --surface-soft: #fff7f9;
-  --surface-active: #faecf1;
-  --field: #faecf1;
-  --text: #4a354d;
-  --muted: #765f78;
-  --accent: #73539a;
-  --accent-strong: #5e3f83;
-  --manuscript-user: #4a354d;
-  --manuscript-ai: #73539a;
-  --manuscript-dialogue: #94600d;
+  --page: #fff3f7;
+  --surface: rgba(255, 255, 255, 0.94);
+  --surface-soft: #fdebf2;
+  --surface-active: #f8dfe9;
+  --field: #f8e2ea;
+  --text: #4a304a;
+  --muted: #70506f;
+  --accent: #7a4697;
+  --accent-strong: #663981;
+  --manuscript-user: #4a304a;
+  --manuscript-ai: #7a4697;
+  --manuscript-dialogue: #955200;
   --primary-text: #ffffff;
   --danger: #a01515;
-  --focus: #694292;
-  --prompt-tone-1: #f2bfd5;
-  --prompt-tone-2: #dfa7cf;
-  --prompt-tone-3: #c68ac6;
-  --prompt-tone-4: #a76ab4;
-  --prompt-tone-5: #85599f;
-  --prompt-tone-6: #5e3f83;
-  --backdrop: rgba(35, 24, 37, 0.28);
+  --focus: #6f3f91;
+  --prompt-tone-1: #efb4cf;
+  --prompt-tone-2: #d994c4;
+  --prompt-tone-3: #bd75b9;
+  --prompt-tone-4: #9b58aa;
+  --prompt-tone-5: #7d4697;
+  --prompt-tone-6: #60357e;
+  --backdrop: rgba(49, 28, 51, 0.32);
   --radius-card: 10px;
   --radius-control: 5px;
 }
