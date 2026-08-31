@@ -1485,16 +1485,78 @@ h3 {
 }
 
 .prompt-composition-note,
-.prompt-composition-footnote,
-.prompt-composition-empty {
+.prompt-composition-footnote {
   margin: 0;
   color: var(--muted);
   font-size: 0.76rem;
   line-height: 1.5;
 }
 
-.prompt-composition-empty {
-  padding: 1rem 0 0;
+.prompt-composition-chart {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.prompt-proportion-figure {
+  display: grid;
+  grid-template-rows: minmax(22rem, 1fr) auto;
+  gap: 0.45rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.prompt-proportion-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 22rem;
+  padding: 3px;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--surface-soft);
+}
+
+.prompt-proportion-segment {
+  display: grid;
+  flex-basis: 0;
+  min-height: 1px;
+  place-items: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 76%, var(--surface));
+  color: var(--surface);
+  font-size: 0.6rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-proportion-segment:nth-child(3n + 2) {
+  background: color-mix(in srgb, var(--accent) 61%, var(--surface));
+}
+
+.prompt-proportion-segment:nth-child(3n) {
+  background: color-mix(in srgb, var(--accent) 47%, var(--surface));
+}
+
+.prompt-proportion-segment[data-cache-band="session"] {
+  background: var(--accent-strong);
+}
+
+.prompt-proportion-segment[data-cache-band="dynamic"] {
+  background: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  color: var(--accent-strong);
+}
+
+.prompt-proportion-segment[data-small="true"] > span {
+  display: none;
+}
+
+.prompt-proportion-figure figcaption {
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .prompt-composition-list {
@@ -1538,6 +1600,10 @@ h3 {
 }
 
 .prompt-composition-copy small {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
   overflow-wrap: anywhere;
 }
 
@@ -1547,7 +1613,14 @@ h3 {
   white-space: nowrap;
 }
 
+.prompt-composition-meta strong {
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .cache-band-label {
+  display: inline-flex;
   padding: 0.16rem 0.38rem;
   border-radius: 999px;
   background: var(--surface-active);

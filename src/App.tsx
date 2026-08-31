@@ -49,6 +49,7 @@ import type {
   CharacterCard,
   ContextPlan,
   GenerationMode,
+  PromptCacheBand,
   ThemeName,
   WorldRule,
 } from './types';
@@ -66,6 +67,25 @@ const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
 const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
+const generalPromptOrder = [
+  { id: 'template-contract', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
+  { id: 'template-book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
+  { id: 'template-style', title: '写作风格指导', reason: '全书共用的行文风格', cacheBand: 'stable' },
+  { id: 'template-world', title: '世界观条例', reason: '本书已启用的世界规则', cacheBand: 'stable' },
+  { id: 'template-characters', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
+  { id: 'template-outline', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
+  { id: 'template-mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
+  { id: 'template-manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
+  { id: 'template-instruction', title: '本轮指令', reason: '当前这一次的写作输入', cacheBand: 'dynamic' },
+] satisfies Array<{ id: string; title: string; reason: string; cacheBand: PromptCacheBand }>;
+
+const cacheBandLabel = (band: PromptCacheBand) => (
+  band === 'stable' ? '稳定前缀' : band === 'session' ? '模式层' : '每轮变化'
+);
+
+const promptShareLabel = (share: number) => (
+  share < 1 ? '<1%' : share < 10 ? `${share.toFixed(1)}%` : `${Math.round(share)}%`
+);
 
 const isCachedBook = (value: unknown, bookId: string): value is Book => {
   if (!value || typeof value !== 'object') return false;
@@ -141,7 +161,7 @@ function App() {
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
   const promptPreview = useMemo(() => {
-    if (!book || !section) return null;
+    if (view !== 'write' || !book || !section) return null;
     try {
       return composeContextPlan(book, {
         sectionId: section.id,
@@ -152,7 +172,7 @@ function App() {
     } catch {
       return null;
     }
-  }, [book, instruction, mode, section, selectedCharacterId]);
+  }, [book, instruction, mode, section, selectedCharacterId, view]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
@@ -1574,10 +1594,18 @@ function SettingsDrawer({
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
-  const stablePrefixCount = promptPlan?.included.filter((item) => item.cacheBand === 'stable').length ?? 0;
+  const compositionItems = promptPlan?.included.map((item) => ({
+    id: item.id,
+    title: item.title,
+    reason: item.reason,
+    cacheBand: item.cacheBand,
+    estimatedTokens: item.estimatedTokens,
+  })) ?? generalPromptOrder.map((item) => ({ ...item, estimatedTokens: 0 }));
+  const stablePrefixCount = compositionItems.filter((item) => item.cacheBand === 'stable').length;
   const stablePrefixTokens = promptPlan?.included
     .filter((item) => item.cacheBand === 'stable')
     .reduce((total, item) => total + item.estimatedTokens, 0) ?? 0;
+  const totalPromptTokens = promptPlan?.estimatedTokens ?? 0;
   const closeDrawer = () => dialogRef.current?.close();
   const selectProfile = (profile: ProviderProfile) => {
     onSelectProviderProfile(profile.id);
@@ -1691,34 +1719,58 @@ function SettingsDrawer({
             <Layers3 aria-hidden="true" />
             <span>
               <strong>Prompt 组合</strong>
-              <small>{promptPlan ? `${promptPlan.included.length} 个区块 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '打开小节后显示当前组合'}</small>
+              <small>{promptPlan ? `${promptPlan.included.length} 个区块 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '通用顺序 · 选中小节后显示占比'}</small>
             </span>
             <ChevronDown aria-hidden="true" />
           </summary>
-          {promptPlan ? (
-            <div className="prompt-composition-content">
-              <p className="prompt-composition-note">只读 · 按实际发送顺序排列。长期不变的资料在前，正文与本轮指令在后。</p>
+          <div className="prompt-composition-content">
+            <p className="prompt-composition-note">{promptPlan
+              ? '当前小节 · 竖条按估算 tokens 比例显示，右侧按实际发送顺序排列。'
+              : '主页概览 · 竖条等高表示通用顺序；进入小节后切换为当前 Prompt 占比。'}</p>
+            <div className="prompt-composition-chart">
+              <figure className="prompt-proportion-figure">
+                <div className="prompt-proportion-bar" aria-hidden="true" data-template={!promptPlan}>
+                  {compositionItems.map((item, index) => {
+                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                    return (
+                      <span
+                        className="prompt-proportion-segment"
+                        data-cache-band={item.cacheBand}
+                        data-small={Boolean(promptPlan && share < 6)}
+                        key={item.id}
+                        style={{ flexGrow: promptPlan ? Math.max(item.estimatedTokens, 0.01) : 1 }}
+                      >
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+                <figcaption>{promptPlan ? '段高 = 当前 tokens 占比' : '等高 = 通用拼接顺序'}</figcaption>
+              </figure>
               <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
-                {promptPlan.included.map((item, index) => (
-                  <li key={item.id} data-cache-band={item.cacheBand}>
-                    <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
-                    <span className="prompt-composition-copy">
-                      <strong>{item.title}</strong>
-                      <small>{item.reason}</small>
-                    </span>
-                    <span className="prompt-composition-meta">
-                      <span className="cache-band-label">{item.cacheBand === 'stable' ? '稳定前缀' : item.cacheBand === 'session' ? '模式层' : '每轮变化'}</span>
-                      <small>约 {item.estimatedTokens.toLocaleString()} tokens</small>
-                    </span>
-                    {index === stablePrefixCount - 1 && <span className="cache-prefix-boundary">稳定前缀到这里</span>}
-                  </li>
-                ))}
+                {compositionItems.map((item, index) => {
+                  const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                  return (
+                    <li key={item.id} data-cache-band={item.cacheBand}>
+                      <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
+                      <span className="prompt-composition-copy">
+                        <strong>{item.title}</strong>
+                        <small><span className="cache-band-label">{cacheBandLabel(item.cacheBand)}</span>{item.reason}</small>
+                      </span>
+                      <span className="prompt-composition-meta">
+                        <strong>{promptPlan ? promptShareLabel(share) : '顺序'}</strong>
+                        <small>{promptPlan ? `约 ${item.estimatedTokens.toLocaleString()} tokens` : `${index + 1} / ${compositionItems.length}`}</small>
+                      </span>
+                      {index === stablePrefixCount - 1 && <span className="cache-prefix-boundary">稳定前缀到这里</span>}
+                    </li>
+                  );
+                })}
               </ol>
-              <p className="prompt-composition-footnote">{promptPlan.excluded.length > 0 ? `${promptPlan.excluded.length} 项关闭或为空，不会发送。` : '当前资料已全部装入。'}缓存是否命中仍由所选模型服务决定。</p>
             </div>
-          ) : (
-            <p className="prompt-composition-empty">先进入一本书的小节，这里会显示该次写作实际使用的 Prompt 组合。</p>
-          )}
+            <p className="prompt-composition-footnote">{promptPlan
+              ? `${promptPlan.excluded.length > 0 ? `${promptPlan.excluded.length} 项关闭或为空，不会发送。` : '当前资料已全部装入。'}缓存是否命中仍由所选模型服务决定。`
+              : '主页只显示结构，不计算虚假的 tokens 占比。'}</p>
+          </div>
         </details>
       </section>
       <section className="settings-section" aria-labelledby="storage-heading">

@@ -107,7 +107,12 @@ describe('writing UI contract', () => {
     expect(source).toContain('最大输出');
     expect(source).toContain('保存连接方案');
     expect(source).toContain('Prompt 组合');
-    expect(source).toContain('只读 · 按实际发送顺序排列');
+    expect(source).toContain("if (view !== 'write' || !book || !section) return null;");
+    expect(source).toContain('通用顺序 · 选中小节后显示占比');
+    expect(source).toContain('主页概览 · 竖条等高表示通用顺序');
+    expect(source).toContain('当前小节 · 竖条按估算 tokens 比例显示');
+    expect(source).toContain('prompt-proportion-bar');
+    expect(source).toContain('promptShareLabel(share)');
     expect(source).toContain('稳定前缀到这里');
     expect(source).toContain('每轮变化');
     expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
