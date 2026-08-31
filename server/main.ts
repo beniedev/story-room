@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildContextPlan, fakeGenerate, RequestValidationError } from './domain.ts';
@@ -14,6 +15,19 @@ import {
 const host = process.env.STORY_HOST ?? '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
 const MAX_BODY_BYTES = 1_000_000;
+
+const contentTypes: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ttf': 'font/ttf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
 
 class PayloadTooLargeError extends Error {
   readonly statusCode = 413;
@@ -88,9 +102,57 @@ const knownRouteMethods: Record<string, string[]> = {
   '/api/generate': ['POST'],
 };
 
+const serveStatic = async (
+  request: IncomingMessage,
+  response: ServerResponse,
+  root: string,
+  pathname: string,
+) => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return false;
+
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return false;
+  }
+
+  const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
+  const candidate = path.resolve(root, relativePath);
+  const relativeToRoot = path.relative(root, candidate);
+  const safeCandidate = relativeToRoot !== '..'
+    && !relativeToRoot.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativeToRoot);
+
+  let file = safeCandidate ? candidate : '';
+  try {
+    if (!file || !(await stat(file)).isFile()) file = '';
+  } catch {
+    file = '';
+  }
+  if (!file) {
+    file = path.resolve(root, 'index.html');
+    try {
+      if (!(await stat(file)).isFile()) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const body = await readFile(file);
+  response.writeHead(200, {
+    'content-type': contentTypes[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'content-length': body.length,
+    'cache-control': 'no-store',
+  });
+  response.end(request.method === 'HEAD' ? undefined : body);
+  return true;
+};
+
 export const createStoryServer = (
   storyStore = new StoryStore(),
   providerStore = new ProviderStore(),
+  staticRoot?: string,
 ) => {
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
     try {
@@ -160,6 +222,7 @@ export const createStoryServer = (
         response.setHeader('allow', knownRouteMethods[url.pathname].join(', '));
         return sendJson(response, 405, { error: '这个 DEMO API 不支持当前请求方法。' });
       }
+      if (staticRoot && await serveStatic(request, response, staticRoot, url.pathname)) return;
       return sendJson(response, 404, { error: '未找到这个 DEMO API。' });
     } catch (error) {
       const statusCode = error instanceof PayloadTooLargeError
@@ -190,7 +253,8 @@ const isEntryPoint = process.argv[1]
   && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isEntryPoint) {
-  const server = createStoryServer();
+  const staticRoot = process.env.STORY_STATIC_DIR ?? path.resolve('dist-local');
+  const server = createStoryServer(undefined, undefined, staticRoot);
   server.listen(port, host, () => {
     console.log(`Story host ready at http://${host}:${port}`);
   });
