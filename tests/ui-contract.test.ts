@@ -38,6 +38,20 @@ describe('writing UI contract', () => {
     expect(source).toContain(':focus-visible');
   });
 
+  it('keeps the writing surface reader-first and moves secondary actions into one menu', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('className="writer-context-progress"');
+    expect(source).toContain('className="writer-mode-tabs"');
+    expect(source).toContain('className="writer-section-title"');
+    expect(source).toContain('className="writer-action-menu"');
+    expect(source).toContain('打开写作操作');
+    expect(source).toContain('修改小节名称');
+    expect(source).toContain('closeActionMenu(true)');
+    expect(source).toContain('restoreShelfFocus.current = true');
+    expect(source).not.toContain('上一小节');
+    expect(source).not.toContain('下一小节');
+  });
+
   it('uses local-first autosave, a real export action, and a compact book drawer', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");

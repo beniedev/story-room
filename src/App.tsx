@@ -16,6 +16,7 @@ import {
   Layers3,
   Library,
   ListChecks,
+  Menu,
   Pencil,
   Plus,
   ScrollText,
@@ -87,6 +88,11 @@ const promptShareLabel = (share: number) => (
   share < 1 ? '<1%' : share < 10 ? `${share.toFixed(1)}%` : `${Math.round(share)}%`
 );
 
+const compactTokenCount = (value: number) => new Intl.NumberFormat('en', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+}).format(value).toLowerCase();
+
 const isCachedBook = (value: unknown, bookId: string): value is Book => {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<Book>;
@@ -152,7 +158,9 @@ function App() {
   const promptDialog = useRef<HTMLDialogElement>(null);
   const promptTrigger = useRef<HTMLElement | null>(null);
   const settingsDialog = useRef<HTMLDialogElement>(null);
-  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const settingsTrigger = useRef<HTMLElement | null>(null);
+  const mainContent = useRef<HTMLElement>(null);
+  const restoreShelfFocus = useRef(false);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -173,6 +181,8 @@ function App() {
       return null;
     }
   }, [book, instruction, mode, section, selectedCharacterId, view]);
+  const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
+    ?? providerProfiles[0];
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
@@ -192,6 +202,12 @@ function App() {
       ? `${section.title} · ${book.title} · Story-native`
       : '故事书架 · Story-native';
   }, [book, section, view]);
+
+  useEffect(() => {
+    if (view !== 'shelf' || !restoreShelfFocus.current) return;
+    restoreShelfFocus.current = false;
+    mainContent.current?.querySelector<HTMLElement>('button, summary, a[href], input, select, textarea')?.focus();
+  }, [view]);
 
   useEffect(() => {
     void (async () => {
@@ -529,28 +545,35 @@ function App() {
 
   const navigateFromHeader = () => {
     if (view === 'shelf') return;
+    restoreShelfFocus.current = true;
     setView('shelf');
+  };
+
+  const openSettings = () => {
+    if (document.activeElement instanceof HTMLElement) {
+      settingsTrigger.current = document.activeElement;
+    }
+    settingsDialog.current?.showModal();
   };
 
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
-      <header className="app-header">
+      {view === 'shelf' && <header className="app-header">
         <button
           type="button"
           className="brand-home"
           onClick={navigateFromHeader}
-          aria-label={view === 'write' ? '返回故事书架' : '故事书架主页'}
-          title={view === 'write' ? '返回故事书架' : '故事书架主页'}
+          aria-label="故事书架主页"
+          title="故事书架主页"
         >
           <span className="brand-mark" aria-hidden="true">
-            {view !== 'shelf' ? <ArrowLeft size={20} strokeWidth={2} /> : <Library size={20} strokeWidth={2} />}
+            <Library size={20} strokeWidth={2} />
           </span>
           <span className="brand-name">Story-native</span>
         </button>
         <div className="header-context" aria-live="polite">
-          <strong>{view !== 'shelf' && book ? book.title : '故事书架'}</strong>
-          {view === 'write' && section && <span>{sectionChapter?.title} · {section.title}</span>}
+          <strong>故事书架</strong>
         </div>
         <div className="header-actions">
           <button
@@ -564,28 +587,33 @@ function App() {
             <Download aria-hidden="true" />
           </button>
           <button
-            ref={settingsTrigger}
             type="button"
             className="icon-button"
-            onClick={() => settingsDialog.current?.showModal()}
+            onClick={openSettings}
             aria-label="打开设置"
             title="设置"
           >
             <Settings aria-hidden="true" />
           </button>
         </div>
-      </header>
+      </header>}
 
-      <main id="main-content">
+      <main id="main-content" ref={mainContent}>
         {book && view === 'write' && section ? (
           <Writer
             book={book}
             section={section}
+            chapterTitle={sectionChapter?.title ?? ''}
             mode={mode}
             selectedCharacterId={selectedCharacterId}
             instruction={instruction}
             draft={draft}
             busy={busy}
+            contextTokens={promptPreview?.estimatedTokens ?? 0}
+            maxContext={activeProviderProfile?.maxContext ?? 0}
+            onBack={navigateFromHeader}
+            onExport={exportCurrentBook}
+            onOpenSettings={openSettings}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
             onInstructionChange={setInstruction}
@@ -631,7 +659,7 @@ function App() {
         )}
       </main>
 
-      <div className="status-line" role="status" aria-live="polite">{status}</div>
+      <div className={view === 'write' ? 'sr-only' : 'status-line'} role="status" aria-live="polite">{status}</div>
 
       <SettingsDrawer
         dialogRef={settingsDialog}
@@ -661,11 +689,17 @@ function App() {
 interface WriterProps {
   book: Book;
   section: Book['chapters'][number]['sections'][number] | undefined;
+  chapterTitle: string;
   mode: GenerationMode;
   selectedCharacterId: string;
   instruction: string;
   draft: string;
   busy: boolean;
+  contextTokens: number;
+  maxContext: number;
+  onBack: () => void;
+  onExport: () => void;
+  onOpenSettings: () => void;
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
@@ -682,59 +716,69 @@ function Writer(props: WriterProps) {
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
   const [sectionTitle, setSectionTitle] = useState('');
   const titleDialog = useRef<HTMLDialogElement>(null);
-  const titleTrigger = useRef<HTMLButtonElement>(null);
+  const titleTrigger = useRef<HTMLElement | null>(null);
+  const actionMenu = useRef<HTMLDetailsElement>(null);
+
+  const contextPercent = props.maxContext > 0
+    ? Math.round((props.contextTokens / props.maxContext) * 100)
+    : 0;
+  const progressMax = Math.max(1, props.maxContext);
+  const progressValue = Math.min(props.contextTokens, progressMax);
 
   const openTitleDialog = () => {
+    if (document.activeElement instanceof HTMLElement) {
+      titleTrigger.current = document.activeElement;
+    }
     setSectionTitle(props.section?.title ?? '');
     titleDialog.current?.showModal();
+  };
+
+  const closeActionMenu = (restoreFocus = false) => {
+    if (!actionMenu.current) return;
+    actionMenu.current.open = false;
+    if (restoreFocus) actionMenu.current.querySelector('summary')?.focus();
+  };
+
+  const runMenuAction = (action: () => void) => {
+    closeActionMenu(true);
+    action();
   };
 
   return (
     <div className="writer-page">
       <header className="writer-heading">
-        <p className="breadcrumb">{props.book.title} <span aria-hidden="true">/</span> {props.section?.title}</p>
-        <div className="writer-title-row">
-          <h1>{props.section?.title ?? '尚无正文'}</h1>
-          {props.section && (
-            <button
-              ref={titleTrigger}
-              type="button"
-              className="icon-button"
-              aria-haspopup="dialog"
-              onClick={openTitleDialog}
-              aria-label={`修改小节名称${props.section.title}`}
-              title="修改小节名称"
-            ><Pencil aria-hidden="true" /></button>
-          )}
+        <div className="writer-context-row">
+          <button
+            type="button"
+            className="icon-button writer-back-button"
+            onClick={props.onBack}
+            aria-label="返回故事书架"
+            title="返回故事书架"
+          ><ArrowLeft aria-hidden="true" /></button>
+          <progress
+            className="writer-context-progress"
+            max={progressMax}
+            value={progressValue}
+            aria-label={`当前 Context ${props.contextTokens}，模型上限 ${props.maxContext}`}
+          />
+          <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
+            {compactTokenCount(props.contextTokens)} / {compactTokenCount(props.maxContext)} · {contextPercent}%
+          </span>
         </div>
-        <div className="mode-row">
-          <fieldset className="segmented-control">
-            <legend className="sr-only">写作模式</legend>
-            <button type="button" aria-pressed={props.mode === 'author'} onClick={() => props.onModeChange('author')}>作者模式</button>
-            <button type="button" aria-pressed={props.mode === 'character'} onClick={() => props.onModeChange('character')}>角色模式 · 第一视角</button>
-          </fieldset>
-          {props.mode === 'character' && (
-            <div className="character-select">
-              <label htmlFor="character-select">扮演角色</label>
-              <select
-                id="character-select"
-                value={props.selectedCharacterId}
-                onChange={(event) => props.onCharacterChange(event.target.value)}
-                required
-                aria-invalid={characterModeNeedsSelection ? 'true' : undefined}
-                aria-describedby="character-mode-hint"
-              >
-                <option value="">选择本书角色</option>
-                {props.book.characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
-              </select>
-              <p id="character-mode-hint" className="mode-hint">
-                {characterModeNeedsSelection
-                  ? '请选择当前 Book 的角色。'
-                  : `以 ${selectedCharacter?.name ?? '当前角色'} 的第一人称连续正文生成；你控制该角色，AI 处理世界和其他角色。`}
-              </p>
-            </div>
-          )}
-        </div>
+
+        <nav className="writer-mode-tabs" aria-label="写作模式">
+          <button type="button" aria-pressed={props.mode === 'author'} onClick={() => props.onModeChange('author')}>
+            <BookOpenText aria-hidden="true" />作者模式
+          </button>
+          <button type="button" aria-pressed={props.mode === 'character'} onClick={() => props.onModeChange('character')}>
+            <UsersRound aria-hidden="true" />角色模式 · 第一视角
+          </button>
+        </nav>
+
+        <p className="writer-section-title" title={`${props.chapterTitle} · ${props.section?.title ?? ''}`}>
+          <strong>{props.chapterTitle}</strong>
+          {props.section && <span> · {props.section.title}</span>}
+        </p>
       </header>
 
       <section className="manuscript-wrap" aria-labelledby="manuscript-label">
@@ -763,17 +807,70 @@ function Writer(props: WriterProps) {
       )}
 
       <form className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
-        <label htmlFor="writing-instruction">{props.mode === 'author' ? '写作指令' : '角色行动或台词'}</label>
+        <details
+          ref={actionMenu}
+          className="writer-action-menu"
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            closeActionMenu(true);
+          }}
+        >
+          <summary className="icon-button writer-menu-trigger" title="写作操作">
+            <Menu aria-hidden="true" />
+            <span className="sr-only">打开写作操作</span>
+          </summary>
+          <div className="writer-action-sheet" aria-label="写作操作">
+            {props.mode === 'character' && (
+              <div className="character-select writer-menu-character">
+                <label htmlFor="character-select">扮演角色</label>
+                <select
+                  id="character-select"
+                  value={props.selectedCharacterId}
+                  onChange={(event) => props.onCharacterChange(event.target.value)}
+                  required
+                  aria-invalid={characterModeNeedsSelection ? 'true' : undefined}
+                  aria-describedby="character-mode-hint"
+                >
+                  <option value="">选择本书角色</option>
+                  {props.book.characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
+                </select>
+                <p id="character-mode-hint" className="mode-hint">
+                  {characterModeNeedsSelection
+                    ? '请选择当前 Book 的角色。'
+                    : `以 ${selectedCharacter?.name ?? '所选角色'} 的第一人称连续正文生成。你控制该角色，AI 处理世界和其他角色。`}
+                </p>
+              </div>
+            )}
+            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onShowPrompt)} disabled={props.busy}>
+              <Layers3 aria-hidden="true" />查看当前 Prompt
+            </button>
+            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(openTitleDialog)} disabled={!props.section}>
+              <Pencil aria-hidden="true" />修改小节名称
+            </button>
+            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onExport)}>
+              <Download aria-hidden="true" />导出当前书目
+            </button>
+            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onOpenSettings)}>
+              <Settings aria-hidden="true" />设置
+            </button>
+          </div>
+        </details>
+        <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '写作指令' : '角色行动或台词'}</label>
         <textarea
           id="writing-instruction"
+          rows={1}
           value={props.instruction}
           onChange={(event) => props.onInstructionChange(event.target.value)}
           placeholder={props.mode === 'author' ? '例如：让场景出现一个新的变化…' : '以当前角色输入行动、台词或选择…'}
         />
-        <div className="instruction-actions">
-          <button type="button" className="button-with-icon" onClick={props.onShowPrompt} disabled={props.busy}><Layers3 aria-hidden="true" />查看 Prompt</button>
-          <button type="submit" className="primary-action button-with-icon" disabled={props.busy}><Sparkles aria-hidden="true" />{props.busy ? '正在准备…' : '预览续写'}</button>
-        </div>
+        <button
+          type="submit"
+          className="primary-action icon-button writer-send-button"
+          disabled={props.busy || characterModeNeedsSelection}
+          aria-label={props.busy ? '正在准备续写' : '预览续写'}
+          title={props.busy ? '正在准备…' : '预览续写'}
+        ><Sparkles aria-hidden="true" /></button>
       </form>
 
       <dialog
