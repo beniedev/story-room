@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.18.0 || ^24.0.0"
   },
   "scripts": {
     "prepare:font": "node scripts/materialize-font.mjs",
@@ -18,7 +18,9 @@
     "prebuild": "npm run prepare:font",
     "build": "tsc --noEmit && vite build --mode site",
     "prebuild:local": "npm run prepare:font",
-    "build:local": "tsc --noEmit && vite build --mode local-build --outDir dist-local"
+    "build:local": "tsc --noEmit && vite build --mode local-build --outDir dist-local",
+    "privacy:scan": "node scripts/privacy-scan.mjs",
+    "license:check": "node scripts/check-dependency-licenses.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2",
@@ -29,7 +31,6 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.54.2",
     "@cloudflare/workers-types": "^5.20260830.1",
-    "@openai/sites-vite-plugin": "^0.2.0",
     "@types/node": "^24.3.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",

@@ -3,6 +3,16 @@ dist/
 dist-local/
 .data/
 .env*.local
+.env
+.env.*
+!.env.example
+.openai/hosting.json
+*.pem
+*.key
+*.p12
+*.pfx
+local-exports/
+local-vaults/
 public/fonts/LXGWWenKaiLite-Regular.ttf
 coverage/
 .wrangler/

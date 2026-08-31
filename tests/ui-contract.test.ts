@@ -294,9 +294,40 @@ describe('writing UI contract', () => {
     expect(styles).toContain('max(1rem, var(--manuscript-font-size, 16px))');
   });
 
-  it('uses local-first autosave, a real export action, and a compact book drawer', async () => {
+  it('keeps full-book cache device-only and clears legacy host caches', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");
+    const readStart = source.indexOf('const readCachedBook');
+    const cacheStart = source.indexOf('const cacheBook');
+    const removeStart = source.indexOf('const removeCachedBook');
+    const clearStart = source.indexOf('const clearHostBookCaches');
+    const newerStart = source.indexOf('const newerBook');
+    expect(readStart).toBeGreaterThanOrEqual(0);
+    expect(cacheStart).toBeGreaterThan(readStart);
+    expect(removeStart).toBeGreaterThan(cacheStart);
+    expect(clearStart).toBeGreaterThan(removeStart);
+    expect(newerStart).toBeGreaterThan(clearStart);
+
+    const readCache = source.slice(readStart, cacheStart);
+    const writeCache = source.slice(cacheStart, removeStart);
+    const removeCache = source.slice(removeStart, clearStart);
+    const clearCache = source.slice(clearStart, newerStart);
+    expect(readCache).toContain("if (api.runtime !== 'device') return null;");
+    expect(readCache).toContain('localStorage.getItem(bookCacheKey(bookId)');
+    expect(writeCache).toContain("if (api.runtime !== 'device') return false;");
+    expect(writeCache).toContain('localStorage.setItem(bookCacheKey(book.id)');
+    expect(removeCache).toContain("if (api.runtime !== 'device') return;");
+    expect(removeCache).toContain('localStorage.removeItem(bookCacheKey(bookId))');
+    expect(clearCache).toContain("if (api.runtime === 'device') return;");
+    expect(clearCache).toContain('localStorage.length');
+    expect(clearCache).toContain('key?.startsWith(bookCachePrefix)');
+    expect(clearCache).toContain('localStorage.removeItem(key)');
+    expect(source).toMatch(/useEffect\(\(\) => \{\s+clearHostBookCaches\(\);\s+\}, \[\]\);/);
+    expect(source).toContain("const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;");
+    expect(source).toContain("if (api.runtime === 'device') cacheBook(book);");
+    expect(source).toContain('正在写入本机故事目录…');
+    expect(source).toContain('已自动保存到本机故事目录。');
+    expect(source).not.toContain('已自动保存到此设备，正在写入本机故事目录…');
+    expect(source).not.toContain('已自动保存到此设备和本机故事目录。');
     expect(source).toContain('<Download aria-hidden="true" />');
     expect(source).toContain('className="export-dialog"');
     expect(source).toContain('EPUB 电子书');
@@ -382,8 +413,10 @@ describe('writing UI contract', () => {
     expect(source).toContain('promptShareLabel(share)');
     expect(source).toContain('稳定前缀到这里');
     expect(source).toContain('每轮变化');
-    expect(source).toContain('API Key 只保存在本机的私有 Provider 配置中');
-    expect(source).toContain('API Key 不会写入书稿或浏览器持久化');
+    expect(source).toContain('API Key 会以明文保存在本机配置文件');
+    expect(source).toContain('只有在你信任本机和 Provider 端点时才使用');
+    expect(source).toContain('仅在你信任当前页面和目标 URL 时输入 API Key');
+    expect(source).toContain('当前页面脚本可读取且不会持久化');
     expect(source).toContain('type="password"');
     expect(source).toContain('event.target === event.currentTarget');
     expect(styles).toContain('.instruction-dock textarea:focus');

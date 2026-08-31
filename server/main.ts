@@ -1,5 +1,7 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildContextPlan, fakeGenerate, RequestValidationError } from './domain.ts';
@@ -12,9 +14,114 @@ import {
   ProviderStore,
 } from './providers.ts';
 
-const host = process.env.STORY_HOST ?? '127.0.0.1';
+const host = process.env.STORY_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
 const MAX_BODY_BYTES = 1_000_000;
+
+export type StoryServerOptions = {
+  accessToken?: string;
+  allowedHosts?: string[];
+};
+
+type HostAuthority = {
+  hostname: string;
+  port?: string;
+};
+
+const loopbackHosts = new BlockList();
+loopbackHosts.addSubnet('127.0.0.0', 8, 'ipv4');
+loopbackHosts.addAddress('::1', 'ipv6');
+
+const normalizeHost = (value: string) => {
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1);
+  return trimmed;
+};
+
+const isLoopbackHost = (value: string) => {
+  const hostname = normalizeHost(value);
+  if (hostname === 'localhost') return true;
+  const version = isIP(hostname);
+  return version === 4
+    ? loopbackHosts.check(hostname, 'ipv4')
+    : version === 6 && loopbackHosts.check(hostname, 'ipv6');
+};
+
+const isWildcardHost = (value: string) => {
+  const hostname = normalizeHost(value);
+  return hostname === '0.0.0.0' || hostname === '::';
+};
+
+const parseHostAuthority = (value: string): HostAuthority | null => {
+  const raw = value.trim();
+  if (!raw || raw !== value || raw.includes('\\')) return null;
+  const authority = isIP(raw) === 6 ? `[${raw}]` : raw;
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${authority}`);
+  } catch {
+    return null;
+  }
+  if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
+  const hostname = normalizeHost(parsed.hostname);
+  if (!hostname || isWildcardHost(hostname)) return null;
+  return { hostname, port: parsed.port || undefined };
+};
+
+const parseAllowedHosts = (values: string[] | undefined): HostAuthority[] => {
+  if (!values) return [];
+  const result: HostAuthority[] = [];
+  for (const value of values) {
+    const parsed = parseHostAuthority(value);
+    if (!parsed) throw new Error('服务器可信 Host 配置无效。');
+    result.push(parsed);
+  }
+  return result;
+};
+
+const hostMatches = (actual: HostAuthority, trusted: HostAuthority) => (
+  actual.hostname === trusted.hostname && (!trusted.port || actual.port === trusted.port)
+);
+
+const requestHost = (request: IncomingMessage) => {
+  const value = request.headers.host;
+  return typeof value === 'string' ? parseHostAuthority(value) : null;
+};
+
+const sameOrigin = (request: IncomingMessage, actualHost: HostAuthority) => {
+  const origin = request.headers.origin;
+  if (origin === undefined) return true;
+  if (origin.trim() !== origin) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    return false;
+  }
+  const host = actualHost.hostname.includes(':') ? `[${actualHost.hostname}]` : actualHost.hostname;
+  const expected = new URL(`http://${host}${actualHost.port ? `:${actualHost.port}` : ''}`);
+  return parsed.origin === expected.origin;
+};
+
+const validToken = (request: IncomingMessage, expected: string) => {
+  const header = request.headers.authorization;
+  if (typeof header !== 'string') return false;
+  const match = /^Bearer ([^\s]+)$/.exec(header);
+  if (!match) return false;
+  const actual = Buffer.from(match[1], 'utf8');
+  const wanted = Buffer.from(expected, 'utf8');
+  return actual.length === wanted.length && timingSafeEqual(actual, wanted);
+};
+
+const safeAccessToken = (value: string | undefined) => value?.trim() || '';
+
+const validateEntryConfiguration = (configuredHost: string, accessToken: string, allowedHosts: HostAuthority[]) => {
+  if (isLoopbackHost(configuredHost)) return;
+  if (!accessToken || !allowedHosts.length) throw new Error('Story host 安全配置无效。');
+};
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -153,10 +260,26 @@ export const createStoryServer = (
   storyStore = new StoryStore(),
   providerStore = new ProviderStore(),
   staticRoot?: string,
+  options: StoryServerOptions = {},
 ) => {
+  const accessToken = safeAccessToken(options.accessToken);
+  const allowedHosts = parseAllowedHosts(options.allowedHosts);
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
+      const actualHost = requestHost(request);
+      const hostAllowed = actualHost && (allowedHosts.length
+        ? allowedHosts.some((trustedHost) => hostMatches(actualHost, trustedHost))
+        : isLoopbackHost(actualHost.hostname));
+      if (!hostAllowed) return sendJson(response, 403, { error: '请求来源不被允许。' });
+      const stateChanging = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE';
+      if (stateChanging && actualHost && !sameOrigin(request, actualHost)) {
+        return sendJson(response, 403, { error: '请求来源不被允许。' });
+      }
+      const isHealth = request.method === 'GET' && url.pathname === '/api/health';
+      if (accessToken && url.pathname.startsWith('/api/') && !isHealth && !validToken(request, accessToken)) {
+        return sendJson(response, 401, { error: '需要访问凭据。' });
+      }
       if (request.method === 'GET' && url.pathname === '/api/health') {
         return sendJson(response, 200, { ok: true });
       }
@@ -253,8 +376,15 @@ const isEntryPoint = process.argv[1]
   && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isEntryPoint) {
+  const accessToken = safeAccessToken(process.env.STORY_ACCESS_TOKEN);
+  const rawAllowedHosts = process.env.STORY_ALLOWED_HOSTS?.split(',').map((value) => value.trim()).filter(Boolean);
+  const allowedHosts = parseAllowedHosts(rawAllowedHosts);
+  validateEntryConfiguration(host, accessToken, allowedHosts);
   const staticRoot = process.env.STORY_STATIC_DIR ?? path.resolve('dist-local');
-  const server = createStoryServer(undefined, undefined, staticRoot);
+  const providerStore = new ProviderStore(undefined, {
+    allowPrivateNetwork: process.env.STORY_ALLOW_PRIVATE_PROVIDERS === '1',
+  });
+  const server = createStoryServer(undefined, providerStore, staticRoot, { accessToken, allowedHosts: rawAllowedHosts });
   server.listen(port, host, () => {
     console.log(`Story host ready at http://${host}:${port}`);
   });

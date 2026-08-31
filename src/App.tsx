@@ -75,7 +75,8 @@ type BookSettingsView =
   | { kind: 'world'; id: string };
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
+const bookCachePrefix = 'story-native:book:';
+const bookCacheKey = (bookId: string) => `${bookCachePrefix}${bookId}`;
 const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
@@ -184,6 +185,7 @@ const isCachedBook = (value: unknown, bookId: string): value is Book => {
 };
 
 const readCachedBook = (bookId: string) => {
+  if (api.runtime !== 'device') return null;
   try {
     const value = localStorage.getItem(bookCacheKey(bookId));
     if (!value) return null;
@@ -195,11 +197,41 @@ const readCachedBook = (bookId: string) => {
 };
 
 const cacheBook = (book: Book) => {
+  if (api.runtime !== 'device') return false;
   try {
     localStorage.setItem(bookCacheKey(book.id), JSON.stringify(book));
     return true;
   } catch {
     return false;
+  }
+};
+
+const removeCachedBook = (bookId: string) => {
+  if (api.runtime !== 'device') return;
+  try {
+    localStorage.removeItem(bookCacheKey(bookId));
+  } catch {
+    // Browser persistence is optional on the device runtime.
+  }
+};
+
+const clearHostBookCaches = () => {
+  if (api.runtime === 'device') return;
+  const staleKeys: string[] = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(bookCachePrefix)) staleKeys.push(key);
+    }
+  } catch {
+    return;
+  }
+  for (const key of staleKeys) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // A storage failure must not prevent the host app from starting.
+    }
   }
 };
 
@@ -274,6 +306,10 @@ function App() {
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
   useEffect(() => {
+    clearHostBookCaches();
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
@@ -338,12 +374,12 @@ function App() {
 
   useEffect(() => {
     if (!book || !dirty) return;
-    const cachedLocally = cacheBook(book);
+    const cachedLocally = api.runtime === 'device' ? cacheBook(book) : false;
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
-    setStatus(cachedLocally
-      ? (api.runtime === 'device' ? '已自动保存到此设备。' : '已自动保存到此设备，正在写入本机故事目录…')
-      : '当前设备的浏览器存储不可用。');
+    setStatus(api.runtime === 'device'
+      ? (cachedLocally ? '已自动保存到此设备。' : '当前设备的浏览器存储不可用。')
+      : '正在写入本机故事目录…');
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
@@ -351,19 +387,20 @@ function App() {
       saveQueue.current = task.then(() => undefined, () => undefined);
       void task.then((saved) => {
         if (saveRevision.current !== revision) return;
-        cacheBook(saved);
+        if (api.runtime === 'device') cacheBook(saved);
         setBook((current) => current?.id === saved.id ? saved : current);
         setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
           ...items.filter((item) => item.id !== saved.id)]);
         setDirty(false);
         setStatus(api.runtime === 'device'
           ? '已自动保存到此设备。'
-          : '已自动保存到此设备和本机故事目录。');
+          : '已自动保存到本机故事目录。');
       }).catch((error) => {
         if (saveRevision.current === revision) {
-          setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${cachedLocally
+          const recovery = api.runtime === 'device' && cachedLocally
             ? '当前设备缓存仍保留本次修改。'
-            : '请立即复制正文或导出仍可访问的内容。'}`);
+            : '请立即复制正文或导出仍可访问的内容。';
+          setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${recovery}`);
         }
       });
     }, 700);
@@ -373,9 +410,9 @@ function App() {
 
   const openBook = async (bookId: string) => {
     const stored = await api.loadBook(bookId);
-    const cached = readCachedBook(bookId);
+    const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
     const loaded = newerBook(stored, cached);
-    cacheBook(loaded);
+    if (api.runtime === 'device') cacheBook(loaded);
     saveRevision.current += 1;
     setBook(loaded);
     setSectionId('');
@@ -403,10 +440,10 @@ function App() {
   const saveCurrent = async () => {
     if (!book) throw new Error('请先打开一本书。');
     const revision = saveRevision.current;
-    cacheBook(book);
+    if (api.runtime === 'device') cacheBook(book);
     const saved = await queueBookSave(book);
     if (saveRevision.current === revision) {
-      cacheBook(saved);
+      if (api.runtime === 'device') cacheBook(saved);
       setBook(saved);
       setDirty(false);
     }
@@ -414,7 +451,7 @@ function App() {
       ...items.filter((item) => item.id !== saved.id)]);
     setStatus(api.runtime === 'device'
       ? '已自动保存到此设备。'
-      : '已自动保存到此设备和本机故事目录。');
+      : '已自动保存到本机故事目录。');
     return saved;
   };
 
@@ -432,7 +469,7 @@ function App() {
   const exportCurrentBook = (format: BookExportFormat) => {
     if (!book) return;
     try {
-      cacheBook(book);
+      if (api.runtime === 'device') cacheBook(book);
       const file = createBookExport(book, format);
       const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
       const link = document.createElement('a');
@@ -561,7 +598,7 @@ function App() {
       const created = await api.createBook(title);
       setLibrary((items) => [{ id: created.id, title: created.title, updatedAt: created.updatedAt }, ...items]);
       setBook(created);
-      cacheBook(created);
+      if (api.runtime === 'device') cacheBook(created);
       saveRevision.current += 1;
       setSectionId('');
       setSelectedCharacterId('');
@@ -587,7 +624,7 @@ function App() {
       try {
         await saveQueue.current.catch(() => undefined);
         await api.deleteBook(deletedBook.id);
-        localStorage.removeItem(bookCacheKey(deletedBook.id));
+        removeCachedBook(deletedBook.id);
         setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
         if (nextBook) await openBook(nextBook.id);
         setStatus(`已删除《${deletedBook.title}》。`);
@@ -2561,8 +2598,8 @@ function SettingsDrawer({
               </div>
 
               <p className="provider-secret-note">{providerRuntime === 'host'
-                ? 'API Key 只保存在本机的私有 Provider 配置中，不会写入书稿、浏览器或 Git。留空可继续使用已保存的 Key。'
-                : 'API Key 不会写入书稿或浏览器持久化；测试时只会直接发送到你填写的 URL。'}</p>
+                ? 'API Key 会以明文保存在本机配置文件（默认 .data/private/providers.json）中；不会写入书稿或浏览器。只有在你信任本机和 Provider 端点时才使用；留空可继续使用已保存的 Key。'
+                : '仅在你信任当前页面和目标 URL 时输入 API Key；测试时临时 Key 会直接发送到填写的 URL，当前页面脚本可读取且不会持久化。'}</p>
               <div className="provider-form-actions">
                 <button
                   type="button"

@@ -1,58 +1,68 @@
 # Story-native Writing Harness
 
-A local-first AI novel-writing demo where the manuscript—not a chat transcript—is the source of truth. The local Node host writes readable story files; the hosted DEMO keeps each library only in that browser on that device. Story Native does not provide manuscript cloud storage or choose a sync service for the user.
+Story-native Writing Harness is a local-first novel-writing harness: a local Node host writes a readable Book directory, while the hosted/device build stores Books only in the current browser. It does not provide cloud manuscript storage or synchronization.
 
-The demo keeps each Book isolated, supports author and first-person character control, appends each generated continuation directly to the manuscript, and shows the exact prompt plan assembled for each request. It does not connect to a real model yet.
+The manuscript stays continuous prose rather than a chat transcript. Each Book owns its characters, world rules, canon, summaries, chapters, and sections. Author and first-person character modes share the same persistence and prompt pipeline, and the UI shows the provider input plan without claiming to show hidden model reasoning.
 
-## Run the demo
+## Two runtimes
 
-Requirements: Node.js 24+ and npm.
+| Runtime | Book persistence | Provider behavior |
+| --- | --- | --- |
+| Local host | Readable files under `.data/` by default; set `STORY_DATA_DIR` to choose another directory | Fake Provider or OpenAI-compatible Provider; generated context plans are sent to the configured endpoint |
+| Hosted/device | Unencrypted `localStorage` in the current browser and origin | Fake generation only; Provider tests send the current page's temporary key directly to the URL you enter |
+
+The hosted/device build does not upload or merge Books. A complete JSON export contains the manuscript, blocks, branches, Book settings, and prompt-loading scope. It also offers EPUB, Markdown, and TXT exports. Clearing site data removes the device-local library.
+
+## Run locally
+
+Requirements: Node.js 22.18+ and npm. The supported Node.js major lines are 22 and 24.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
 Open `http://127.0.0.1:4310`.
 
-For a phone on the same trusted private network, bind both local development processes to a specific private address:
+The local host defaults to loopback. To bind it to a non-loopback address, put the token and trusted Host value in the ignored `.env.local` file:
 
-```bash
-npm run dev -- --host <private-address>
+```text
+STORY_ACCESS_TOKEN=<access-token>
+STORY_ALLOWED_HOSTS=<trusted-host>
 ```
 
-This mode has no access control. Do not expose it to the public internet.
+Start the LAN-bound development host with the CLI flag; `scripts/dev.mjs` uses it to set `STORY_HOST` for the server and Vite:
 
-## Device-local storage and exports
+```bash
+npm run dev -- --host <lan-address>
+```
 
-The hosted DEMO starts with neutral sample Books and saves edits in browser storage. Clearing site data removes that device's library, so export important work regularly. The export menu produces:
+The access token is kept in the current browser tab's `sessionStorage`. `STORY_ALLOWED_HOSTS` must name the trusted Host value; wildcard bind addresses are not browser trust entries. Do not expose this development host to the public internet. `STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
 
-- EPUB 3 with a Book / chapter / section table of contents
-- one editable Markdown document with the same hierarchy
-- plain TXT with numbered chapter and section headings
-- a complete JSON backup containing manuscript, Book settings, prompt-loading scope, and interaction blocks
+## Provider trust boundary
 
-The bundled [`story-native-obsidian-vault`](skills/story-native-obsidian-vault/SKILL.md) skill converts a JSON backup into a new, readable Obsidian vault. It does not upload or merge the vault automatically.
+The local host supports the deterministic Fake Provider and OpenAI-compatible endpoints. The context plan and prompt for a generation request are sent to the Provider endpoint configured by the user. The local-host API Key is stored as plaintext in `.data/private/providers.json` by default; set `STORY_PROVIDER_CONFIG` to choose another file. On POSIX, the file is written with mode `0600`. Windows file permissions are not treated as an equivalent credential store. Changing a saved profile's endpoint or kind requires entering its key again.
+
+In hosted/device mode, generation remains Fake. A Provider test sends a temporary key directly to the URL in the current page; page scripts can read that input while the page is running, and the key is not persisted by the app.
 
 ## What is implemented
 
-- Continuous prose editor with author and first-person character modes
-- Book-owned character cards, world rules, canon, summaries, chapters, and sections
-- Human-readable host-side persistence under `.data/`
-- Device-local browser persistence for the hosted DEMO
+- Continuous prose editing with author and first-person character modes
+- Book-scoped character cards, world rules, canon, summaries, chapters, and sections
+- Readable local-host persistence and device-local hosted persistence
+- Fake and OpenAI-compatible local-host Provider paths
+- Prompt-plan inspection with ordered layers, provenance, inclusion reasons, and estimated size
 - EPUB, Markdown, TXT, and complete JSON exports
-- Editable Book writing brief and per-source prompt inclusion controls
-- Prompt-plan inspector with ordered layers, provenance, inclusion reasons, and estimated size
-- Deterministic offline Fake Provider with direct manuscript continuation
-- Story directory, simple relationship view, and four themes: 蓝雪, 粉漫, 灰度, and 紫雅
 - Responsive controls for desktop and mobile-sized viewports
 
-## What is intentionally absent
+## Current limits
 
-- Real model calls or a persistent plaintext secret store
-- Built-in cloud manuscript storage, account sync, or private-data import
-- Chat bubbles, group chat, RAG, embeddings, multi-user collaboration, or a desktop wrapper
-- Production authentication for LAN access
+- A Book `PUT` request is limited to 1 MB, and autosave currently writes the whole Book. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); it is not implemented.
+- Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books.
+- The local host and Provider endpoint are not a production deployment. Browser, operating-system, or configured endpoint compromise is outside this demo's guarantees.
+- There is no cloud storage, account sync, multi-user collaboration, RAG, embeddings, or desktop wrapper.
+
+This is a functional pre-release demo, not a production writing system. See [`SECURITY.md`](SECURITY.md), [`PRIVACY.md`](PRIVACY.md), and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for boundaries and reporting guidance.
 
 ## Verify
 
@@ -61,10 +71,10 @@ npm test
 npm run typecheck
 npm run build
 npm run build:local
+npm run privacy:scan
+npm run license:check
 ```
 
-Current status: functional DEMO with local-host and device-local hosted paths, not a production writing system. Real-device behavior must be reported only after it is actually tested.
+## Typeface and notices
 
-## Typeface credit
-
-The optional **霞鹜文楷（LXGW WenKai）** manuscript font comes from [lxgw/LxgwWenKai](https://github.com/lxgw/LxgwWenKai). Its warm, handwritten rhythm gives long-form drafts a wonderfully literary page feel. The official [Lite Regular](https://github.com/lxgw/LxgwWenKai-Lite) build is bundled under the [SIL Open Font License 1.1](public/fonts/OFL.txt); thank you to lxgw and every contributor who made this beautiful open-source Chinese typeface available.
+The optional LXGW WenKai Lite font is distributed under the SIL Open Font License 1.1; see [`public/fonts/OFL.txt`](public/fonts/OFL.txt). Package and asset attribution, including items that still need owner confirmation before public release, is recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

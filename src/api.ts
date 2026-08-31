@@ -11,13 +11,53 @@ import {
   type ProviderProfile,
 } from './providerProfiles';
 
+export const HOST_ACCESS_TOKEN_STORAGE_KEY = 'story-native:host-access-token';
+
+const readHostAccessToken = () => {
+  try {
+    return typeof sessionStorage === 'undefined' ? '' : sessionStorage.getItem(HOST_ACCESS_TOKEN_STORAGE_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+};
+
+const saveHostAccessToken = (token: string) => {
+  try {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(HOST_ACCESS_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Session storage may be unavailable in a locked-down browser context.
+  }
+};
+
+const promptForHostAccessToken = () => {
+  try {
+    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return '';
+    return window.prompt('请输入本机访问令牌。')?.trim() ?? '';
+  } catch {
+    return '';
+  }
+};
+
+const requestOnce = async (url: string, init: RequestInit | undefined, accessToken: string) => {
+  const headers = new Headers(init?.headers);
+  if (init?.body) headers.set('content-type', 'application/json');
+  if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
+  return fetch(url, { ...init, headers });
+};
+
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
+  let accessToken = readHostAccessToken();
   let response: Response;
   try {
-    response = await fetch(url, {
-      ...init,
-      headers: init?.body ? { 'content-type': 'application/json', ...init.headers } : init?.headers,
-    });
+    response = await requestOnce(url, init, accessToken);
+    if (response.status === 401) {
+      const promptedToken = promptForHostAccessToken();
+      if (promptedToken) {
+        accessToken = promptedToken;
+        saveHostAccessToken(promptedToken);
+        response = await requestOnce(url, init, accessToken);
+      }
+    }
   } catch {
     throw new Error('无法连接本地书库服务，请确认故事书架仍在运行。');
   }

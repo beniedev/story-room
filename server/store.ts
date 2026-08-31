@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
@@ -160,6 +170,57 @@ const atomicWrite = async (file: string, content: string) => {
   }
 };
 
+const managedDirectories = ['characters', 'world', 'canon', 'summaries'] as const;
+type ManagedDirectory = typeof managedDirectories[number];
+
+const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
+
+const unsafeBookTree = () => new StoreDataError('Book 文件结构异常。');
+
+const ensureSafeDirectory = async (directory: string) => {
+  try {
+    const stat = await lstat(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+    return;
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  await mkdir(directory);
+  const stat = await lstat(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+};
+
+const readSafeDirectory = async (directory: string) => {
+  let entries;
+  try {
+    const stat = await lstat(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) throw unsafeBookTree();
+  }
+  return entries;
+};
+
+const ensureSafeFile = async (file: string) => {
+  try {
+    const stat = await lstat(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw unsafeBookTree();
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+};
+
+const managedId = (name: string, extension: '.json' | '.md') => {
+  if (!name.endsWith(extension)) return undefined;
+  const id = name.slice(0, -extension.length);
+  return idPattern.test(id) ? id : undefined;
+};
+
 const comparableBook = (book: Book) => ({
   ...book,
   plotOutline: book.plotOutline ?? '',
@@ -186,6 +247,116 @@ export class StoryStore {
 
   private bookRoot(bookId: string) {
     return path.join(this.root, 'books', validId(bookId));
+  }
+
+  private async prepareBookTree(book: Book, root: string) {
+    // The data directory is user-selected, so only the Book subtree gets the
+    // strict no-link checks. Create each child directory one level at a time.
+    await mkdir(this.root, { recursive: true });
+    await ensureSafeDirectory(path.join(this.root, 'books'));
+    await ensureSafeDirectory(root);
+    await readSafeDirectory(root);
+    await ensureSafeFile(path.join(root, 'book.json'));
+
+    for (const directory of managedDirectories) {
+      await readSafeDirectory(path.join(root, directory));
+    }
+
+    const manuscriptRoot = path.join(root, 'manuscript');
+    const manuscriptEntries = await readSafeDirectory(manuscriptRoot);
+    if (manuscriptEntries) {
+      for (const entry of manuscriptEntries) {
+        if (entry.isDirectory()) {
+          await readSafeDirectory(path.join(manuscriptRoot, entry.name));
+        } else if (idPattern.test(entry.name)) {
+          throw unsafeBookTree();
+        }
+      }
+    }
+
+    const sources: Array<[ManagedDirectory, string[]]> = [
+      ['characters', book.characters.map((item) => item.id)],
+      ['world', book.worldRules.map((item) => item.id)],
+      ['canon', book.canonFacts.map((item) => item.id)],
+      ['summaries', book.summaries.map((item) => item.id)],
+    ];
+    for (const [directory, ids] of sources) {
+      if (ids.length === 0) continue;
+      const directoryPath = path.join(root, directory);
+      await ensureSafeDirectory(directoryPath);
+      const extension = directory === 'world' ? '.md' : '.json';
+      for (const id of ids) await ensureSafeFile(path.join(directoryPath, `${validId(id)}${extension}`));
+    }
+
+    const chaptersWithSections = book.chapters.filter((chapter) => chapter.sections.length > 0);
+    if (chaptersWithSections.length > 0) {
+      await ensureSafeDirectory(manuscriptRoot);
+      for (const chapter of chaptersWithSections) {
+        const chapterRoot = path.join(manuscriptRoot, validId(chapter.id));
+        await ensureSafeDirectory(chapterRoot);
+        for (const section of chapter.sections) {
+          await ensureSafeFile(path.join(chapterRoot, `${validId(section.id)}.md`));
+        }
+      }
+    }
+  }
+
+  private async reconcileManagedDirectory(
+    directory: string,
+    extension: '.json' | '.md',
+    keep: Set<string>,
+  ) {
+    const entries = await readSafeDirectory(directory);
+    if (!entries) return;
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isDirectory()) throw unsafeBookTree();
+      const id = managedId(entry.name, extension);
+      if (entry.isDirectory()) {
+        if (id) throw unsafeBookTree();
+        continue;
+      }
+      if (id && !keep.has(id)) await unlink(path.join(directory, entry.name));
+    }
+    const remaining = await readSafeDirectory(directory);
+    if (remaining?.length === 0) await rmdir(directory);
+  }
+
+  private async reconcileBookTree(book: Book, root: string) {
+    const expected: Record<ManagedDirectory, Set<string>> = {
+      characters: new Set(book.characters.map((item) => item.id)),
+      world: new Set(book.worldRules.map((item) => item.id)),
+      canon: new Set(book.canonFacts.map((item) => item.id)),
+      summaries: new Set(book.summaries.map((item) => item.id)),
+    };
+    for (const directory of managedDirectories) {
+      await this.reconcileManagedDirectory(
+        path.join(root, directory),
+        directory === 'world' ? '.md' : '.json',
+        expected[directory],
+      );
+    }
+
+    const chapterSections = new Map(
+      book.chapters.map((chapter) => [chapter.id, new Set(chapter.sections.map((section) => section.id))]),
+    );
+    const manuscriptRoot = path.join(root, 'manuscript');
+    const manuscriptEntries = await readSafeDirectory(manuscriptRoot);
+    if (!manuscriptEntries) return;
+    for (const entry of manuscriptEntries) {
+      if (entry.isDirectory()) {
+        if (idPattern.test(entry.name)) {
+          await this.reconcileManagedDirectory(
+            path.join(manuscriptRoot, entry.name),
+            '.md',
+            chapterSections.get(entry.name) ?? new Set<string>(),
+          );
+        }
+      } else if (idPattern.test(entry.name)) {
+        throw unsafeBookTree();
+      }
+    }
+    const remaining = await readSafeDirectory(manuscriptRoot);
+    if (remaining?.length === 0) await rmdir(manuscriptRoot);
   }
 
   private async ensureSeeded() {
@@ -309,6 +480,8 @@ export class StoryStore {
         // First seed write creates the library immediately below.
       }
 
+      await this.prepareBookTree(saved, root);
+
       // Publish the manifest last so an interrupted save keeps the previous
       // manifest pointing at a complete set of source files.
       await Promise.all(saved.characters.map((item) =>
@@ -322,6 +495,11 @@ export class StoryStore {
       await Promise.all(saved.chapters.flatMap((chapter) => chapter.sections.map((section) =>
         atomicWrite(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
       await atomicWrite(path.join(root, 'book.json'), `${JSON.stringify(meta, null, 2)}\n`);
+
+      // Stale managed files are removed only after the new manifest is
+      // published. Library visibility follows cleanup; cleanup errors reject
+      // the save and never become a successful library update.
+      await this.reconcileBookTree(saved, root);
 
       const entry = { id: saved.id, title: saved.title, updatedAt: saved.updatedAt };
       const next = [...library.filter((item) => item.id !== saved.id), entry]

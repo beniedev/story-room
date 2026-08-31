@@ -1,5 +1,11 @@
 import type { Book, CharacterCard, Chapter, SectionBlock } from './types';
 
+/**
+ * These fixture Books are short synthetic examples bundled for tests and the
+ * demo. They are safe to distribute with the project and are never loaded
+ * from a user's local story directory.
+ */
+
 interface CharacterSeed {
   name: string;
   role: string;

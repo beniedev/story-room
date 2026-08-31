@@ -1,6 +1,5 @@
 import { defineConfig, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
-import { sites } from '@openai/sites-vite-plugin';
 
 const apiHost = process.env.STORY_API_HOST ?? '127.0.0.1';
 const apiPort = process.env.STORY_API_PORT ?? '4311';
@@ -12,7 +11,6 @@ export default defineConfig(async ({ mode }) => {
   if (siteBuild) {
     const { cloudflare } = await import('@cloudflare/vite-plugin');
     plugins.push(
-      sites(),
       cloudflare({
         config: {
           name: 'server',
