@@ -919,7 +919,6 @@ h3 {
 }
 
 .source-load-toggle input,
-.source-scope-all input,
 .source-scope-section input {
   width: 1.25rem;
   height: 1.25rem;
@@ -961,18 +960,23 @@ h3 {
 }
 
 .source-scope-all {
-  display: grid;
-  grid-template-columns: minmax(0, 4.5rem) auto;
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  min-height: 56px;
-  padding-inline: 0.4rem 0.75rem;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 4.75rem;
+  min-height: 44px;
+  margin-inline-end: 0.4rem;
+  padding-inline: 0.65rem;
   color: var(--muted);
-  cursor: pointer;
-  font-size: 0.68rem;
+  background: var(--surface);
+  font-size: 0.75rem;
   font-weight: 650;
-  line-height: 1.2;
-  text-align: end;
+}
+
+.source-scope-all[aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--accent-strong);
 }
 
 .source-scope-content {

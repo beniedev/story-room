@@ -1263,11 +1263,7 @@ function SourceLoadScope({
   const validSectionIds = new Set(sectionIds);
   const loadsEverywhere = loadedSectionIds === undefined;
   const selectedIds = new Set((loadedSectionIds ?? sectionIds).filter((id) => validSectionIds.has(id)));
-  const scopeSummary = loadsEverywhere
-    ? '全书全部小节'
-    : selectedIds.size
-      ? `已选择 ${selectedIds.size} 个小节`
-      : '未选择小节';
+  const scopeSummary = `${selectedIds.size}/${sectionIds.length} 小节`;
 
   const toggleSection = (sectionId: string, selected: boolean) => {
     const nextIds = new Set(selectedIds);
@@ -1300,14 +1296,17 @@ function SourceLoadScope({
           <span><strong>{title}</strong><small>加载范围 · {scopeSummary}</small></span>
           <ChevronDown aria-hidden="true" />
         </button>
-        <label className="source-scope-all">
-          <span>全书全部小节</span>
-          <input
-            type="checkbox"
-            checked={loadsEverywhere}
-            onChange={(event) => onScopeChange(event.target.checked ? undefined : [])}
-          />
-        </label>
+        <button
+          type="button"
+          className="source-scope-all"
+          aria-pressed={loadsEverywhere}
+          aria-label="全书全部小节"
+          title="全书全部小节"
+          onClick={() => onScopeChange(loadsEverywhere ? [] : undefined)}
+        >
+          <BookOpenText aria-hidden="true" />
+          <span>全书</span>
+        </button>
       </div>
       {open && (
         <div className="source-scope-content" id={panelId}>
