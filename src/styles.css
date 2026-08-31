@@ -17,6 +17,7 @@
   --manuscript-user: #2f3437;
   --manuscript-ai: #57466f;
   --manuscript-dialogue: #8a5a08;
+  --manuscript-font-size: 16px;
   --primary-text: #ffffff;
   --danger: #a01515;
   --focus: #6b4fa0;
@@ -517,7 +518,7 @@ h3 {
   background: transparent;
   color: var(--text);
   font-family: ui-serif, "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
-  font-size: 1rem;
+  font-size: var(--manuscript-font-size, 16px);
   line-height: 1.72;
   text-align: start;
   overflow-wrap: break-word;
@@ -630,6 +631,83 @@ h3 {
   background: var(--surface-soft);
 }
 
+.block-editor-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.block-editor-header {
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: max(0.45rem, env(safe-area-inset-top)) 0.65rem 0.45rem;
+  background: color-mix(in srgb, var(--page) 94%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.block-editor-header .icon-button {
+  color: var(--accent-strong);
+}
+
+.block-editor-heading {
+  min-width: 0;
+  text-align: center;
+}
+
+.block-editor-heading h1 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.block-editor-heading p {
+  margin: 0.12rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-editor-body {
+  width: min(100%, 72ch);
+  min-height: 0;
+  height: 100%;
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 2rem) clamp(1rem, 7vw, 4rem) max(1rem, env(safe-area-inset-bottom));
+}
+
+.block-editor-textarea {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: ui-serif, "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  font-size: var(--manuscript-font-size, 16px);
+  font-weight: 500;
+  line-height: 1.72;
+  resize: none;
+}
+
+.block-editor-textarea[data-kind="user"] {
+  color: var(--manuscript-user);
+  font-weight: 700;
+}
+
+.block-editor-textarea[data-kind="assistant"] {
+  color: var(--manuscript-ai);
+}
+
 .writer-action-menu {
   position: relative;
 }
@@ -726,11 +804,6 @@ h3 {
 .writer-section-note small {
   font-weight: 500;
   line-height: 1.4;
-}
-
-#edit-block-input {
-  min-height: 10rem;
-  resize: vertical;
 }
 
 .writer-send-button {
@@ -1585,6 +1658,42 @@ h3 {
   line-height: 1.45;
 }
 
+.font-size-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.font-size-setting > span {
+  font-weight: 650;
+}
+
+.font-size-stepper {
+  display: grid;
+  grid-template-columns: 44px 3rem 44px;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.font-size-stepper .icon-button {
+  background: var(--surface);
+}
+
+.font-size-stepper .icon-button:disabled {
+  cursor: not-allowed;
+}
+
+.font-size-stepper output {
+  display: grid;
+  min-height: 44px;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--field);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
 .settings-subdrawer {
   margin: 0;
 }
@@ -2068,6 +2177,10 @@ h3 {
   select,
   textarea {
     font-size: 1rem;
+  }
+
+  .block-editor-textarea {
+    font-size: max(1rem, var(--manuscript-font-size, 16px));
   }
 
   .app-header {

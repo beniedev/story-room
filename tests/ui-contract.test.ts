@@ -75,6 +75,27 @@ describe('writing UI contract', () => {
     expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
   });
 
+  it('opens a selected block in a full-screen editor with immediate autosave', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(app).toContain("const [editingBlockId, setEditingBlockId] = useState('');");
+    expect(app).toContain('const readerScrollPosition = useRef(0);');
+    expect(app).toContain('const editingBlock = blocks.find((item) => item.id === editingBlockId);');
+    expect(app).toContain('className="block-editor-page"');
+    expect(app).toContain('className="block-editor-header"');
+    expect(app).toContain('className="block-editor-textarea"');
+    expect(app).toContain('onChange={(event) => props.onSectionBlocksChange');
+    expect(app).toContain('自动保存');
+    expect(app).toContain('window.scrollY');
+    expect(app).toContain('window.scrollTo');
+    expect(app).toContain('readerScrollPosition.current');
+    expect(app).not.toContain('editBlockDialog');
+    expect(app).not.toContain('edit-block-input');
+    expect(styles).toContain('.block-editor-page');
+    expect(styles).toContain('.block-editor-textarea');
+    expect(styles).toContain('max(1rem, var(--manuscript-font-size, 16px))');
+  });
+
   it('uses local-first autosave, a real export action, and a compact book drawer', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");
@@ -157,6 +178,25 @@ describe('writing UI contract', () => {
     expect(source).toContain('type="password"');
     expect(source).not.toContain('className="settings-list-row');
     expect(source).not.toContain('className="provider-profile-list');
+  });
+
+  it('provides a persisted 12–24px font-size stepper without a slider', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(source).toContain('manuscriptFontSizeKey');
+    expect(source).toContain('minManuscriptFontSize = 12');
+    expect(source).toContain('maxManuscriptFontSize = 24');
+    expect(source).toContain('defaultManuscriptFontSize = 16');
+    expect(source).toContain('localStorage.getItem(manuscriptFontSizeKey)');
+    expect(source).toContain('localStorage.setItem(manuscriptFontSizeKey');
+    expect(source).toContain("setProperty('--manuscript-font-size'");
+    expect(source).toContain('className="font-size-setting"');
+    expect(source).toContain('className="font-size-stepper"');
+    expect(source).toContain('aria-label="减小正文字号"');
+    expect(source).toContain('aria-label="增大正文字号"');
+    expect(source).toContain('<output');
+    expect(source).not.toContain('type="range"');
+    expect(styles).toContain('var(--manuscript-font-size, 16px)');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {

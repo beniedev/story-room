@@ -18,6 +18,7 @@ import {
   ListChecks,
   Menu,
   MessageSquareText,
+  Minus,
   Pencil,
   Plus,
   RefreshCw,
@@ -71,6 +72,14 @@ const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
 const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
+const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
+const minManuscriptFontSize = 12;
+const maxManuscriptFontSize = 24;
+const defaultManuscriptFontSize = 16;
+const clampManuscriptFontSize = (value: number) => Math.min(
+  maxManuscriptFontSize,
+  Math.max(minManuscriptFontSize, Math.round(value)),
+);
 const generalPromptOrder = [
   { id: 'template-contract', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
   { id: 'template-book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
@@ -164,6 +173,12 @@ function App() {
   const [draftInstruction, setDraftInstruction] = useState('');
   const [theme, setTheme] = useState<ThemeName>(() =>
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
+  const [manuscriptFontSize, setManuscriptFontSize] = useState(() => {
+    const stored = localStorage.getItem(manuscriptFontSizeKey);
+    if (stored === null) return defaultManuscriptFontSize;
+    const parsed = Number(stored);
+    return Number.isFinite(parsed) ? clampManuscriptFontSize(parsed) : defaultManuscriptFontSize;
+  });
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() =>
     readProviderProfiles(localStorage.getItem(providerProfilesKey)));
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
@@ -204,6 +219,11 @@ function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--manuscript-font-size', `${manuscriptFontSize}px`);
+    localStorage.setItem(manuscriptFontSizeKey, String(manuscriptFontSize));
+  }, [manuscriptFontSize]);
 
   useEffect(() => {
     try {
@@ -735,6 +755,8 @@ function App() {
         dialogRef={settingsDialog}
         theme={theme}
         onThemeChange={setTheme}
+        manuscriptFontSize={manuscriptFontSize}
+        onManuscriptFontSizeChange={setManuscriptFontSize}
         providerProfiles={providerProfiles}
         activeProviderProfileId={activeProviderProfileId}
         onSelectProviderProfile={setActiveProviderProfileId}
@@ -780,14 +802,15 @@ function Writer(props: WriterProps) {
   const blocks = props.section ? sectionBlocks(props.section) : [];
   const [sectionTitle, setSectionTitle] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
-  const [blockDraft, setBlockDraft] = useState('');
+  const [editingBlockId, setEditingBlockId] = useState('');
   const titleDialog = useRef<HTMLDialogElement>(null);
   const titleTrigger = useRef<HTMLElement | null>(null);
   const actionMenu = useRef<HTMLDetailsElement>(null);
-  const editBlockDialog = useRef<HTMLDialogElement>(null);
   const deleteBlockDialog = useRef<HTMLDialogElement>(null);
   const blockActionTrigger = useRef<HTMLElement | null>(null);
+  const readerScrollPosition = useRef(0);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
+  const editingBlock = blocks.find((item) => item.id === editingBlockId);
 
   const contextPercent = props.maxContext > 0
     ? Math.round((props.contextTokens / props.maxContext) * 100)
@@ -814,11 +837,21 @@ function Writer(props: WriterProps) {
     action();
   };
 
-  const openEditBlockDialog = () => {
+  const openBlockEditor = () => {
     if (!selectedBlock) return;
-    blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setBlockDraft(selectedBlock.content);
-    editBlockDialog.current?.showModal();
+    readerScrollPosition.current = window.scrollY;
+    setEditingBlockId(selectedBlock.id);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+  };
+
+  const closeBlockEditor = () => {
+    setEditingBlockId('');
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: readerScrollPosition.current });
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>('.manuscript-block[aria-pressed="true"]')?.focus({ preventScroll: true });
+      });
+    });
   };
 
   const openDeleteBlockDialog = () => {
@@ -842,6 +875,50 @@ function Writer(props: WriterProps) {
         : part
     ));
   };
+
+  if (editingBlock) {
+    const editorLabel = editingBlock.kind === 'user' ? '用户输入' : 'AI 输出';
+    return (
+      <article className="block-editor-page" aria-labelledby="block-editor-title">
+        <header className="block-editor-header">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={closeBlockEditor}
+            aria-label="返回正文"
+            title="返回正文"
+          ><ArrowLeft aria-hidden="true" /></button>
+          <div className="block-editor-heading">
+            <h1 id="block-editor-title">编辑{editorLabel}</h1>
+            <p title={`${props.book.title} · ${props.chapterTitle} · ${props.section?.title ?? ''}`}>
+              {props.book.title} · {props.chapterTitle} · {props.section?.title ?? ''} · 自动保存
+            </p>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={closeBlockEditor}
+            aria-label="完成编辑并返回正文"
+            title="完成"
+          ><Check aria-hidden="true" /></button>
+        </header>
+        <main className="block-editor-body">
+          <label className="sr-only" htmlFor="block-editor-textarea">{editorLabel}内容</label>
+          <textarea
+            id="block-editor-textarea"
+            className="block-editor-textarea"
+            data-kind={editingBlock.kind}
+            autoFocus
+            value={editingBlock.content}
+            onChange={(event) => props.onSectionBlocksChange(blocks.map((item) => item.id === editingBlock.id
+              ? { ...item, content: event.target.value }
+              : item))}
+            spellCheck
+          />
+        </main>
+      </article>
+    );
+  }
 
   return (
     <div className="writer-page">
@@ -937,7 +1014,7 @@ function Writer(props: WriterProps) {
                   <button
                     type="button"
                     className="icon-button"
-                    onClick={openEditBlockDialog}
+                    onClick={openBlockEditor}
                     disabled={props.busy}
                     aria-label="编辑所选片段"
                     title="编辑"
@@ -1053,37 +1130,6 @@ function Writer(props: WriterProps) {
           title={props.busy ? '正在准备…' : '预览续写'}
         ><Sparkles aria-hidden="true" /></button>
       </form>
-
-      <dialog
-        className="name-dialog"
-        ref={editBlockDialog}
-        onClose={restoreBlockActionFocus}
-        onCancel={(event) => { event.preventDefault(); editBlockDialog.current?.close(); }}
-        aria-labelledby="edit-block-dialog-heading"
-      >
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          const content = blockDraft.trim();
-          if (!content || !selectedBlock) return;
-          props.onSectionBlocksChange(blocks.map((item) => item.id === selectedBlock.id
-            ? { ...item, content }
-            : item));
-          editBlockDialog.current?.close();
-        }}>
-          <header className="dialog-heading">
-            <h2 id="edit-block-dialog-heading">编辑{selectedBlock?.kind === 'user' ? '用户输入' : 'AI 输出'}</h2>
-            <button type="button" className="icon-button" onClick={() => editBlockDialog.current?.close()} aria-label="取消编辑片段" title="取消"><X aria-hidden="true" /></button>
-          </header>
-          <div className="name-dialog-body">
-            <label htmlFor="edit-block-input">片段内容</label>
-            <textarea id="edit-block-input" autoFocus required value={blockDraft} onChange={(event) => setBlockDraft(event.target.value)} spellCheck />
-            <div className="dialog-actions">
-              <button type="button" className="quiet-action" onClick={() => editBlockDialog.current?.close()}>取消</button>
-              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
-            </div>
-          </div>
-        </form>
-      </dialog>
 
       <dialog
         className="confirm-dialog"
@@ -1912,6 +1958,8 @@ function SettingsDrawer({
   dialogRef,
   theme,
   onThemeChange,
+  manuscriptFontSize,
+  onManuscriptFontSizeChange,
   providerProfiles,
   activeProviderProfileId,
   onSelectProviderProfile,
@@ -1922,6 +1970,8 @@ function SettingsDrawer({
   dialogRef: React.RefObject<HTMLDialogElement | null>;
   theme: ThemeName;
   onThemeChange: (theme: ThemeName) => void;
+  manuscriptFontSize: number;
+  onManuscriptFontSizeChange: (size: number) => void;
   providerProfiles: ProviderProfile[];
   activeProviderProfileId: string;
   onSelectProviderProfile: (id: string) => void;
@@ -2012,6 +2062,29 @@ function SettingsDrawer({
           <option value="manga">少女漫画</option>
         </select>
         <p className="compact-setting-note">{theme === 'paper' ? '类 Notion / Obsidian 的安静默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
+        <div className="font-size-setting" role="group" aria-labelledby="font-size-setting-label">
+          <span id="font-size-setting-label">字号大小</span>
+          <div className="font-size-stepper">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => onManuscriptFontSizeChange(clampManuscriptFontSize(manuscriptFontSize - 1))}
+              disabled={manuscriptFontSize <= minManuscriptFontSize}
+              aria-label="减小正文字号"
+              title="减小正文字号"
+            ><Minus aria-hidden="true" /></button>
+            <output aria-live="polite" aria-label={`当前正文字号 ${manuscriptFontSize} 像素`}>{manuscriptFontSize}</output>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => onManuscriptFontSizeChange(clampManuscriptFontSize(manuscriptFontSize + 1))}
+              disabled={manuscriptFontSize >= maxManuscriptFontSize}
+              aria-label="增大正文字号"
+              title="增大正文字号"
+            ><Plus aria-hidden="true" /></button>
+          </div>
+        </div>
+        <p className="compact-setting-note">正文 12–24 px；手机编辑器最低保持 16 px。</p>
       </section>
       <section className="settings-section" aria-labelledby="provider-settings-heading">
         <h3 id="provider-settings-heading" className="sr-only">模型连接</h3>
