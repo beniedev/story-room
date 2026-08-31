@@ -10,6 +10,7 @@
   color-scheme: light;
   font-family: var(--app-font-family);
   font-synthesis: none;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -17,7 +18,9 @@
   --surface: #ffffff;
   --surface-soft: #eef1f5;
   --surface-active: #e3e8ef;
+  --header-surface: rgba(247, 249, 252, 0.96);
   --field: #f1f3f6;
+  --field-focus: rgba(94, 129, 172, 0.18);
   --text: #2e3a50;
   --muted: #526078;
   --accent: #5e81ac;
@@ -42,6 +45,11 @@
   --prompt-tone-5: #6e8fb6;
   --prompt-tone-6: #5e81ac;
   --backdrop: rgba(40, 51, 70, 0.24);
+  --page-gradient-start: #e9edf3;
+  --page-gradient-end: #dce3ec;
+  --page-dot: rgba(136, 192, 208, 0.14);
+  --scrollbar-thumb: rgba(94, 129, 172, 0.4);
+  --scrollbar-track: rgba(82, 96, 120, 0.15);
   --radius-card: 9px;
   --radius-control: 6px;
   --workspace-max: 72rem;
@@ -61,21 +69,24 @@
 }
 
 :root[data-theme="manga"] {
-  --page: #fff3f7;
-  --surface: rgba(255, 255, 255, 0.94);
-  --surface-soft: #fdebf2;
-  --surface-active: #f8dfe9;
-  --field: #f8e2ea;
-  --text: #4a304a;
-  --muted: #70506f;
-  --accent: #7a4697;
-  --accent-strong: #663981;
-  --manuscript-user: #4a304a;
-  --manuscript-ai: #7a4697;
-  --manuscript-dialogue: #955200;
+  --page: rgba(255, 250, 252, 0.92);
+  --surface: rgba(255, 255, 255, 0.88);
+  --surface-soft: rgba(255, 245, 247, 0.78);
+  --surface-active: #faecf1;
+  --header-surface: rgba(255, 250, 252, 0.92);
+  --field: rgba(255, 244, 249, 0.9);
+  --field-focus: rgba(217, 111, 149, 0.18);
+  --text: #4a354d;
+  --muted: #644b66;
+  --accent: #7d63c7;
+  --accent-strong: #644b66;
+  --manuscript-user: #644b66;
+  --manuscript-ai: #644b66;
+  --manuscript-emphasis: #7d63c7;
+  --manuscript-dialogue: #9a6b20;
   --primary-text: #ffffff;
   --danger: #a01515;
-  --focus: #6f3f91;
+  --focus: #7d63c7;
   --prompt-tone-1: #efb4cf;
   --prompt-tone-2: #d994c4;
   --prompt-tone-3: #bd75b9;
@@ -83,6 +94,11 @@
   --prompt-tone-5: #7d4697;
   --prompt-tone-6: #60357e;
   --backdrop: rgba(49, 28, 51, 0.32);
+  --page-gradient-start: #fff5f7;
+  --page-gradient-end: #fdeff4;
+  --page-dot: rgba(248, 169, 215, 0.16);
+  --scrollbar-thumb: rgba(217, 111, 149, 0.32);
+  --scrollbar-track: rgba(126, 126, 126, 0.2);
   --radius-card: 10px;
   --radius-control: 5px;
 }
@@ -92,7 +108,9 @@
   --surface: #dfe0e3;
   --surface-soft: #c6c8cd;
   --surface-active: #bcc0c7;
+  --header-surface: #e8e9eb;
   --field: #d4d5d9;
+  --field-focus: rgba(143, 64, 82, 0.16);
   --text: #26334d;
   --muted: #465062;
   --accent: #8f4052;
@@ -114,6 +132,11 @@
   --prompt-tone-5: #737985;
   --prompt-tone-6: #5e6573;
   --backdrop: rgba(32, 37, 48, 0.3);
+  --page-gradient-start: #cfd1d6;
+  --page-gradient-end: #c2c5ca;
+  --page-dot: rgba(143, 64, 82, 0.1);
+  --scrollbar-thumb: rgba(143, 64, 82, 0.35);
+  --scrollbar-track: rgba(38, 51, 77, 0.15);
   --radius-card: 4px;
   --radius-control: 3px;
 }
@@ -123,7 +146,9 @@
   --surface: #ffffff;
   --surface-soft: #f5f2fa;
   --surface-active: #e7e0f0;
+  --header-surface: #faf8fd;
   --field: #f3eff8;
+  --field-focus: rgba(118, 86, 161, 0.16);
   --text: #332f43;
   --muted: #685e78;
   --accent: #7656a1;
@@ -145,6 +170,11 @@
   --prompt-tone-5: #886dad;
   --prompt-tone-6: #684989;
   --backdrop: rgba(52, 37, 72, 0.24);
+  --page-gradient-start: #f0ecf8;
+  --page-gradient-end: #e4ddf0;
+  --page-dot: rgba(118, 86, 161, 0.13);
+  --scrollbar-thumb: rgba(118, 86, 161, 0.36);
+  --scrollbar-track: rgba(51, 47, 67, 0.12);
   --radius-card: 18px;
   --radius-control: 7px;
 }
@@ -168,8 +198,31 @@ body {
   min-width: 320px;
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--page);
+  background:
+    radial-gradient(circle, var(--page-dot) 0 1px, transparent 1.2px 18px),
+    linear-gradient(var(--page-gradient-start) 0%, var(--page-gradient-end) 100%);
   overflow-x: clip;
+}
+
+html:has(.writer-page),
+body:has(.writer-page) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 0.7rem;
+  height: 0.7rem;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
 }
 
 button,
@@ -466,18 +519,23 @@ h3 {
 }
 
 .writer-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
   margin-inline: auto;
-  padding-block-end: calc(4.75rem + env(safe-area-inset-bottom));
+  padding-block-end: 0;
+  overflow: hidden;
 }
 
 .writer-heading {
   position: sticky;
   inset-block-start: 0;
   z-index: 12;
-  width: 100%;
+  width: min(100%, var(--workspace-max));
   margin-inline: auto;
-  background: color-mix(in srgb, var(--page) 94%, transparent);
+  background: var(--header-surface);
   backdrop-filter: blur(14px);
 }
 
@@ -632,18 +690,24 @@ h3 {
 }
 
 .manuscript-wrap {
-  background: var(--surface);
+  width: min(100%, var(--workspace-max));
+  min-height: 0;
+  margin-inline: auto;
+  background: transparent;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .manuscript {
   display: grid;
   align-content: start;
   width: min(100%, var(--workspace-max));
-  min-height: calc(100dvh - 9.5rem);
+  min-height: 100%;
   margin-inline: auto;
   padding: clamp(1rem, 4vw, 2rem) clamp(1rem, 7vw, 4rem) 5.5rem;
   border-radius: 0;
-  background: transparent;
+  background: var(--surface);
   color: var(--text);
   font-family: var(--manuscript-font-family);
   font-size: var(--manuscript-font-size, 16px);
@@ -690,6 +754,10 @@ h3 {
 .manuscript-block[data-kind="assistant"][aria-pressed="true"] {
   background: var(--surface-active);
   color: var(--manuscript-ai);
+}
+
+:root[data-theme="manga"] .manuscript-block em {
+  color: var(--manuscript-emphasis);
 }
 
 .manuscript-dialogue {
@@ -776,7 +844,7 @@ h3 {
 }
 
 .instruction-dock textarea:focus {
-  background: var(--field);
+  background: var(--field-focus, var(--field));
 }
 
 .manuscript-block-actions {
@@ -2591,7 +2659,7 @@ h3 {
   }
 
   .manuscript {
-    min-height: calc(100dvh - 9.5rem);
+    min-height: 100%;
     padding: 1.2rem 1rem 5.5rem;
   }
 

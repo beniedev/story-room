@@ -14,7 +14,23 @@ describe('writing UI contract', () => {
     expect(source).toContain(':root[data-theme="manga"]');
     expect(source).toContain(':root[data-theme="gray"]');
     expect(source).toContain(':root[data-theme="purple"]');
-    expect(source).toContain('--surface-active: #f8dfe9');
+    expect(source).toContain('--header-surface: rgba(247, 249, 252, 0.96)');
+    expect(source).toContain('--header-surface: rgba(255, 250, 252, 0.92)');
+    expect(source).toContain('--header-surface: #e8e9eb');
+    expect(source).toContain('--header-surface: #faf8fd');
+    expect(source).toContain('--surface-active: #faecf1');
+    expect(source).toContain('--field-focus: rgba(94, 129, 172, 0.18)');
+    expect(source).toContain('--field-focus: rgba(217, 111, 149, 0.18)');
+    expect(source).toContain('--field-focus: rgba(143, 64, 82, 0.16)');
+    expect(source).toContain('--field-focus: rgba(118, 86, 161, 0.16)');
+    expect(source).toContain('--scrollbar-thumb: rgba(217, 111, 149, 0.32)');
+    expect(source).toContain('linear-gradient(var(--page-gradient-start) 0%, var(--page-gradient-end) 100%)');
+    expect(source).toMatch(/\.manuscript-wrap\s*\{[\s\S]{0,220}background:\s*transparent/);
+    expect(source).toMatch(/\.manuscript\s*\{[\s\S]{0,420}background:\s*var\(--surface\)/);
+    expect(source).toMatch(/\.writer-heading\s*\{[\s\S]{0,180}width:\s*min\(100%, var\(--workspace-max\)\)/);
+    expect(source).toMatch(/\.writer-heading\s*\{[\s\S]{0,320}background:\s*var\(--header-surface\)/);
+    expect(source).toMatch(/::-webkit-scrollbar-thumb\s*\{[\s\S]{0,120}background:\s*var\(--scrollbar-thumb\)/);
+    expect(source).toContain('background: var(--field-focus, var(--field))');
     expect(source).toContain('.manuscript');
   });
 
@@ -87,6 +103,9 @@ describe('writing UI contract', () => {
       expect(rule).toContain('var(--workspace-max)');
     }
     expect(styles).toMatch(/\.shelf-page\s*\{[\s\S]{0,220}var\(--workspace-wide-max\)/);
+    expect(styles).toMatch(/\.writer-page\s*\{[\s\S]{0,260}grid-template-rows:\s*auto minmax\(0, 1fr\)[\s\S]{0,180}overflow:\s*hidden/);
+    expect(styles).toMatch(/\.manuscript-wrap\s*\{[\s\S]{0,260}width:\s*min\(100%, var\(--workspace-max\)\)[\s\S]{0,180}overflow-y:\s*auto/);
+    expect(styles).toMatch(/html:has\(\.writer-page\),[\s\S]{0,80}body:has\(\.writer-page\)[\s\S]{0,100}overflow:\s*hidden/);
     expect(styles).toMatch(/@media \(max-width: 46rem\)[\s\S]*\.manuscript\s*\{[\s\S]{0,160}padding:\s*1\.2rem 1rem 5\.5rem/);
     expect(styles).not.toContain('width: min(100%, 72ch)');
   });
@@ -220,9 +239,11 @@ describe('writing UI contract', () => {
     expect(app).toContain('删除所选片段');
     expect(app).toContain('只会删除当前选中的这一块用户输入或 AI 输出');
     expect(app).toContain('className="manuscript-dialogue"');
-    expect(styles).toContain('--manuscript-user: #4a304a');
-    expect(styles).toContain('--manuscript-ai: #7a4697');
-    expect(styles).toContain('--manuscript-dialogue: #955200');
+    expect(styles).toContain('--manuscript-user: #644b66');
+    expect(styles).toContain('--manuscript-ai: #644b66');
+    expect(styles).toContain('--manuscript-emphasis: #7d63c7');
+    expect(styles).toContain('--manuscript-dialogue: #9a6b20');
+    expect(styles).toMatch(/:root\[data-theme="manga"\] \.manuscript-block em\s*\{[\s\S]{0,100}color:\s*var\(--manuscript-emphasis\)/);
     expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
     expect(styles).toContain('color: color-mix(in srgb, var(--muted) 48%, transparent)');
     expect(styles).toContain('.manuscript-block-actions .icon-button:focus-visible');
