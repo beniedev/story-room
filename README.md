@@ -44,7 +44,7 @@ The bundled [`story-native-obsidian-vault`](skills/story-native-obsidian-vault/S
 - Editable Book writing brief and per-source prompt inclusion controls
 - Prompt-plan inspector with ordered layers, provenance, inclusion reasons, and estimated size
 - Deterministic offline Fake Provider with direct manuscript continuation
-- Story directory, simple relationship view, and Paper / Manga Bloom themes
+- Story directory, simple relationship view, and Nord / Manga Bloom themes
 - Responsive controls for desktop and mobile-sized viewports
 
 ## What is intentionally absent

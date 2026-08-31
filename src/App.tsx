@@ -2355,10 +2355,10 @@ function SettingsDrawer({
         <h3 id="theme-heading">皮肤</h3>
         <label className="sr-only" htmlFor="theme-select">选择皮肤</label>
         <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeName)}>
-          <option value="paper">Paper · 默认</option>
+          <option value="paper">Nord · 默认</option>
           <option value="manga">少女漫画</option>
         </select>
-        <p className="compact-setting-note">{theme === 'paper' ? '类 Notion / Obsidian 的安静默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
+        <p className="compact-setting-note">{theme === 'paper' ? '参考 Obsidian Nord 的冷灰蓝默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
         <label className="font-family-setting" htmlFor="manuscript-font-select">
           <span>正文字体</span>
           <select
@@ -2366,7 +2366,7 @@ function SettingsDrawer({
             value={manuscriptFontFamily}
             onChange={(event) => onManuscriptFontFamilyChange(event.target.value as ManuscriptFontFamily)}
           >
-            <option value="system">跟随系统</option>
+            <option value="system">跟随系统 · 无衬线</option>
             <option value="wenkai">霞鹜文楷</option>
           </select>
         </label>

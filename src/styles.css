@@ -8,36 +8,36 @@
 
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --page: #f7f7f4;
-  --surface: #ffffff;
-  --surface-soft: #efefeb;
-  --surface-active: #e8e8e2;
-  --field: #f1f1ed;
-  --text: #2f3437;
-  --muted: #6b6f73;
-  --accent: #57466f;
-  --accent-strong: #46345f;
-  --manuscript-user: #2f3437;
-  --manuscript-ai: #57466f;
-  --manuscript-dialogue: #8a5a08;
+  --page: #e5e9f0;
+  --surface: #eceff4;
+  --surface-soft: #d8dee9;
+  --surface-active: #d6e1ee;
+  --field: #dfe5ed;
+  --text: #2e3440;
+  --muted: #4c566a;
+  --accent: #5e81ac;
+  --accent-strong: #486b94;
+  --manuscript-user: #2e3440;
+  --manuscript-ai: #486b94;
+  --manuscript-dialogue: #8f5d50;
   --manuscript-font-size: 16px;
-  --manuscript-font-family: ui-serif, "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
-  --primary-text: #ffffff;
-  --danger: #a01515;
-  --focus: #6b4fa0;
-  --prompt-tone-1: #e7d6df;
-  --prompt-tone-2: #d4b7cf;
-  --prompt-tone-3: #b994bf;
-  --prompt-tone-4: #9871a9;
-  --prompt-tone-5: #76548e;
-  --prompt-tone-6: #57466f;
-  --radius-card: 10px;
-  --radius-control: 7px;
+  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --primary-text: #f8fafc;
+  --danger: #a94450;
+  --focus: #5e81ac;
+  --prompt-tone-1: #d8dee9;
+  --prompt-tone-2: #b8c8da;
+  --prompt-tone-3: #88c0d0;
+  --prompt-tone-4: #81a1c1;
+  --prompt-tone-5: #6e8fb6;
+  --prompt-tone-6: #5e81ac;
+  --radius-card: 9px;
+  --radius-control: 6px;
 }
 
 :root[data-manuscript-font="wenkai"] {
@@ -58,6 +58,7 @@
   --manuscript-ai: #73539a;
   --manuscript-dialogue: #94600d;
   --primary-text: #ffffff;
+  --danger: #a01515;
   --focus: #694292;
   --prompt-tone-1: #f2bfd5;
   --prompt-tone-2: #dfa7cf;
@@ -67,6 +68,11 @@
   --prompt-tone-6: #5e3f83;
   --radius-card: 10px;
   --radius-control: 5px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text);
 }
 
 * {

@@ -421,7 +421,7 @@ describe('writing UI contract', () => {
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
     expect(source).toContain('id="manuscript-font-select"');
-    expect(source).toContain('<option value="system">跟随系统</option>');
+    expect(source).toContain('<option value="system">跟随系统 · 无衬线</option>');
     expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
     expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
     expect(styles).toContain('@font-face');
