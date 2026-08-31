@@ -26,6 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from './api';
+import { buildContextPlan as composeContextPlan } from './contextPlan';
 import {
   deleteDirectorySelection,
   toggleChapterSelection,
@@ -139,6 +140,19 @@ function App() {
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
+  const promptPreview = useMemo(() => {
+    if (!book || !section) return null;
+    try {
+      return composeContextPlan(book, {
+        sectionId: section.id,
+        mode,
+        selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
+        instruction,
+      });
+    } catch {
+      return null;
+    }
+  }, [book, instruction, mode, section, selectedCharacterId]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
@@ -607,6 +621,7 @@ function App() {
         activeProviderProfileId={activeProviderProfileId}
         onSelectProviderProfile={setActiveProviderProfileId}
         onSaveProviderProfile={saveProviderProfile}
+        promptPlan={promptPreview}
         onClose={() => settingsTrigger.current?.focus()}
       />
 
@@ -1531,6 +1546,7 @@ function SettingsDrawer({
   activeProviderProfileId,
   onSelectProviderProfile,
   onSaveProviderProfile,
+  promptPlan,
   onClose,
 }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
@@ -1540,6 +1556,7 @@ function SettingsDrawer({
   activeProviderProfileId: string;
   onSelectProviderProfile: (id: string) => void;
   onSaveProviderProfile: (profile: ProviderProfile) => void;
+  promptPlan: ContextPlan | null;
   onClose: () => void;
 }) {
   const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
@@ -1557,6 +1574,10 @@ function SettingsDrawer({
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
+  const stablePrefixCount = promptPlan?.included.filter((item) => item.cacheBand === 'stable').length ?? 0;
+  const stablePrefixTokens = promptPlan?.included
+    .filter((item) => item.cacheBand === 'stable')
+    .reduce((total, item) => total + item.estimatedTokens, 0) ?? 0;
   const closeDrawer = () => dialogRef.current?.close();
   const selectProfile = (profile: ProviderProfile) => {
     onSelectProviderProfile(profile.id);
@@ -1664,6 +1685,40 @@ function SettingsDrawer({
               <p className="provider-save-status" role="status" aria-live="polite">{connectionStatus}</p>
             </form>
           </div>
+        </details>
+        <details className="settings-subdrawer prompt-composition-drawer">
+          <summary>
+            <Layers3 aria-hidden="true" />
+            <span>
+              <strong>Prompt 组合</strong>
+              <small>{promptPlan ? `${promptPlan.included.length} 个区块 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '打开小节后显示当前组合'}</small>
+            </span>
+            <ChevronDown aria-hidden="true" />
+          </summary>
+          {promptPlan ? (
+            <div className="prompt-composition-content">
+              <p className="prompt-composition-note">只读 · 按实际发送顺序排列。长期不变的资料在前，正文与本轮指令在后。</p>
+              <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
+                {promptPlan.included.map((item, index) => (
+                  <li key={item.id} data-cache-band={item.cacheBand}>
+                    <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="prompt-composition-copy">
+                      <strong>{item.title}</strong>
+                      <small>{item.reason}</small>
+                    </span>
+                    <span className="prompt-composition-meta">
+                      <span className="cache-band-label">{item.cacheBand === 'stable' ? '稳定前缀' : item.cacheBand === 'session' ? '模式层' : '每轮变化'}</span>
+                      <small>约 {item.estimatedTokens.toLocaleString()} tokens</small>
+                    </span>
+                    {index === stablePrefixCount - 1 && <span className="cache-prefix-boundary">稳定前缀到这里</span>}
+                  </li>
+                ))}
+              </ol>
+              <p className="prompt-composition-footnote">{promptPlan.excluded.length > 0 ? `${promptPlan.excluded.length} 项关闭或为空，不会发送。` : '当前资料已全部装入。'}缓存是否命中仍由所选模型服务决定。</p>
+            </div>
+          ) : (
+            <p className="prompt-composition-empty">先进入一本书的小节，这里会显示该次写作实际使用的 Prompt 组合。</p>
+          )}
         </details>
       </section>
       <section className="settings-section" aria-labelledby="storage-heading">

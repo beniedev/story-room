@@ -1478,6 +1478,99 @@ h3 {
   min-height: 1.15rem;
 }
 
+.prompt-composition-content {
+  display: grid;
+  gap: 0.75rem;
+  padding-block-start: 1rem;
+}
+
+.prompt-composition-note,
+.prompt-composition-footnote,
+.prompt-composition-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.prompt-composition-empty {
+  padding: 1rem 0 0;
+}
+
+.prompt-composition-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-composition-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.65rem;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.prompt-composition-index {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-composition-copy,
+.prompt-composition-meta {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.prompt-composition-copy small,
+.prompt-composition-meta small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.prompt-composition-copy small {
+  overflow-wrap: anywhere;
+}
+
+.prompt-composition-meta {
+  justify-items: end;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.cache-band-label {
+  padding: 0.16rem 0.38rem;
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--accent-strong);
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+
+.prompt-composition-list li[data-cache-band="dynamic"] .cache-band-label {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.cache-prefix-boundary {
+  grid-column: 1 / -1;
+  padding-block-start: 0.45rem;
+  border-block-start: 1px dashed var(--border);
+  color: var(--accent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .prompt-dialog::backdrop {
   background: rgba(35, 24, 37, 0.28);
 }
@@ -1771,6 +1864,19 @@ h3 {
 
   .block-size {
     grid-column: 2;
+    white-space: normal;
+  }
+
+  .prompt-composition-list li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .prompt-composition-meta {
+    grid-column: 2;
+    grid-auto-flow: column;
+    justify-content: start;
+    justify-items: start;
+    text-align: start;
     white-space: normal;
   }
 }

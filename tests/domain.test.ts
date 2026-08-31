@@ -53,6 +53,35 @@ describe('context plan', () => {
     expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-canon');
   });
 
+  it('keeps reusable Book material in a stable prefix and turn-specific input at the tail', () => {
+    const plan = buildContextPlan(makeBook('book-a', 'ALPHA'), {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue ALPHA',
+    });
+
+    expect(plan.included.map((item) => item.sourceId)).toEqual([
+      'system:manuscript-contract',
+      'book-a:identity',
+      'book-a:style',
+      'book-a-world',
+      'book-a:outline',
+      'mode:author',
+      'book-a-section',
+      'request:instruction',
+    ]);
+    expect(plan.included.map((item) => item.cacheBand)).toEqual([
+      'stable',
+      'stable',
+      'stable',
+      'stable',
+      'stable',
+      'session',
+      'dynamic',
+      'dynamic',
+    ]);
+  });
+
   it('rejects a character that is not in the active Book', () => {
     const bookA = makeBook('book-a', 'ALPHA');
     expect(() => buildContextPlan(bookA, {
@@ -73,6 +102,8 @@ describe('context plan', () => {
     });
 
     expect(result.plan.included.map((item) => item.sourceId)).toContain('book-a-character');
+    expect(result.plan.included.findIndex((item) => item.sourceId === 'book-a-character'))
+      .toBeLessThan(result.plan.included.findIndex((item) => item.sourceId === 'mode:character'));
     expect(result.plan.prompt).toContain('第一人称连续小说正文');
     expect(result.plan.prompt).toContain('AI 控制环境');
     expect(result.plan.prompt).toContain('角色身份：Observer');

@@ -106,6 +106,10 @@ describe('writing UI contract', () => {
     expect(source).toContain('最大上下文');
     expect(source).toContain('最大输出');
     expect(source).toContain('保存连接方案');
+    expect(source).toContain('Prompt 组合');
+    expect(source).toContain('只读 · 按实际发送顺序排列');
+    expect(source).toContain('稳定前缀到这里');
+    expect(source).toContain('每轮变化');
     expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
     expect(source).toContain('type="password"');
     expect(source).not.toContain('className="settings-list-row');

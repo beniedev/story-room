@@ -70,9 +70,12 @@ export type PromptLayer =
   | 'manuscript'
   | 'instruction';
 
+export type PromptCacheBand = 'stable' | 'session' | 'dynamic';
+
 export interface PromptBlock {
   id: string;
   layer: PromptLayer;
+  cacheBand: PromptCacheBand;
   title: string;
   content: string;
   bookId: string;
