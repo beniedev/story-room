@@ -7,7 +7,7 @@ import type {
   PromptLayer,
   PromptSource,
 } from './types';
-import { estimateTokens } from './textMetrics';
+import { estimateTokens } from './textMetrics.ts';
 
 export class ContextPlanInputError extends Error {
   constructor(message: string) {
