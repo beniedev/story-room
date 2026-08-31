@@ -11,7 +11,7 @@ import type {
   Summary,
   WorldRule,
 } from '../src/types.ts';
-import { createExampleBooks, createLegacyFixtureBook } from '../src/fixtures.ts';
+import { createExampleBooks, createLegacyFixtureBook, upgradeExampleBookContent } from '../src/fixtures.ts';
 
 type BookFile = Omit<Book, 'characters' | 'worldRules' | 'canonFacts' | 'summaries' | 'chapters'> & {
   characters: Array<Pick<CharacterCard, 'id'>>;
@@ -207,9 +207,13 @@ export class StoryStore {
         const entry = library.find((item) => item.id === example.id);
         if (!entry) continue;
         const legacy = legacyExamples.get(example.id);
-        if (!legacy) continue;
         const current = await this.loadBook(example.id);
-        if (sameBookIgnoringTimestamp(current, legacy)) await this.saveBook(example);
+        if (legacy && sameBookIgnoringTimestamp(current, legacy)) {
+          await this.saveBook(example);
+          continue;
+        }
+        const upgraded = upgradeExampleBookContent(current, example);
+        if (upgraded) await this.saveBook(upgraded);
       }
     })();
     await this.examplesPromise;

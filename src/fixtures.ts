@@ -16,6 +16,73 @@ interface BookSeed {
   chapters: Array<{ title: string; sections: Array<{ title: string; content?: string; note?: string; blocks?: SectionBlock[] }> }>;
 }
 
+const observatoryOpeningBlocks: SectionBlock[] = [
+  {
+    id: 'the-observatory-block-1',
+    kind: 'user',
+    content: '让米拉在例行记录时发现异常，但先不要解释那束光是什么。',
+  },
+  {
+    id: 'the-observatory-block-2',
+    kind: 'assistant',
+    content: '夜班开始后的第七码，米拉发现了那束光。\n\n它没有出现在任何预报里，却沿着观测窗的边缘稳定移动，像一行被刻意留下的句子。她关掉自动校准，玻璃上的微光仍然没有消失。',
+  },
+  {
+    id: 'the-observatory-block-3',
+    kind: 'user',
+    content: '她先不报警，检查是不是玻璃、传感器或轨道尘埃造成的误差。',
+  },
+  {
+    id: 'the-observatory-block-4',
+    kind: 'assistant',
+    content: '米拉把观测窗切换到遮光模式。室内的倒影一层层熄灭，最后只剩控制台上跳动的绿色刻度；那束光却穿过黑暗，仍旧停在她视线的正中央。\n\n她调出三组独立传感器。温度没有变化，辐射计没有读数，轨道尘埃模型也给出一条笔直的零线。\n\n“记录异常光源，等待人工复核。”她对值守系统说。\n\n零号沉默了两秒：“记录已存在。”',
+  },
+  {
+    id: 'the-observatory-block-5',
+    kind: 'user',
+    content: '让她追问记录是什么时候建立的，同时让灯塔出现一个不可能实时抵达的回应。',
+  },
+  {
+    id: 'the-observatory-block-6',
+    kind: 'assistant',
+    content: '米拉的手停在确认键上。\n\n“谁建立的记录？”\n\n屏幕展开一行时间戳：四小时后的零点十七分。按照延迟通讯条例，那是最近一次轨道窗口关闭之后的时间。\n\n她还没来得及复制数据，头顶的旧式扬声器忽然亮起。电流声像潮水一样漫过空舱，随后传出一个疲惫而清晰的声音：\n\n“米拉，别回答那束光。”\n\n声纹识别在下一秒给出结果——说话的人是她自己。',
+  },
+];
+
+const blocksToContent = (blocks: SectionBlock[]) => blocks.map((block) => block.content).join('\n\n');
+const previousObservatoryOpeningContent = '夜班开始后的第七码，米拉发现了那束光。\n\n它没有出现在任何预报里，却沿着观测窗的边缘稳定移动，像一行被刻意留下的句子。她关掉自动校准，玻璃上的微光仍然没有消失。';
+const previousObservatoryOpeningBlocks: SectionBlock[] = [
+  { id: 'the-observatory-block-1', kind: 'assistant', content: '玻璃上的微光仍然没有消失。' },
+];
+
+export const upgradeExampleBookContent = (current: Book, example: Book): Book | null => {
+  if (current.id !== 'the-observatory' || example.id !== current.id) return null;
+  const currentSection = current.chapters.flatMap((chapter) => chapter.sections)
+    .find((section) => section.id === 'the-observatory-section-1-1');
+  const nextSection = example.chapters.flatMap((chapter) => chapter.sections)
+    .find((section) => section.id === currentSection?.id);
+  if (!currentSection || !nextSection) return null;
+  const hasKnownBlocks = currentSection.blocks === undefined
+    || JSON.stringify(currentSection.blocks) === JSON.stringify(previousObservatoryOpeningBlocks);
+  if (currentSection.content !== previousObservatoryOpeningContent || !hasKnownBlocks) return null;
+
+  return {
+    ...current,
+    summaries: current.summaries.map((summary) => (
+      summary.sourceSectionIds.includes(currentSection.id) && summary.content === previousObservatoryOpeningContent
+        ? { ...summary, content: nextSection.content }
+        : summary
+    )),
+    chapters: current.chapters.map((chapter) => ({
+      ...chapter,
+      sections: chapter.sections.map((section) => section.id === currentSection.id
+        ? { ...section, content: nextSection.content, blocks: nextSection.blocks }
+        : section),
+    })),
+    updatedAt: example.updatedAt,
+  };
+};
+
 const toCharacters = (bookId: string, seeds: CharacterSeed[]): CharacterCard[] => seeds.map((seed, index) => ({
   id: `${bookId}-character-${index + 1}`,
   name: seed.name,
@@ -90,8 +157,8 @@ export const createExampleBooks = (): Book[] => [
         sections: [
           {
             title: '观测窗前',
-            content: '夜班开始后的第七码，米拉发现了那束光。\n\n它没有出现在任何预报里，却沿着观测窗的边缘稳定移动，像一行被刻意留下的句子。她关掉自动校准，玻璃上的微光仍然没有消失。',
-            blocks: [{ id: 'the-observatory-block-1', kind: 'assistant', content: '玻璃上的微光仍然没有消失。' }],
+            content: blocksToContent(observatoryOpeningBlocks),
+            blocks: observatoryOpeningBlocks,
           },
           { title: '迟到四小时的问候' },
           { title: '无人签收的坐标' },

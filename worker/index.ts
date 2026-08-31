@@ -1,5 +1,5 @@
 import { buildContextPlan, fakeGenerate, RequestValidationError } from '../server/domain';
-import { createExampleBooks, createLegacyFixtureBook } from '../src/fixtures';
+import { createExampleBooks, createLegacyFixtureBook, upgradeExampleBookContent } from '../src/fixtures';
 import type { Book, BookIndexEntry, GenerationRequest } from '../src/types';
 
 interface Env {
@@ -151,10 +151,19 @@ const ensureDatabase = async (env: Env) => {
       } catch {
         return [];
       }
-      if (!legacy || !sameBookIgnoringTimestamp(current, legacy)) return [];
+      let next = legacy && sameBookIgnoringTimestamp(current, legacy) ? book : null;
+      if (!next) {
+        try {
+          validateBook(current);
+        } catch {
+          return [];
+        }
+        next = upgradeExampleBookContent(current, book);
+      }
+      if (!next) return [];
       return [env.DB.prepare(
         'UPDATE books SET title = ?, data_json = ?, updated_at = ? WHERE id = ?',
-      ).bind(book.title, JSON.stringify(book), book.updatedAt, book.id)];
+      ).bind(next.title, JSON.stringify(next), next.updatedAt, next.id)];
     });
     if (writes.length > 0) await env.DB.batch(writes);
   })();

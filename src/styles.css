@@ -538,6 +538,11 @@ h3 {
   white-space: pre-wrap;
 }
 
+.manuscript-block-group {
+  display: grid;
+  min-width: 0;
+}
+
 .manuscript-block[data-kind="user"] {
   color: var(--manuscript-user);
   font-weight: 700;
@@ -612,19 +617,17 @@ h3 {
   resize: none;
 }
 
-.writer-block-actions {
-  position: absolute;
-  inset-block-end: calc(100% + 0.55rem);
-  inset-inline-start: 0;
+.manuscript-block-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 0.3rem;
-  padding: 0.3rem;
-  border-radius: var(--radius-card);
-  background: var(--surface);
+  padding: 0.2rem 0.25rem 0.55rem;
 }
 
-.writer-block-actions .icon-button {
-  background: transparent;
+.manuscript-block-actions .icon-button {
+  width: 44px;
+  min-width: 44px;
+  background: var(--surface-soft);
 }
 
 .writer-action-menu {

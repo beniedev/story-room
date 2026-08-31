@@ -909,21 +909,51 @@ function Writer(props: WriterProps) {
         <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
         <div className="manuscript" aria-label="连续小说正文">
           {blocks.map((block) => (
-            <button
-              type="button"
-              className="manuscript-block"
-              data-kind={block.kind}
-              aria-pressed={selectedBlockId === block.id}
-              aria-label={`${block.kind === 'user' ? '用户输入' : 'AI 输出'}：${block.content}`}
-              onClick={() => {
-                actionMenu.current?.removeAttribute('open');
-                setSelectedBlockId((current) => current === block.id ? '' : block.id);
-              }}
-              key={block.id}
-            >
-              <span className="sr-only">{block.kind === 'user' ? '用户输入：' : 'AI 输出：'}</span>
-              <span className="manuscript-block-copy">{renderBlockContent(block)}</span>
-            </button>
+            <div className="manuscript-block-group" data-selected={selectedBlockId === block.id || undefined} key={block.id}>
+              <button
+                type="button"
+                className="manuscript-block"
+                data-kind={block.kind}
+                aria-pressed={selectedBlockId === block.id}
+                aria-label={`${block.kind === 'user' ? '用户输入' : 'AI 输出'}：${block.content}`}
+                onClick={() => {
+                  actionMenu.current?.removeAttribute('open');
+                  setSelectedBlockId((current) => current === block.id ? '' : block.id);
+                }}
+              >
+                <span className="sr-only">{block.kind === 'user' ? '用户输入：' : 'AI 输出：'}</span>
+                <span className="manuscript-block-copy">{renderBlockContent(block)}</span>
+              </button>
+              {selectedBlockId === block.id && (
+                <div className="manuscript-block-actions" role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => props.onRegenerateBlock(block.id)}
+                    disabled={props.busy || block.kind !== 'assistant'}
+                    aria-label="重新生成所选 AI 输出"
+                    title={block.kind === 'assistant' ? '重新生成' : '只有 AI 输出可以重新生成'}
+                  ><RefreshCw aria-hidden="true" /></button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={openEditBlockDialog}
+                    disabled={props.busy}
+                    aria-label="编辑所选片段"
+                    title="编辑"
+                  ><Pencil aria-hidden="true" /></button>
+                  <button
+                    type="button"
+                    className="icon-button danger-icon"
+                    onClick={openDeleteBlockDialog}
+                    disabled={props.busy}
+                    aria-haspopup="dialog"
+                    aria-label="删除所选片段"
+                    title="删除"
+                  ><Trash2 aria-hidden="true" /></button>
+                </div>
+              )}
+            </div>
           ))}
           {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
         </div>
@@ -944,35 +974,6 @@ function Writer(props: WriterProps) {
       )}
 
       <form className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
-        {selectedBlock && (
-          <div className="writer-block-actions" role="group" aria-label={`所选${selectedBlock.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={() => props.onRegenerateBlock(selectedBlock.id)}
-              disabled={props.busy || selectedBlock.kind !== 'assistant'}
-              aria-label="重新生成所选 AI 输出"
-              title={selectedBlock.kind === 'assistant' ? '重新生成' : '只有 AI 输出可以重新生成'}
-            ><RefreshCw aria-hidden="true" /></button>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={openEditBlockDialog}
-              disabled={props.busy}
-              aria-label="编辑所选片段"
-              title="编辑"
-            ><Pencil aria-hidden="true" /></button>
-            <button
-              type="button"
-              className="icon-button danger-icon"
-              onClick={openDeleteBlockDialog}
-              disabled={props.busy}
-              aria-haspopup="dialog"
-              aria-label="删除所选片段"
-              title="删除"
-            ><Trash2 aria-hidden="true" /></button>
-          </div>
-        )}
         <details
           ref={actionMenu}
           className="writer-action-menu"

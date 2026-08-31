@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { createExampleBooks } from '../src/fixtures';
+import { createExampleBooks, upgradeExampleBookContent } from '../src/fixtures';
 
 describe('writing UI contract', () => {
   it('keeps the manuscript out of chat UI structures', async () => {
@@ -60,8 +60,10 @@ describe('writing UI contract', () => {
     expect(app).toContain('className="writer-section-note"');
     expect(app).toContain('本节注释');
     expect(app).toContain('发送时排列在当前正文前');
+    expect(app).toContain('className="manuscript-block-group"');
     expect(app).toContain('className="manuscript-block"');
-    expect(app).toContain('className="writer-block-actions"');
+    expect(app).toContain('className="manuscript-block-actions"');
+    expect(app).not.toContain('className="writer-block-actions"');
     expect(app).toContain('重新生成所选 AI 输出');
     expect(app).toContain('编辑所选片段');
     expect(app).toContain('删除所选片段');
@@ -164,5 +166,25 @@ describe('writing UI contract', () => {
     expect(books.every((book) => book.chapters.length >= 2 && book.chapters.length <= 3)).toBe(true);
     expect(books.every((book) => book.chapters.every((chapter) => chapter.sections.length >= 2 && chapter.sections.length <= 3))).toBe(true);
     expect(books.some((book) => book.chapters.some((chapter) => chapter.sections.some((section) => section.content.trim())))).toBe(true);
+    const opening = books[0].chapters[0].sections[0];
+    expect(opening.blocks).toHaveLength(6);
+    expect(opening.blocks?.map((block) => block.kind)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    expect(opening.content).toBe(opening.blocks?.map((block) => block.content).join('\n\n'));
+  });
+
+  it('upgrades only the untouched synthetic opening example', () => {
+    const [example] = createExampleBooks();
+    const previous = structuredClone(example);
+    const opening = previous.chapters[0].sections[0];
+    opening.content = '夜班开始后的第七码，米拉发现了那束光。\n\n它没有出现在任何预报里，却沿着观测窗的边缘稳定移动，像一行被刻意留下的句子。她关掉自动校准，玻璃上的微光仍然没有消失。';
+    delete opening.blocks;
+    previous.title = '用户保留的书名';
+
+    const upgraded = upgradeExampleBookContent(previous, example);
+    expect(upgraded?.title).toBe('用户保留的书名');
+    expect(upgraded?.chapters[0].sections[0].blocks).toHaveLength(6);
+
+    opening.content += '用户已经修改。';
+    expect(upgradeExampleBookContent(previous, example)).toBeNull();
   });
 });
