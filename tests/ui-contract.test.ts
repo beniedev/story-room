@@ -54,6 +54,97 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('查看当前 Prompt');
   });
 
+  it('keeps the desktop shelf hierarchy compact and removes the clickable brand home', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/<button\b[\s\S]{0,300}className="brand-home"[\s\S]{0,300}<\/button>/);
+
+    const shelfContentStart = source.indexOf('className="shelf-content"');
+    const selectorIndex = source.indexOf('className="book-library-drawer"');
+    const toolbarIndex = source.indexOf('className="directory-toolbar"');
+    expect(shelfContentStart).toBeGreaterThanOrEqual(0);
+    expect(selectorIndex).toBeGreaterThan(shelfContentStart);
+    expect(selectorIndex).toBeLessThan(toolbarIndex);
+  });
+
+  it('passes the active provider metadata to the writer and emphasizes the context count', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const writerInvocationStart = source.indexOf('<Writer');
+    const writerInvocationEnd = source.indexOf('/>', writerInvocationStart);
+    const writerInvocation = source.slice(writerInvocationStart, writerInvocationEnd);
+
+    expect(source).toContain('作者模式 · 写作接龙');
+    expect(source).not.toContain('作者模式 · 接龙');
+    expect(writerInvocation).toMatch(/provider(?:Profile)?Name\s*=/);
+    expect(writerInvocation).toMatch(/modelId\s*=/);
+    expect(source).toContain('className="writer-provider-line"');
+    expect(source).toMatch(/className="writer-provider-line"[\s\S]{0,500}props\.(?:providerName|modelId)/);
+    expect(styles).toMatch(/\.writer-context-count\s*\{[\s\S]{0,300}font-weight:\s*(?:7\d{2}|8\d{2})/);
+  });
+
+  it('keeps provider testing and saving in one action row with an explicit status', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const actionRowStart = source.indexOf('className="provider-form-actions"');
+    const actionRow = source.slice(actionRowStart, actionRowStart + 1800);
+
+    expect(actionRowStart).toBeGreaterThanOrEqual(0);
+    expect(actionRow).toMatch(/测试连接/);
+    expect(actionRow).toContain('保存连接方案');
+    expect(actionRow).toContain('onClick=');
+    expect(actionRow).toContain('type="submit"');
+    expect(source).toContain('connectionStatus');
+    expect(source).toContain('role="status"');
+  });
+
+  it('groups prompt layers and renders the distribution as non-card callouts', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+    expect(source).toMatch(/layer[\s\S]{0,160}character/);
+    expect(source).toMatch(/layer[\s\S]{0,160}world/);
+    expect(source).toContain('角色卡');
+    expect(source).toContain('世界观条例');
+    expect(source).toContain('className="prompt-composition-map"');
+    expect(source).toContain('className="prompt-connector-lines"');
+    expect(source).toContain('className="prompt-included-names"');
+    expect(source).toContain('const combinePromptSources');
+    expect(source).toContain('includedNames');
+    expect(source).toMatch(/className="prompt-proportion-segment"[\s\S]{0,320}(?:data-(?:tone|color)|promptTone|--prompt-color)/);
+    expect(styles).toContain('.prompt-composition-map');
+    expect(styles).toContain('.prompt-connector-lines');
+    const promptListStyleStart = styles.indexOf('.prompt-composition-list li');
+    const promptIndexStyleStart = styles.indexOf('.prompt-composition-index', promptListStyleStart);
+    const promptListStyles = styles.slice(promptListStyleStart, promptIndexStyleStart);
+    expect(promptListStyleStart).toBeGreaterThanOrEqual(0);
+    expect(promptIndexStyleStart).toBeGreaterThan(promptListStyleStart);
+    expect(promptListStyles).not.toContain('background: var(--surface)');
+    expect(promptListStyles).not.toContain('border-radius: var(--radius-card)');
+    expect(styles).toContain('--prompt-tone-1');
+    expect(styles).toContain('var(--prompt-color)');
+  });
+
+  it('combines character and world prompt sources without losing names or token totals', async () => {
+    const { combinePromptSources } = await import('../src/App');
+    const items = [
+      { id: 'system', layer: 'system', title: '正文合同', reason: '规则', cacheBand: 'stable', estimatedTokens: 10 },
+      { id: 'world-1', layer: 'world', title: '移动规则', reason: '设定', cacheBand: 'stable', estimatedTokens: 3 },
+      { id: 'world-2', layer: 'world', title: '时间规则', reason: '设定', cacheBand: 'stable', estimatedTokens: 4 },
+      { id: 'character-1', layer: 'character', title: '米拉', reason: '角色', cacheBand: 'stable', estimatedTokens: 5 },
+      { id: 'character-2', layer: 'character', title: '诺亚', reason: '角色', cacheBand: 'stable', estimatedTokens: 6 },
+    ] as const;
+
+    const combined = combinePromptSources(items.map((item) => ({ ...item })));
+    expect(combined.map((item) => item.title)).toEqual(['正文合同', '世界观条例', '角色卡']);
+    expect(combined.find((item) => item.layer === 'world')).toMatchObject({
+      estimatedTokens: 7,
+      includedNames: ['移动规则', '时间规则'],
+    });
+    expect(combined.find((item) => item.layer === 'character')).toMatchObject({
+      estimatedTokens: 11,
+      includedNames: ['米拉', '诺亚'],
+    });
+  });
+
   it('keeps author relay input and temporary notes inside the continuous manuscript', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');

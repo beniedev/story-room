@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowLeft,
   BookMarked,
@@ -14,12 +14,12 @@ import {
   Globe2,
   KeyRound,
   Layers3,
-  Library,
   ListChecks,
   Menu,
   MessageSquareText,
   Minus,
   Pencil,
+  PlugZap,
   Plus,
   RefreshCw,
   ScrollText,
@@ -54,6 +54,7 @@ import type {
   ContextPlan,
   GenerationMode,
   PromptCacheBand,
+  PromptLayer,
   SectionBlock,
   ThemeName,
   WorldRule,
@@ -83,17 +84,60 @@ const clampManuscriptFontSize = (value: number) => Math.min(
   Math.max(minManuscriptFontSize, Math.round(value)),
 );
 const generalPromptOrder = [
-  { id: 'template-contract', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
-  { id: 'template-book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
-  { id: 'template-style', title: '写作风格指导', reason: '全书共用的行文风格', cacheBand: 'stable' },
-  { id: 'template-world', title: '世界观条例', reason: '本书已启用的世界规则', cacheBand: 'stable' },
-  { id: 'template-characters', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
-  { id: 'template-outline', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
-  { id: 'template-mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
-  { id: 'template-note', title: '小节注释', reason: '只指导当前小节的下一次续写，位于正文前', cacheBand: 'dynamic' },
-  { id: 'template-manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
-  { id: 'template-instruction', title: '本轮输入', reason: '作者接龙正文或角色输入', cacheBand: 'dynamic' },
-] satisfies Array<{ id: string; title: string; reason: string; cacheBand: PromptCacheBand }>;
+  { id: 'template-contract', layer: 'system', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
+  { id: 'template-book', layer: 'book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
+  { id: 'template-style', layer: 'book', title: '写作风格指导', reason: '全书共用的行文风格', cacheBand: 'stable' },
+  { id: 'template-world', layer: 'world', title: '世界观条例', reason: '本书已启用的世界规则', cacheBand: 'stable' },
+  { id: 'template-characters', layer: 'character', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
+  { id: 'template-outline', layer: 'book', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
+  { id: 'template-mode', layer: 'mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
+  { id: 'template-note', layer: 'note', title: '小节注释', reason: '只指导当前小节的下一次续写，位于正文前', cacheBand: 'dynamic' },
+  { id: 'template-manuscript', layer: 'manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
+  { id: 'template-instruction', layer: 'instruction', title: '本轮输入', reason: '作者接龙正文或角色输入', cacheBand: 'dynamic' },
+] satisfies Array<{ id: string; layer: PromptLayer; title: string; reason: string; cacheBand: PromptCacheBand }>;
+
+type PromptCompositionItem = {
+  id: string;
+  layer: PromptLayer;
+  title: string;
+  reason: string;
+  cacheBand: PromptCacheBand;
+  estimatedTokens: number;
+  includedNames?: string[];
+};
+
+export const combinePromptSources = (items: PromptCompositionItem[]) => {
+  const combined: PromptCompositionItem[] = [];
+  const grouped = new Map<'character' | 'world', PromptCompositionItem>();
+
+  items.forEach((item) => {
+    if (item.layer !== 'character' && item.layer !== 'world') {
+      combined.push(item);
+      return;
+    }
+
+    const existing = grouped.get(item.layer);
+    if (existing) {
+      existing.estimatedTokens += item.estimatedTokens;
+      existing.includedNames?.push(item.title);
+      return;
+    }
+
+    const aggregate = {
+      ...item,
+      id: `combined-${item.layer}`,
+      title: item.layer === 'character' ? '角色卡' : '世界观条例',
+      reason: item.layer === 'character' ? '本次装入的角色资料' : '本次装入的世界规则',
+      includedNames: item.id.startsWith('template-') ? undefined : [item.title],
+    };
+    grouped.set(item.layer, aggregate);
+    combined.push(aggregate);
+  });
+
+  return combined;
+};
+
+const promptTone = (index: number) => `var(--prompt-tone-${index % 6 + 1})`;
 
 const cacheBandLabel = (band: PromptCacheBand) => (
   band === 'stable' ? '稳定前缀' : band === 'session' ? '模式层' : '每轮变化'
@@ -640,18 +684,7 @@ function App() {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
       {view === 'shelf' && <header className="app-header">
-        <button
-          type="button"
-          className="brand-home"
-          onClick={navigateFromHeader}
-          aria-label="故事书架主页"
-          title="故事书架主页"
-        >
-          <span className="brand-mark" aria-hidden="true">
-            <Library size={20} strokeWidth={2} />
-          </span>
-          <span className="brand-name">Story-native</span>
-        </button>
+        <span className="header-leading-space" aria-hidden="true" />
         <div className="header-context" aria-live="polite">
           <strong>故事书架</strong>
         </div>
@@ -691,6 +724,8 @@ function App() {
             busy={busy}
             contextTokens={promptPreview?.estimatedTokens ?? 0}
             maxContext={activeProviderProfile?.maxContext ?? 0}
+            providerName={activeProviderProfile?.name ?? '未选择方案'}
+            modelId={activeProviderProfile?.modelId ?? '未选择模型'}
             onBack={navigateFromHeader}
             onOpenBookSettings={() => {
               setReturnToWriterAfterSettings(true);
@@ -790,6 +825,8 @@ interface WriterProps {
   busy: boolean;
   contextTokens: number;
   maxContext: number;
+  providerName: string;
+  modelId: string;
   onBack: () => void;
   onOpenBookSettings: () => void;
   onExport: () => void;
@@ -943,6 +980,9 @@ function Writer(props: WriterProps) {
           <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
             {compactTokenCount(props.contextTokens)} / {compactTokenCount(props.maxContext)} · {contextPercent}%
           </span>
+          <small className="writer-provider-line">
+            <span>{props.providerName}</span><span aria-hidden="true">|</span><span>{props.modelId}</span>
+          </small>
         </div>
 
         <div className="writer-tool-row" role="group" aria-label="写作工具">
@@ -1060,7 +1100,7 @@ function Writer(props: WriterProps) {
                 className="writer-menu-action"
                 aria-pressed={props.mode === 'author'}
                 onClick={() => props.onModeChange('author')}
-              ><BookOpenText aria-hidden="true" />作者模式 · 接龙</button>
+              ><BookOpenText aria-hidden="true" />作者模式 · 写作接龙</button>
               <button
                 type="button"
                 className="writer-menu-action"
@@ -1513,60 +1553,59 @@ function Bookshelf(props: BookshelfProps) {
 
   return (
     <div className="shelf-page">
-      <aside className="book-rail" aria-label="书目选择">
-        <details className="book-library-drawer">
-          <summary className="book-selector-card">
-            <BookOpenText aria-hidden="true" />
-            <span><small>书</small><strong>{props.book.title}</strong></span>
-            <ChevronDown className="book-selector-chevron" aria-hidden="true" />
-          </summary>
-          <div className="book-library-panel">
-            <div className="book-list" aria-label="全部书目">
-              {props.library.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  aria-current={entry.id === props.book.id ? 'true' : undefined}
-                  onClick={() => props.onOpenBook(entry.id)}
-                >
-                  <BookOpenText aria-hidden="true" />
-                  <span>{entry.title}</span>
-                  {entry.id === props.book.id && <Check aria-hidden="true" />}
-                </button>
-              ))}
-            </div>
-            <div className="book-actions-row">
-              <button
-                type="button"
-                className="book-settings-button button-with-icon"
-                aria-haspopup="dialog"
-                aria-label="新建书目"
-                title="新建书目"
-                onClick={() => openNameDialog({ kind: 'new-book', value: '' })}
-              ><Plus aria-hidden="true" /></button>
-              <button
-                type="button"
-                className="icon-button"
-                aria-haspopup="dialog"
-                aria-label={`修改书名${props.book.title}`}
-                title="修改书名"
-                onClick={() => openNameDialog({ kind: 'rename-book', value: props.book.title })}
-              ><Pencil aria-hidden="true" /></button>
-              <button
-                type="button"
-                className="icon-button danger-icon"
-                aria-haspopup="dialog"
-                aria-label={`删除书目${props.book.title}`}
-                title={props.library.length <= 1 ? '书库至少保留一本书' : '删除书目'}
-                disabled={props.library.length <= 1}
-                onClick={() => openDeleteDialog({ kind: 'book', id: props.book.id, title: props.book.title })}
-              ><Trash2 aria-hidden="true" /></button>
-            </div>
-          </div>
-        </details>
-      </aside>
-
       <section className="shelf-content">
+        <aside className="book-rail" aria-label="书目选择">
+          <details className="book-library-drawer">
+            <summary className="book-selector-card">
+              <BookOpenText aria-hidden="true" />
+              <span><small>书</small><strong>{props.book.title}</strong></span>
+              <ChevronDown className="book-selector-chevron" aria-hidden="true" />
+            </summary>
+            <div className="book-library-panel">
+              <div className="book-list" aria-label="全部书目">
+                {props.library.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    aria-current={entry.id === props.book.id ? 'true' : undefined}
+                    onClick={() => props.onOpenBook(entry.id)}
+                  >
+                    <BookOpenText aria-hidden="true" />
+                    <span>{entry.title}</span>
+                    {entry.id === props.book.id && <Check aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
+              <div className="book-actions-row">
+                <button
+                  type="button"
+                  className="book-settings-button button-with-icon"
+                  aria-haspopup="dialog"
+                  aria-label="新建书目"
+                  title="新建书目"
+                  onClick={() => openNameDialog({ kind: 'new-book', value: '' })}
+                ><Plus aria-hidden="true" /></button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-haspopup="dialog"
+                  aria-label={`修改书名${props.book.title}`}
+                  title="修改书名"
+                  onClick={() => openNameDialog({ kind: 'rename-book', value: props.book.title })}
+                ><Pencil aria-hidden="true" /></button>
+                <button
+                  type="button"
+                  className="icon-button danger-icon"
+                  aria-haspopup="dialog"
+                  aria-label={`删除书目${props.book.title}`}
+                  title={props.library.length <= 1 ? '书库至少保留一本书' : '删除书目'}
+                  disabled={props.library.length <= 1}
+                  onClick={() => openDeleteDialog({ kind: 'book', id: props.book.id, title: props.book.title })}
+                ><Trash2 aria-hidden="true" /></button>
+              </div>
+            </div>
+          </details>
+        </aside>
         <h1 className="sr-only">故事书架</h1>
         <section className={`directory-panel${selectionMode ? ' selection-mode' : ''}`} aria-label="章节目录">
             <div className="directory-toolbar">
@@ -1990,31 +2029,48 @@ function SettingsDrawer({
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
-  const compositionItems = promptPlan?.included.map((item) => ({
+  const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const compositionItems = combinePromptSources(promptPlan?.included.map((item) => ({
     id: item.id,
+    layer: item.layer,
     title: item.title,
     reason: item.reason,
     cacheBand: item.cacheBand,
     estimatedTokens: item.estimatedTokens,
-  })) ?? generalPromptOrder.map((item) => ({ ...item, estimatedTokens: 0 }));
+  })) ?? generalPromptOrder.map((item) => ({ ...item, estimatedTokens: 0 })));
   const stablePrefixCount = compositionItems.filter((item) => item.cacheBand === 'stable').length;
   const stablePrefixTokens = promptPlan?.included
     .filter((item) => item.cacheBand === 'stable')
     .reduce((total, item) => total + item.estimatedTokens, 0) ?? 0;
   const totalPromptTokens = promptPlan?.estimatedTokens ?? 0;
+  const promptWeights = compositionItems.map((item) => (
+    totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens : 1 / compositionItems.length
+  ));
+  let promptWeightCursor = 0;
+  const promptSegmentCenters = promptWeights.map((weight) => {
+    const center = (promptWeightCursor + weight / 2) * 100;
+    promptWeightCursor += weight;
+    return center;
+  });
   const closeDrawer = () => dialogRef.current?.close();
+  const clearConnectionResult = () => {
+    setConnectionStatus('');
+    setConnectionState('idle');
+  };
   const selectProfile = (profile: ProviderProfile) => {
     onSelectProviderProfile(profile.id);
     setEditingId(profile.id);
     setProfileDraft({ ...profile });
     setApiKeyDraft(sessionKeys[profile.id] ?? '');
     setConnectionStatus('');
+    setConnectionState('idle');
   };
   const startNewProfile = () => {
     setEditingId('');
     setProfileDraft(blankProfile());
     setApiKeyDraft('');
     setConnectionStatus('');
+    setConnectionState('idle');
   };
   const submitProfile = (event: React.FormEvent) => {
     event.preventDefault();
@@ -2033,6 +2089,60 @@ function SettingsDrawer({
     setProfileDraft(profile);
     setSessionKeys((current) => ({ ...current, [id]: apiKeyDraft }));
     setConnectionStatus('连接方案已保存。API Key 只在当前页面临时保留。');
+    setConnectionState('idle');
+  };
+  const testProfileConnection = async () => {
+    const baseUrl = profileDraft.baseUrl.trim().replace(/\/+$/, '');
+    const modelId = profileDraft.modelId.trim();
+    if (!baseUrl || !modelId || !apiKeyDraft.trim()) {
+      setConnectionState('error');
+      setConnectionStatus('请先填写 URL、模型 ID 和 API Key。');
+      return;
+    }
+
+    let endpoint: URL;
+    try {
+      endpoint = new URL(`${baseUrl}/models`);
+      if (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:') throw new Error();
+    } catch {
+      setConnectionState('error');
+      setConnectionStatus('请填写以 http:// 或 https:// 开头的有效 URL。');
+      return;
+    }
+
+    setConnectionState('testing');
+    setConnectionStatus('正在测试连接…');
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${apiKeyDraft.trim()}`,
+        },
+      });
+      if (!response.ok) {
+        setConnectionState('error');
+        setConnectionStatus(response.status === 401 || response.status === 403
+          ? '连接失败：API Key 无效或没有权限。'
+          : `连接失败：服务返回 HTTP ${response.status}。`);
+        return;
+      }
+
+      const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+      const modelIds = Array.isArray(payload.data)
+        ? payload.data.map((item) => item?.id).filter((id): id is string => typeof id === 'string')
+        : [];
+      if (modelIds.length > 0 && !modelIds.includes(modelId)) {
+        setConnectionState('error');
+        setConnectionStatus('连接成功，但模型列表中没有这个模型 ID。');
+        return;
+      }
+
+      setConnectionState('success');
+      setConnectionStatus('连接有效，模型 ID 可用。');
+    } catch {
+      setConnectionState('error');
+      setConnectionStatus('无法连接。请检查地址，或确认服务允许浏览器访问 /models。');
+    }
   };
 
   return (
@@ -2123,25 +2233,36 @@ function SettingsDrawer({
             </div>
             <form className="provider-profile-form" onSubmit={submitProfile}>
               <label htmlFor="provider-profile-name">方案名称</label>
-              <input id="provider-profile-name" name="provider-profile-name" required autoComplete="off" value={profileDraft.name} onChange={(event) => setProfileDraft((current) => ({ ...current, name: event.target.value }))} placeholder="例如：主要模型" />
+              <input id="provider-profile-name" name="provider-profile-name" required autoComplete="off" value={profileDraft.name} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, name: event.target.value })); }} placeholder="例如：主要模型" />
 
               <label htmlFor="provider-api-key">API Key</label>
-              <input id="provider-api-key" name="provider-api-key" type="password" autoComplete="off" spellCheck={false} value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)} placeholder="sk-…" />
+              <input id="provider-api-key" name="provider-api-key" type="password" autoComplete="off" spellCheck={false} value={apiKeyDraft} onChange={(event) => { clearConnectionResult(); setApiKeyDraft(event.target.value); }} placeholder="sk-…" />
 
               <label htmlFor="provider-base-url">URL</label>
-              <input id="provider-base-url" name="provider-base-url" type="url" required autoComplete="url" spellCheck={false} value={profileDraft.baseUrl} onChange={(event) => setProfileDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" />
+              <input id="provider-base-url" name="provider-base-url" type="url" required autoComplete="url" spellCheck={false} value={profileDraft.baseUrl} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, baseUrl: event.target.value })); }} placeholder="https://api.example.com/v1" />
 
               <label htmlFor="provider-model-id">模型 ID</label>
-              <input id="provider-model-id" name="provider-model-id" required autoComplete="off" spellCheck={false} value={profileDraft.modelId} onChange={(event) => setProfileDraft((current) => ({ ...current, modelId: event.target.value }))} placeholder="model-id" />
+              <input id="provider-model-id" name="provider-model-id" required autoComplete="off" spellCheck={false} value={profileDraft.modelId} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, modelId: event.target.value })); }} placeholder="model-id" />
 
               <div className="provider-number-grid">
-                <label>最大上下文<input name="provider-max-context" type="number" inputMode="numeric" min="1" required value={profileDraft.maxContext} onChange={(event) => setProfileDraft((current) => ({ ...current, maxContext: Number(event.target.value) }))} /></label>
-                <label>最大输出<input name="provider-max-output" type="number" inputMode="numeric" min="1" required value={profileDraft.maxOutput} onChange={(event) => setProfileDraft((current) => ({ ...current, maxOutput: Number(event.target.value) }))} /></label>
+                <label>最大上下文<input name="provider-max-context" type="number" inputMode="numeric" min="1" required value={profileDraft.maxContext} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, maxContext: Number(event.target.value) })); }} /></label>
+                <label>最大输出<input name="provider-max-output" type="number" inputMode="numeric" min="1" required value={profileDraft.maxOutput} onChange={(event) => { clearConnectionResult(); setProfileDraft((current) => ({ ...current, maxOutput: Number(event.target.value) })); }} /></label>
               </div>
 
-              <p className="provider-secret-note">API Key 不会写入书稿、私有书库或浏览器持久化；刷新页面后需要重新输入。</p>
-              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存连接方案</button>
-              <p className="provider-save-status" role="status" aria-live="polite">{connectionStatus}</p>
+              <p className="provider-secret-note">API Key 不会写入书稿、私有书库或浏览器持久化；测试时只会直接发送到你填写的 URL。</p>
+              <div className="provider-form-actions">
+                <button
+                  type="button"
+                  className="quiet-action button-with-icon provider-test-button"
+                  onClick={() => void testProfileConnection()}
+                  disabled={connectionState === 'testing'}
+                  aria-label="测试连接"
+                ><PlugZap aria-hidden="true" />{connectionState === 'testing' ? '测试中' : '测试'}</button>
+                <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存连接方案</button>
+              </div>
+              <p className="provider-save-status" data-state={connectionState} role="status" aria-live="polite">
+                {connectionStatus && <><span className="provider-status-dot" aria-hidden="true" />{connectionStatus}</>}
+              </p>
             </form>
           </div>
         </details>
@@ -2150,7 +2271,7 @@ function SettingsDrawer({
             <Layers3 aria-hidden="true" />
             <span>
               <strong>Prompt 组合</strong>
-              <small>{promptPlan ? `${promptPlan.included.length} 个区块 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '通用顺序 · 选中小节后显示占比'}</small>
+              <small>{promptPlan ? `${compositionItems.length} 组 · 稳定前缀约 ${stablePrefixTokens.toLocaleString()} tokens` : '通用顺序 · 选中小节后显示占比'}</small>
             </span>
             <ChevronDown aria-hidden="true" />
           </summary>
@@ -2158,45 +2279,71 @@ function SettingsDrawer({
             <p className="prompt-composition-note">{promptPlan
               ? '当前小节 · 竖条按估算 tokens 比例显示，右侧按实际发送顺序排列。'
               : '主页概览 · 竖条等高表示通用顺序；进入小节后切换为当前 Prompt 占比。'}</p>
-            <div className="prompt-composition-chart">
-              <figure className="prompt-proportion-figure">
+            <div
+              className="prompt-composition-chart"
+              style={{ '--prompt-item-count': compositionItems.length } as CSSProperties}
+            >
+              <div className="prompt-composition-map">
                 <div className="prompt-proportion-bar" aria-hidden="true" data-template={!promptPlan}>
                   {compositionItems.map((item, index) => {
                     const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                    const tone = promptTone(index);
                     return (
                       <span
                         className="prompt-proportion-segment"
                         data-cache-band={item.cacheBand}
                         data-small={Boolean(promptPlan && share < 6)}
                         key={item.id}
-                        style={{ flexGrow: promptPlan ? Math.max(item.estimatedTokens, 0.01) : 1 }}
+                        style={{
+                          '--prompt-color': tone,
+                          flexGrow: promptPlan ? Math.max(item.estimatedTokens, 0.01) : 1,
+                        } as CSSProperties}
                       >
                         <span>{String(index + 1).padStart(2, '0')}</span>
                       </span>
                     );
                   })}
                 </div>
-                <figcaption>{promptPlan ? '段高 = 当前 tokens 占比' : '等高 = 通用拼接顺序'}</figcaption>
-              </figure>
-              <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
-                {compositionItems.map((item, index) => {
-                  const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
-                  return (
-                    <li key={item.id} data-cache-band={item.cacheBand}>
-                      <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
-                      <span className="prompt-composition-copy">
-                        <strong>{item.title}</strong>
-                        <small><span className="cache-band-label">{cacheBandLabel(item.cacheBand)}</span>{item.reason}</small>
-                      </span>
-                      <span className="prompt-composition-meta">
-                        <strong>{promptPlan ? promptShareLabel(share) : '顺序'}</strong>
-                        <small>{promptPlan ? `约 ${item.estimatedTokens.toLocaleString()} tokens` : `${index + 1} / ${compositionItems.length}`}</small>
-                      </span>
-                      {index === stablePrefixCount - 1 && <span className="cache-prefix-boundary">稳定前缀到这里</span>}
-                    </li>
-                  );
-                })}
-              </ol>
+                <svg className="prompt-connector-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                  {compositionItems.map((item, index) => (
+                    <line
+                      key={item.id}
+                      x1="8"
+                      y1={promptSegmentCenters[index]}
+                      x2="25"
+                      y2={(index + 0.5) / compositionItems.length * 100}
+                      style={{ stroke: promptTone(index) }}
+                    />
+                  ))}
+                </svg>
+                <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
+                  {compositionItems.map((item, index) => {
+                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                    return (
+                      <li
+                        key={item.id}
+                        data-cache-band={item.cacheBand}
+                        style={{ '--prompt-color': promptTone(index) } as CSSProperties}
+                      >
+                        <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
+                        <span className="prompt-composition-copy">
+                          <span className="prompt-composition-title-row">
+                            <strong>{item.title}</strong>
+                            <span className="prompt-composition-meta">
+                              <strong>{promptPlan ? promptShareLabel(share) : '顺序'}</strong>
+                              <small>{promptPlan ? `约 ${item.estimatedTokens.toLocaleString()} tokens` : `${index + 1} / ${compositionItems.length}`}</small>
+                            </span>
+                          </span>
+                          <small>{cacheBandLabel(item.cacheBand)} · {item.reason}</small>
+                          {item.includedNames?.length ? <small className="prompt-included-names">包含：{item.includedNames.join('、')}</small> : null}
+                          {index === stablePrefixCount - 1 && <small className="cache-prefix-boundary">稳定前缀到这里</small>}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+              <p className="prompt-map-caption">{promptPlan ? '段高 = 当前 tokens 占比' : '等高 = 通用拼接顺序'}</p>
             </div>
             <p className="prompt-composition-footnote">{promptPlan
               ? `${promptPlan.excluded.length > 0 ? `${promptPlan.excluded.length} 项关闭或为空，不会发送。` : '当前资料已全部装入。'}缓存是否命中仍由所选模型服务决定。`
