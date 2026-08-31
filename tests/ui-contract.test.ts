@@ -58,11 +58,10 @@ describe('writing UI contract', () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(app).toContain('className="writer-section-note"');
-    expect(app).toContain('作者注释');
+    expect(app).toContain('小节注释');
     expect(app).toContain('authorNote');
     expect(app).toContain('onAuthorNoteChange');
-    expect(app).toContain('只指导下一次续写，不进入正文；应用后自动清空。');
-    expect(app).toContain('不进入正文；应用后自动清空。');
+    expect(app).toContain('只指导当前小节的下一次续写，不进入正文；发送后自动清空。');
     expect(app).toContain('写下一段正文，让 AI 从这里接着写');
     expect(app).not.toContain('props.section?.note');
     expect(app).not.toContain('onSectionNoteChange');
@@ -71,6 +70,7 @@ describe('writing UI contract', () => {
     expect(app).toContain('className="manuscript-block-actions"');
     expect(app).not.toContain('className="writer-block-actions"');
     expect(app).toContain('重新生成所选 AI 输出');
+    expect(app).toContain("{block.kind === 'assistant' && <button");
     expect(app).toContain('编辑所选片段');
     expect(app).toContain('删除所选片段');
     expect(app).toContain('只会删除当前选中的这一块用户输入或 AI 输出');
@@ -79,16 +79,32 @@ describe('writing UI contract', () => {
     expect(styles).toContain('--manuscript-ai: #73539a');
     expect(styles).toContain('--manuscript-dialogue: #94600d');
     expect(styles).toContain('.manuscript-block[data-kind="assistant"]');
+    expect(styles).toContain('color: color-mix(in srgb, var(--muted) 48%, transparent)');
+    expect(styles).toContain('.manuscript-block-actions .icon-button:focus-visible');
   });
 
-  it('sends author notes as transient request context and clears both inputs only on apply', async () => {
+  it('sends directly, appends the continuation, and clears transient inputs only after success', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    expect(app).toContain("authorNote: mode === 'author' ? authorNote : undefined");
-    expect(app).toContain('setDraftAuthorNote(authorNote)');
-    expect(app).toContain("setAuthorNote((current) => current === draftAuthorNote ? '' : current)");
-    expect(app).toContain("setInstruction((current) => current === draftInstruction ? '' : current)");
-    expect(app).toContain("setDraftAuthorNote('')");
-    expect(app).toContain('onDiscardDraft={() => {');
+    expect(app).toContain('const generateContinuation = () => withBusy(async () => {');
+    expect(app).toContain("authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined");
+    expect(app).toContain("setAuthorNote((current) => current === noteSnapshot ? '' : current)");
+    expect(app).toContain("setInstruction((current) => current === inputSnapshot ? '' : current)");
+    expect(app).toContain("{ id: makeId('block'), kind: 'assistant', content: result.draft }");
+    expect(app).toContain('续写已加入当前小节。');
+    expect(app).toContain("aria-label={props.busy ? '正在续写' : '发送并续写'}");
+    expect(app).not.toContain('className="draft-preview"');
+    expect(app).not.toContain('应用到正文');
+    expect(app).not.toContain('放弃预览');
+    expect(app).not.toContain('Fake Provider 已生成待应用正文');
+  });
+
+  it('keeps mode switching open and links an active role to character mode', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(app).toContain("onClick={() => props.onModeChange('author')}");
+    expect(app).toContain("onClick={() => props.onModeChange('character')}");
+    expect(app).toContain('onSetActiveCharacter={(id) => {');
+    expect(app).toContain('setSelectedCharacterId(id);');
+    expect(app).toContain("setMode('character');");
   });
 
   it('opens a selected block in a full-screen editor with immediate autosave', async () => {
@@ -131,7 +147,7 @@ describe('writing UI contract', () => {
     expect(source).not.toContain("openNameDialog({ kind: 'rename-section'");
     expect(source).toContain('id="section-title-dialog-heading"');
     expect(source).toContain('if (id !== sectionId) {');
-    expect(source).toContain("setDraftInstruction('')");
+    expect(source).not.toContain("setDraftInstruction('')");
     expect(source).toContain('toggleChapterSelection');
     expect(source).toContain('toggleSectionSelection');
     expect(source).toContain("kind: 'selection'");
@@ -171,6 +187,7 @@ describe('writing UI contract', () => {
 
   it('keeps settings compact while supporting reusable provider profiles', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('选择皮肤');
     expect(source).toContain('id="theme-select"');
     expect(source).toContain('id="provider-profile-select"');
@@ -192,6 +209,9 @@ describe('writing UI contract', () => {
     expect(source).toContain('每轮变化');
     expect(source).toContain('API Key 不会写入书稿、私有书库或浏览器持久化');
     expect(source).toContain('type="password"');
+    expect(source).toContain('event.target === event.currentTarget');
+    expect(styles).toContain('.instruction-dock textarea:focus');
+    expect(styles).toContain('background: var(--surface)');
     expect(source).not.toContain('className="settings-list-row');
     expect(source).not.toContain('className="provider-profile-list');
   });
@@ -213,6 +233,22 @@ describe('writing UI contract', () => {
     expect(source).toContain('<output');
     expect(source).not.toContain('type="range"');
     expect(styles).toContain('var(--manuscript-font-size, 16px)');
+  });
+
+  it('bundles and persists the optional LXGW WenKai manuscript font', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
+    expect(source).toContain('manuscriptFontFamilyKey');
+    expect(source).toContain('id="manuscript-font-select"');
+    expect(source).toContain('<option value="system">跟随系统</option>');
+    expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
+    expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
+    expect(styles).toContain('@font-face');
+    expect(styles).toContain('/fonts/LXGWWenKai-Regular.ttf');
+    expect(styles).toContain(':root[data-manuscript-font="wenkai"]');
+    expect(styles).toContain('font-family: var(--manuscript-font-family)');
+    expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {

@@ -73,6 +73,8 @@ const bookCacheKey = (bookId: string) => `story-native:book:${bookId}`;
 const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
+const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
+type ManuscriptFontFamily = 'system' | 'wenkai';
 const minManuscriptFontSize = 12;
 const maxManuscriptFontSize = 24;
 const defaultManuscriptFontSize = 16;
@@ -88,7 +90,7 @@ const generalPromptOrder = [
   { id: 'template-characters', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
   { id: 'template-outline', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
   { id: 'template-mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
-  { id: 'template-note', title: '作者注释', reason: '只指导下一次续写，位于正文前', cacheBand: 'dynamic' },
+  { id: 'template-note', title: '小节注释', reason: '只指导当前小节的下一次续写，位于正文前', cacheBand: 'dynamic' },
   { id: 'template-manuscript', title: '当前正文', reason: '选中小节的正文末尾', cacheBand: 'dynamic' },
   { id: 'template-instruction', title: '本轮输入', reason: '作者接龙正文或角色输入', cacheBand: 'dynamic' },
 ] satisfies Array<{ id: string; title: string; reason: string; cacheBand: PromptCacheBand }>;
@@ -170,11 +172,10 @@ function App() {
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [instruction, setInstruction] = useState('');
   const [authorNote, setAuthorNote] = useState('');
-  const [draft, setDraft] = useState('');
-  const [draftInstruction, setDraftInstruction] = useState('');
-  const [draftAuthorNote, setDraftAuthorNote] = useState('');
   const [theme, setTheme] = useState<ThemeName>(() =>
     localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
+  const [manuscriptFontFamily, setManuscriptFontFamily] = useState<ManuscriptFontFamily>(() =>
+    localStorage.getItem(manuscriptFontFamilyKey) === 'wenkai' ? 'wenkai' : 'system');
   const [manuscriptFontSize, setManuscriptFontSize] = useState(() => {
     const stored = localStorage.getItem(manuscriptFontSizeKey);
     if (stored === null) return defaultManuscriptFontSize;
@@ -227,6 +228,11 @@ function App() {
     document.documentElement.style.setProperty('--manuscript-font-size', `${manuscriptFontSize}px`);
     localStorage.setItem(manuscriptFontSizeKey, String(manuscriptFontSize));
   }, [manuscriptFontSize]);
+
+  useEffect(() => {
+    document.documentElement.dataset.manuscriptFont = manuscriptFontFamily;
+    localStorage.setItem(manuscriptFontFamilyKey, manuscriptFontFamily);
+  }, [manuscriptFontFamily]);
 
   useEffect(() => {
     try {
@@ -312,9 +318,6 @@ function App() {
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setInstruction('');
     setAuthorNote('');
-    setDraft('');
-    setDraftInstruction('');
-    setDraftAuthorNote('');
     setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
     setView('shelf');
   };
@@ -389,46 +392,47 @@ function App() {
   const hasCharacterSelection = () => mode !== 'character'
     || Boolean(book?.characters.some((character) => character.id === selectedCharacterId));
 
-  const previewGeneration = () => withBusy(async () => {
+  const generateContinuation = () => withBusy(async () => {
     if (!hasCharacterSelection()) {
       setStatus('角色模式需要先选择当前 Book 的角色。');
       return;
     }
+    const targetSectionId = sectionId;
+    const inputSnapshot = instruction;
+    const noteSnapshot = authorNote;
+    const modeSnapshot = mode;
+    const characterSnapshot = selectedCharacterId;
     const saved = await saveCurrent();
-    const result = await api.generate(generationRequest(saved));
-    setDraft(result.draft);
-    setDraftInstruction(instruction);
-    setDraftAuthorNote(authorNote);
-    setStatus('Fake Provider 已生成待应用正文。');
-  });
-
-  const applyDraft = () => {
-    if (!draft || !section) return;
+    const result = await api.generate({
+      bookId: saved.id,
+      sectionId: targetSectionId,
+      mode: modeSnapshot,
+      selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
+      authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined,
+      instruction: inputSnapshot,
+    });
     const additions: SectionBlock[] = [
-      ...(draftInstruction.trim()
-        ? [{ id: makeId('block'), kind: 'user' as const, content: draftInstruction.trim() }]
+      ...(inputSnapshot.trim()
+        ? [{ id: makeId('block'), kind: 'user' as const, content: inputSnapshot.trim() }]
         : []),
-      { id: makeId('block'), kind: 'assistant', content: draft },
+      { id: makeId('block'), kind: 'assistant', content: result.draft },
     ];
     changeBook((current) => ({
       ...current,
       chapters: current.chapters.map((chapter) => ({
         ...chapter,
-        sections: chapter.sections.map((item) => item.id === section.id
+        sections: chapter.sections.map((item) => item.id === targetSectionId
           ? (() => {
               const blocks = [...sectionBlocks(item), ...additions];
               return { ...item, blocks, content: blocksAsContent(blocks) };
             })()
           : item),
-      })),
+        })),
     }));
-    setDraft('');
-    setDraftInstruction('');
-    setDraftAuthorNote('');
-    setInstruction((current) => current === draftInstruction ? '' : current);
-    setAuthorNote((current) => current === draftAuthorNote ? '' : current);
-    setStatus('接龙正文已加入当前 Section。');
-  };
+    setInstruction((current) => current === inputSnapshot ? '' : current);
+    setAuthorNote((current) => current === noteSnapshot ? '' : current);
+    setStatus('续写已加入当前小节。');
+  });
 
   const updateSectionBlocks = (blocks: SectionBlock[]) => {
     if (!section) return;
@@ -478,9 +482,6 @@ function App() {
       setSelectedCharacterId('');
       setInstruction('');
       setAuthorNote('');
-      setDraft('');
-      setDraftInstruction('');
-      setDraftAuthorNote('');
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'cloud' ? '新 Book 已建立在私有云端书库。' : '新 Book 已建立在本机。');
@@ -593,9 +594,6 @@ function App() {
       setSectionId('');
       setInstruction('');
       setAuthorNote('');
-      setDraft('');
-      setDraftInstruction('');
-      setDraftAuthorNote('');
     }
   };
 
@@ -690,7 +688,6 @@ function App() {
             selectedCharacterId={selectedCharacterId}
             instruction={instruction}
             authorNote={authorNote}
-            draft={draft}
             busy={busy}
             contextTokens={promptPreview?.estimatedTokens ?? 0}
             maxContext={activeProviderProfile?.maxContext ?? 0}
@@ -711,13 +708,7 @@ function App() {
             onSectionTitleChange={(title) => {
               if (sectionChapter && section) renameSection(sectionChapter.id, section.id, title);
             }}
-            onGenerate={() => void previewGeneration()}
-            onApplyDraft={applyDraft}
-            onDiscardDraft={() => {
-              setDraft('');
-              setDraftInstruction('');
-              setDraftAuthorNote('');
-            }}
+            onGenerate={() => void generateContinuation()}
           />
         ) : book ? (
           <Bookshelf
@@ -738,9 +729,6 @@ function App() {
               if (id !== sectionId) {
                 setInstruction('');
                 setAuthorNote('');
-                setDraft('');
-                setDraftInstruction('');
-                setDraftAuthorNote('');
               }
               setSectionId(id);
               setView('write');
@@ -759,7 +747,10 @@ function App() {
             onWritingBriefChange={(value) => changeBook((current) => ({ ...current, writingBrief: value }))}
             onCharacterChange={updateCharacter}
             onWorldRuleChange={updateWorldRule}
-            onSetActiveCharacter={setSelectedCharacterId}
+            onSetActiveCharacter={(id) => {
+              setSelectedCharacterId(id);
+              setMode('character');
+            }}
           />
         ) : (
           <p className="loading-copy">正在打开本地书库…</p>
@@ -772,6 +763,8 @@ function App() {
         dialogRef={settingsDialog}
         theme={theme}
         onThemeChange={setTheme}
+        manuscriptFontFamily={manuscriptFontFamily}
+        onManuscriptFontFamilyChange={setManuscriptFontFamily}
         manuscriptFontSize={manuscriptFontSize}
         onManuscriptFontSizeChange={setManuscriptFontSize}
         providerProfiles={providerProfiles}
@@ -794,7 +787,6 @@ interface WriterProps {
   selectedCharacterId: string;
   instruction: string;
   authorNote: string;
-  draft: string;
   busy: boolean;
   contextTokens: number;
   maxContext: number;
@@ -810,8 +802,6 @@ interface WriterProps {
   onRegenerateBlock: (blockId: string) => void;
   onSectionTitleChange: (value: string) => void;
   onGenerate: () => void;
-  onApplyDraft: () => void;
-  onDiscardDraft: () => void;
 }
 
 function Writer(props: WriterProps) {
@@ -848,11 +838,6 @@ function Writer(props: WriterProps) {
     if (!actionMenu.current) return;
     actionMenu.current.open = false;
     if (restoreFocus) actionMenu.current.querySelector('summary')?.focus();
-  };
-
-  const runMenuAction = (action: () => void) => {
-    closeActionMenu(true);
-    action();
   };
 
   const openBlockEditor = () => {
@@ -1021,14 +1006,14 @@ function Writer(props: WriterProps) {
               </button>
               {selectedBlockId === block.id && (
                 <div className="manuscript-block-actions" role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
-                  <button
+                  {block.kind === 'assistant' && <button
                     type="button"
                     className="icon-button"
                     onClick={() => props.onRegenerateBlock(block.id)}
-                    disabled={props.busy || block.kind !== 'assistant'}
+                    disabled={props.busy}
                     aria-label="重新生成所选 AI 输出"
-                    title={block.kind === 'assistant' ? '重新生成' : '只有 AI 输出可以重新生成'}
-                  ><RefreshCw aria-hidden="true" /></button>
+                    title="重新生成"
+                  ><RefreshCw aria-hidden="true" /></button>}
                   <button
                     type="button"
                     className="icon-button"
@@ -1054,20 +1039,6 @@ function Writer(props: WriterProps) {
         </div>
       </section>
 
-      {props.draft && (
-        <section className="draft-preview" aria-labelledby="draft-heading">
-          <div>
-            <p className="eyebrow">Fake Provider</p>
-            <h2 id="draft-heading">待应用正文</h2>
-          </div>
-          <p>{props.draft}</p>
-          <div className="draft-actions">
-            <button type="button" className="primary-action button-with-icon" onClick={props.onApplyDraft}><Check aria-hidden="true" />应用到正文</button>
-            <button type="button" className="button-with-icon" onClick={props.onDiscardDraft}><X aria-hidden="true" />放弃预览</button>
-          </div>
-        </section>
-      )}
-
       <form className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
         <details
           ref={actionMenu}
@@ -1088,7 +1059,7 @@ function Writer(props: WriterProps) {
                 type="button"
                 className="writer-menu-action"
                 aria-pressed={props.mode === 'author'}
-                onClick={() => runMenuAction(() => props.onModeChange('author'))}
+                onClick={() => props.onModeChange('author')}
               ><BookOpenText aria-hidden="true" />作者模式 · 接龙</button>
               <button
                 type="button"
@@ -1120,7 +1091,7 @@ function Writer(props: WriterProps) {
             )}
             {props.mode === 'author' && (
               <label className="writer-section-note" htmlFor="author-note-input">
-                <span><MessageSquareText aria-hidden="true" />作者注释</span>
+                <span><MessageSquareText aria-hidden="true" />小节注释</span>
                 <textarea
                   id="author-note-input"
                   rows={4}
@@ -1129,7 +1100,7 @@ function Writer(props: WriterProps) {
                   placeholder="例如：跳过路程，直接写抵达后的重逢……"
                   spellCheck
                 />
-                <small>只指导下一次续写，不进入正文；应用后自动清空。</small>
+                <small>只指导当前小节的下一次续写，不进入正文；发送后自动清空。</small>
               </label>
             )}
           </div>
@@ -1146,8 +1117,8 @@ function Writer(props: WriterProps) {
           type="submit"
           className="primary-action icon-button writer-send-button"
           disabled={props.busy || characterModeNeedsSelection}
-          aria-label={props.busy ? '正在准备续写' : '预览续写'}
-          title={props.busy ? '正在准备…' : '预览续写'}
+          aria-label={props.busy ? '正在续写' : '发送并续写'}
+          title={props.busy ? '正在续写…' : '发送并续写'}
         ><Sparkles aria-hidden="true" /></button>
       </form>
 
@@ -1774,6 +1745,7 @@ function Bookshelf(props: BookshelfProps) {
       <dialog
         className="book-settings-drawer"
         ref={bookSettingsDialog}
+        onClick={(event) => { if (event.target === event.currentTarget) closeBookSettings(); }}
         onClose={resetBookSettings}
         onCancel={(event) => { event.preventDefault(); closeBookSettings(); }}
         aria-labelledby="book-settings-title"
@@ -1978,6 +1950,8 @@ function SettingsDrawer({
   dialogRef,
   theme,
   onThemeChange,
+  manuscriptFontFamily,
+  onManuscriptFontFamilyChange,
   manuscriptFontSize,
   onManuscriptFontSizeChange,
   providerProfiles,
@@ -1990,6 +1964,8 @@ function SettingsDrawer({
   dialogRef: React.RefObject<HTMLDialogElement | null>;
   theme: ThemeName;
   onThemeChange: (theme: ThemeName) => void;
+  manuscriptFontFamily: ManuscriptFontFamily;
+  onManuscriptFontFamilyChange: (font: ManuscriptFontFamily) => void;
   manuscriptFontSize: number;
   onManuscriptFontSizeChange: (size: number) => void;
   providerProfiles: ProviderProfile[];
@@ -2063,6 +2039,7 @@ function SettingsDrawer({
     <dialog
       className="settings-drawer"
       ref={dialogRef}
+      onClick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
       onClose={onClose}
       onCancel={(event) => { event.preventDefault(); closeDrawer(); }}
       aria-labelledby="settings-title"
@@ -2082,6 +2059,17 @@ function SettingsDrawer({
           <option value="manga">少女漫画</option>
         </select>
         <p className="compact-setting-note">{theme === 'paper' ? '类 Notion / Obsidian 的安静默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
+        <label className="font-family-setting" htmlFor="manuscript-font-select">
+          <span>正文字体</span>
+          <select
+            id="manuscript-font-select"
+            value={manuscriptFontFamily}
+            onChange={(event) => onManuscriptFontFamilyChange(event.target.value as ManuscriptFontFamily)}
+          >
+            <option value="system">跟随系统</option>
+            <option value="wenkai">霞鹜文楷</option>
+          </select>
+        </label>
         <div className="font-size-setting" role="group" aria-labelledby="font-size-setting-label">
           <span id="font-size-setting-label">字号大小</span>
           <div className="font-size-stepper">

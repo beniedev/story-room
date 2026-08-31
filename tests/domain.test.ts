@@ -104,7 +104,7 @@ describe('context plan', () => {
     const manuscriptIndex = plan.included.findIndex((item) => item.layer === 'manuscript');
 
     expect(noteIndex).toBe(manuscriptIndex - 1);
-    expect(plan.included[noteIndex]?.title).toBe('作者注释');
+    expect(plan.included[noteIndex]?.title).toBe('小节注释');
     expect(plan.included[noteIndex]?.sourceId).toBe('request:author-note');
     expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
     expect(plan.prompt).toContain('请让灯光熄灭后');

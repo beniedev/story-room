@@ -23,8 +23,8 @@ const BASE_CONTRACT = [
 const AUTHOR_POLICY = [
   '用户是本书作者，对全书拥有最高写作指令权。',
   '作者模式采用正文接龙：用户本轮输入是作者刚写下的连续小说正文，AI 从它的结尾继续写下一段。',
-  '作者注释只是本轮的幕后指导，不属于正文；不要把它复述成聊天说明或写进故事。',
-  '如果用户没有写接龙正文，就依据作者注释与当前正文直接续写。',
+  '小节注释只是当前小节本轮续写的幕后指导，不属于正文；不要把它复述成聊天说明或写进故事。',
+  '如果用户没有写接龙正文，就依据小节注释与当前正文直接续写。',
 ].join('\n');
 
 const characterPolicy = (name: string) => [
@@ -136,9 +136,9 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
       'note',
       'dynamic',
       'request:author-note',
-      '作者注释',
+      '小节注释',
       request.mode === 'author' ? request.authorNote ?? '' : '',
-      '仅指导本轮续写，位于正文前且不写入正文',
+      '仅指导当前小节的本轮续写，位于正文前且不写入正文',
       request.mode === 'author' && Boolean(request.authorNote?.trim()),
       false,
     ),
