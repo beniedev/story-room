@@ -8,7 +8,7 @@
 
 :root {
   color-scheme: light;
-  font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--app-font-family);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -30,7 +30,8 @@
   --manuscript-ai: #486b94;
   --manuscript-dialogue: #8f5d50;
   --manuscript-font-size: 16px;
-  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif;
+  --app-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --manuscript-font-family: var(--app-font-family);
   --primary-text: #f8fafc;
   --danger: #a94450;
   --focus: #5e81ac;
@@ -43,14 +44,20 @@
   --backdrop: rgba(40, 51, 70, 0.24);
   --radius-card: 9px;
   --radius-control: 6px;
+  --workspace-max: 72rem;
+  --workspace-wide-max: 78rem;
+  --workspace-gutter: clamp(0.75rem, 3vw, 2rem);
 }
 
 :root[data-manuscript-font="sans"] {
-  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif;
+  --app-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --manuscript-font-family: var(--app-font-family);
 }
 
 :root[data-manuscript-font="wenkai"] {
-  --manuscript-font-family: "LXGW WenKai", ui-serif, "Songti SC", serif;
+  --app-font-family: "LXGW WenKai", ui-serif, "Songti SC", serif;
+  --manuscript-font-family: var(--app-font-family);
+  font-synthesis: weight style;
 }
 
 :root[data-theme="manga"] {
@@ -342,7 +349,11 @@ h3 {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
-  padding: 0.65rem clamp(0.75rem, 3vw, 2rem);
+  padding-block: 0.65rem;
+  padding-inline: max(
+    var(--workspace-gutter),
+    calc((100vw - var(--workspace-wide-max)) / 2 + var(--workspace-gutter))
+  );
   background: color-mix(in srgb, var(--page) 94%, transparent);
   backdrop-filter: blur(14px);
 }
@@ -475,7 +486,7 @@ h3 {
   grid-template-columns: auto auto minmax(4rem, 1fr) auto;
   align-items: center;
   gap: 0.6rem;
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   margin-inline: auto;
   padding: 0.35rem clamp(0.45rem, 2vw, 0.8rem) 0.25rem;
 }
@@ -556,7 +567,7 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   margin-inline: auto;
   padding: 0.2rem clamp(0.45rem, 2vw, 0.8rem);
 }
@@ -575,7 +586,7 @@ h3 {
 }
 
 .writer-section-title {
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   margin: 0 auto;
   padding: 0.35rem 0.8rem 0.5rem;
   overflow: hidden;
@@ -627,7 +638,7 @@ h3 {
 .manuscript {
   display: grid;
   align-content: start;
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   min-height: calc(100dvh - 9.5rem);
   margin-inline: auto;
   padding: clamp(1rem, 4vw, 2rem) clamp(1rem, 7vw, 4rem) 5.5rem;
@@ -663,7 +674,6 @@ h3 {
 
 .manuscript-block[data-kind="user"] {
   color: var(--manuscript-user);
-  font-weight: 700;
 }
 
 .manuscript-block[data-kind="assistant"] {
@@ -700,7 +710,7 @@ h3 {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
   gap: 0.4rem;
-  width: min(calc(100% - 0.8rem), 72ch);
+  width: min(calc(100% - 0.8rem), var(--workspace-max));
   margin: 0;
   padding: 0.4rem;
   padding-block-end: max(0.4rem, env(safe-area-inset-bottom));
@@ -846,7 +856,7 @@ h3 {
 }
 
 .block-editor-body {
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   min-height: 0;
   height: 100%;
   margin-inline: auto;
@@ -870,7 +880,6 @@ h3 {
 
 .block-editor-textarea[data-kind="user"] {
   color: var(--manuscript-user);
-  font-weight: 700;
 }
 
 .block-editor-textarea[data-kind="assistant"] {
@@ -991,7 +1000,7 @@ h3 {
 .source-editor-page {
   display: grid;
   gap: 1rem;
-  width: min(100%, 76rem);
+  width: min(100%, var(--workspace-wide-max));
   margin-inline: auto;
   padding: clamp(1rem, 3vw, 2.25rem) clamp(0.75rem, 4vw, 3rem) calc(1rem + env(safe-area-inset-bottom));
 }
@@ -1000,7 +1009,7 @@ h3 {
 .guide-editor-field,
 .source-editor-heading,
 .source-editor-fields {
-  width: min(100%, 72ch);
+  width: min(100%, var(--workspace-max));
   margin-inline: auto;
 }
 
@@ -1174,14 +1183,14 @@ h3 {
   min-height: min(68vh, 52rem);
   padding: clamp(1rem, 4vw, 2.5rem);
   background: var(--surface);
-  font-family: ui-serif, "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  font-family: var(--app-font-family);
   line-height: 1.7;
 }
 
 .shelf-page {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  width: min(100%, 78rem);
+  width: min(100%, var(--workspace-wide-max));
   margin-inline: auto;
   padding: 1rem clamp(0.75rem, 3vw, 2rem) 2rem;
 }
@@ -2487,7 +2496,7 @@ h3 {
   padding: 0.9rem;
   border-radius: var(--radius-control);
   background: var(--field);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--app-font-family);
   font-size: 0.78rem;
   line-height: 1.55;
   white-space: pre-wrap;

@@ -47,6 +47,24 @@ describe('book exports', () => {
     expect(packageDocument).toContain('<spine>');
   });
 
+  it('renders emphasis for reading formats while keeping recovery data lossless', () => {
+    const formatted = structuredClone(book);
+    formatted.chapters[0].sections[0].content = String.raw`风从 *窗外* 吹来，\*星号\* 留在纸上。`;
+
+    const markdown = renderBookMarkdown(formatted);
+    const text = renderBookText(formatted);
+    const epub = unzipSync(renderBookEpub(formatted));
+    const section = strFromU8(epub[`EPUB/text/${formatted.chapters[0].sections[0].id}.xhtml`]);
+    const json = createBookExport(formatted, 'json');
+
+    expect(markdown).toContain(String.raw`*窗外*`);
+    expect(text).toContain('风从 窗外 吹来，*星号* 留在纸上。');
+    expect(text).not.toContain(String.raw`*窗外*`);
+    expect(section).toContain('<em>窗外</em>');
+    expect(section).toContain('*星号*');
+    expect(JSON.parse(String(json.content))).toEqual(formatted);
+  });
+
   it('keeps JSON as the complete conversion and recovery format', () => {
     const file = createBookExport(book, 'json');
     expect(file.filename).toBe(`${book.title}.json`);

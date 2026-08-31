@@ -1,4 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
+import { parseProseFormatting, stripProseFormatting } from './proseFormatting';
 import type { Book } from './types';
 
 export type BookExportFormat = 'epub' | 'markdown' | 'text' | 'json';
@@ -22,10 +23,17 @@ const escapeXml = (value: string) => value
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&apos;');
 
+const renderInlineXhtml = (value: string) => parseProseFormatting(value)
+  .map((segment) => {
+    const text = escapeXml(segment.text).replace(/\n/g, '<br/>');
+    return segment.emphasized ? `<em>${text}</em>` : text;
+  })
+  .join('');
+
 const sectionParagraphs = (content: string) => {
   const paragraphs = normalizeText(content).split(/\n{2,}/).filter(Boolean);
   if (paragraphs.length === 0) return '<p></p>';
-  return paragraphs.map((paragraph) => `<p>${escapeXml(paragraph).replace(/\n/g, '<br/>')}</p>`).join('\n');
+  return paragraphs.map((paragraph) => `<p>${renderInlineXhtml(paragraph)}</p>`).join('\n');
 };
 
 const numberedSections = (book: Book) => book.chapters.flatMap((chapter, chapterIndex) => (
@@ -68,7 +76,7 @@ export const renderBookText = (book: Book) => {
   book.chapters.forEach((chapter, chapterIndex) => {
     lines.push('', '────────────────────', '', `${chapterIndex + 1}. ${chapter.title}`);
     chapter.sections.forEach((section, sectionIndex) => {
-      lines.push('', `${chapterIndex + 1}.${sectionIndex + 1} ${section.title}`, '', normalizeText(section.content));
+      lines.push('', `${chapterIndex + 1}.${sectionIndex + 1} ${section.title}`, '', stripProseFormatting(normalizeText(section.content)));
     });
   });
   return `${lines.join('\n').trim()}\n`;

@@ -68,6 +68,29 @@ describe('writing UI contract', () => {
     expect(selectorIndex).toBeLessThan(toolbarIndex);
   });
 
+  it('uses one wide desktop workspace while preserving the mobile manuscript gutter', async () => {
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+    expect(styles).toContain('--workspace-max: 72rem');
+    expect(styles).toContain('--workspace-wide-max: 78rem');
+    for (const selector of [
+      '.writer-context-row',
+      '.writer-tool-row',
+      '.writer-section-title',
+      '.manuscript',
+      '.block-editor-body',
+      '.source-editor-fields',
+    ]) {
+      const start = styles.indexOf(`${selector} {`);
+      const rule = styles.slice(start, styles.indexOf('\n}', start) + 2);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(rule).toContain('var(--workspace-max)');
+    }
+    expect(styles).toMatch(/\.shelf-page\s*\{[\s\S]{0,220}var\(--workspace-wide-max\)/);
+    expect(styles).toMatch(/@media \(max-width: 46rem\)[\s\S]*\.manuscript\s*\{[\s\S]{0,160}padding:\s*1\.2rem 1rem 5\.5rem/);
+    expect(styles).not.toContain('width: min(100%, 72ch)');
+  });
+
   it('keeps the home settings entry as a wide icon-and-label control', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
@@ -424,7 +447,7 @@ describe('writing UI contract', () => {
     expect(styles).toContain('var(--manuscript-font-size, 16px)');
   });
 
-  it('bundles and persists the optional LXGW WenKai manuscript font', async () => {
+  it('bundles and persists the optional LXGW WenKai font across the full interface', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const packageJson = await readFile(new URL('../package.json', import.meta.url), 'utf8');
@@ -432,6 +455,8 @@ describe('writing UI contract', () => {
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
     expect(source).toContain('id="manuscript-font-select"');
+    expect(source).toContain('<span>全局字体</span>');
+    expect(source).not.toContain('<span>正文字体</span>');
     expect(source).toContain('<option value="sans">无衬线</option>');
     expect(source).not.toContain('无衬线 · 默认');
     expect(source).not.toContain('跟随系统');
@@ -441,11 +466,35 @@ describe('writing UI contract', () => {
     expect(styles).toContain('/fonts/LXGWWenKaiLite-Regular.ttf');
     expect(styles).toContain(':root[data-manuscript-font="wenkai"]');
     expect(styles).toContain(':root[data-manuscript-font="sans"]');
+    expect(styles).toContain('font-family: var(--app-font-family)');
+    expect(styles).toContain('--manuscript-font-family: var(--app-font-family)');
+    expect(styles).toContain('font-synthesis: weight style');
     expect(styles).toContain('font-family: var(--manuscript-font-family)');
     expect(packageJson).toContain('"prepare:font": "node scripts/materialize-font.mjs"');
     expect(materializer).toContain('brotliDecompressSync');
     expect(materializer).toContain('LXGWWenKaiLite-Regular.ttf.br');
     expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1');
+  });
+
+  it('uses color rather than bold weight to distinguish user and AI prose', async () => {
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    for (const selector of [
+      '.manuscript-block[data-kind="user"]',
+      '.block-editor-textarea[data-kind="user"]',
+    ]) {
+      const start = styles.indexOf(`${selector} {`);
+      const rule = styles.slice(start, styles.indexOf('\n}', start) + 2);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(rule).toContain('color: var(--manuscript-user)');
+      expect(rule).not.toContain('font-weight');
+    }
+  });
+
+  it('renders paired prose asterisks as semantic emphasis', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("import { parseProseFormatting } from './proseFormatting'");
+    expect(source).toContain('parseProseFormatting(block.content)');
+    expect(source).toContain('<em key={`${block.id}-emphasis-${index}`}>');
   });
 
   it('uses one top-right grip for direct desktop and long-press mobile input resizing', async () => {

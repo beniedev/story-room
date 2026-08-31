@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowLeft,
   BookMarked,
@@ -50,6 +50,7 @@ import {
   upsertProviderProfile,
   type ProviderProfile,
 } from './providerProfiles';
+import { parseProseFormatting } from './proseFormatting';
 import { countWords, estimateTokens } from './textMetrics';
 import type {
   Book,
@@ -1049,11 +1050,18 @@ function Writer(props: WriterProps) {
   };
 
   const renderBlockContent = (block: SectionBlock) => {
-    if (block.kind === 'user') return block.content;
-    return block.content.split(/(“[^”]*”|"[^"\n]*")/g).map((part, index) => (
-      /^“[^”]*”$|^"[^"\n]*"$/.test(part)
-        ? <span className="manuscript-dialogue" key={`${block.id}-dialogue-${index}`}>{part}</span>
-        : part
+    const renderDialogue = (text: string, segmentIndex: number) => block.kind === 'assistant'
+      ? text.split(/(“[^”]*”|"[^"\n]*")/g).map((part, dialogueIndex) => (
+        /^“[^”]*”$|^"[^"\n]*"$/.test(part)
+          ? <span className="manuscript-dialogue" key={`${block.id}-${segmentIndex}-dialogue-${dialogueIndex}`}>{part}</span>
+          : part
+      ))
+      : text;
+
+    return parseProseFormatting(block.content).map((segment, index) => (
+      segment.emphasized
+        ? <em key={`${block.id}-emphasis-${index}`}>{renderDialogue(segment.text, index)}</em>
+        : <Fragment key={`${block.id}-text-${index}`}>{renderDialogue(segment.text, index)}</Fragment>
     ));
   };
 
@@ -2473,7 +2481,7 @@ function SettingsDrawer({
           purple: '白色正文配淡紫边缘与深紫层级。',
         }[theme]}</p>
         <label className="font-family-setting" htmlFor="manuscript-font-select">
-          <span>正文字体</span>
+          <span>全局字体</span>
           <select
             id="manuscript-font-select"
             value={manuscriptFontFamily}
