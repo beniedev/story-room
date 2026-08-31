@@ -1276,8 +1276,8 @@ function Writer(props: WriterProps) {
             type="button"
             className="instruction-resize-handle"
             data-resizing={isResizingInstruction || undefined}
-            aria-label="长按后上下拖动调整输入框高度"
-            title="长按后上下拖动调整输入框高度"
+            aria-label="调整输入框高度：电脑上下拖动，手机长按后拖动"
+            title="上下拖动调整高度；手机请先长按"
             onPointerDown={(event) => {
               const textarea = instructionInput.current;
               if (!textarea) return;
@@ -1287,6 +1287,11 @@ function Writer(props: WriterProps) {
                 startHeight: textarea.getBoundingClientRect().height,
               };
               event.currentTarget.setPointerCapture(event.pointerId);
+              if (event.pointerType === 'mouse') {
+                resizeGestureActive.current = true;
+                setIsResizingInstruction(true);
+                return;
+              }
               resizePressTimer.current = window.setTimeout(() => {
                 resizeGestureActive.current = true;
                 setIsResizingInstruction(true);
@@ -1305,6 +1310,7 @@ function Writer(props: WriterProps) {
             }}
             onPointerUp={(event) => finishInstructionResize(event.pointerId, event.currentTarget)}
             onPointerCancel={(event) => finishInstructionResize(event.pointerId, event.currentTarget)}
+            onContextMenu={(event) => event.preventDefault()}
             onKeyDown={(event) => {
               if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
               event.preventDefault();

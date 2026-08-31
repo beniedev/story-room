@@ -446,16 +446,18 @@ describe('writing UI contract', () => {
     expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1');
   });
 
-  it('supports native desktop resizing and long-press mobile input resizing', async () => {
+  it('uses one top-right grip for direct desktop and long-press mobile input resizing', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('className="instruction-resize-handle"');
-    expect(source).toContain('长按后上下拖动调整输入框高度');
+    expect(source).toContain('调整输入框高度：电脑上下拖动，手机长按后拖动');
+    expect(source).toContain("event.pointerType === 'mouse'");
     expect(source).toContain('setPointerCapture');
     expect(source).toContain('}, 300)');
     expect(source).toContain("event.key !== 'ArrowUp' && event.key !== 'ArrowDown'");
-    expect(styles).toMatch(/\.instruction-dock textarea\s*\{[\s\S]{0,240}resize:\s*vertical/);
-    expect(styles).toMatch(/@media \(max-width: 46rem\)[\s\S]{0,3000}\.instruction-dock textarea\s*\{[\s\S]{0,100}resize:\s*none/);
+    expect(styles).toMatch(/\.instruction-dock textarea\s*\{[\s\S]{0,240}resize:\s*none/);
+    expect(styles).toMatch(/\.instruction-resize-handle\s*\{[\s\S]{0,300}inset-inline-end:\s*0/);
+    expect(styles).toContain('cursor: ns-resize');
     expect(styles).toContain('touch-action: none');
   });
 
