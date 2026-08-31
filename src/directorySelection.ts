@@ -53,9 +53,17 @@ export const deleteDirectorySelection = (
     .filter((chapter) => selection.chapterIds.has(chapter.id))
     .forEach((chapter) => chapter.sections.forEach((section) => removedSectionIds.add(section.id)));
 
+  const removeDeletedSectionReferences = <T extends { loadedSectionIds?: string[] }>(source: T): T => (
+    source.loadedSectionIds === undefined
+      ? source
+      : { ...source, loadedSectionIds: source.loadedSectionIds.filter((id) => !removedSectionIds.has(id)) }
+  );
+
   return {
     book: {
       ...book,
+      characters: book.characters.map(removeDeletedSectionReferences),
+      worldRules: book.worldRules.map(removeDeletedSectionReferences),
       chapters: book.chapters
         .filter((chapter) => !selection.chapterIds.has(chapter.id))
         .map((chapter) => ({

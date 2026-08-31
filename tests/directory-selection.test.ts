@@ -12,8 +12,22 @@ const book: Book = {
   title: 'Book One',
   plotOutline: '',
   writingBrief: '',
-  characters: [],
-  worldRules: [],
+  characters: [{
+    id: 'character-one',
+    name: 'Character',
+    title: 'Character',
+    role: 'Lead',
+    content: '',
+    includeInPrompt: true,
+    loadedSectionIds: ['section-a', 'section-c'],
+  }],
+  worldRules: [{
+    id: 'world-one',
+    title: 'World',
+    content: '',
+    includeInPrompt: true,
+    loadedSectionIds: ['section-b', 'section-c'],
+  }],
   canonFacts: [],
   summaries: [{
     id: 'summary-one',
@@ -75,6 +89,8 @@ describe('directory selection', () => {
     expect(result.book.chapters[0].sections).toHaveLength(0);
     expect(result.book.summaries[0].sourceSectionIds).toEqual([]);
     expect(result.book.branches).toEqual([]);
+    expect(result.book.characters[0].loadedSectionIds).toEqual([]);
+    expect(result.book.worldRules[0].loadedSectionIds).toEqual([]);
     expect([...result.removedSectionIds].sort()).toEqual(['section-a', 'section-b', 'section-c']);
   });
 });

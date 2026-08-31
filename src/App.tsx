@@ -87,8 +87,8 @@ const generalPromptOrder = [
   { id: 'template-contract', layer: 'system', title: '正文合同', reason: '连续小说正文与 Book 隔离底线', cacheBand: 'stable' },
   { id: 'template-book', layer: 'book', title: '当前书目', reason: '锁定本次写作所属的书', cacheBand: 'stable' },
   { id: 'template-style', layer: 'book', title: '写作风格指导', reason: '全书共用的行文风格', cacheBand: 'stable' },
-  { id: 'template-world', layer: 'world', title: '世界观条例', reason: '本书已启用的世界规则', cacheBand: 'stable' },
-  { id: 'template-characters', layer: 'character', title: '角色卡', reason: '本书已启用或当前必需的角色资料', cacheBand: 'stable' },
+  { id: 'template-world', layer: 'world', title: '世界观设定', reason: '当前小节加载的世界设定', cacheBand: 'stable' },
+  { id: 'template-characters', layer: 'character', title: '角色卡', reason: '当前小节加载或当前扮演必需的角色设定', cacheBand: 'stable' },
   { id: 'template-outline', layer: 'book', title: '剧情大纲', reason: '全书共用的剧情方向', cacheBand: 'stable' },
   { id: 'template-mode', layer: 'mode', title: '作者 / 角色模式', reason: '本次写作的权限与视角', cacheBand: 'session' },
   { id: 'template-note', layer: 'note', title: '小节注释', reason: '只指导当前小节的下一次续写，位于正文前', cacheBand: 'dynamic' },
@@ -126,8 +126,8 @@ export const combinePromptSources = (items: PromptCompositionItem[]) => {
     const aggregate = {
       ...item,
       id: `combined-${item.layer}`,
-      title: item.layer === 'character' ? '角色卡' : '世界观条例',
-      reason: item.layer === 'character' ? '本次装入的角色资料' : '本次装入的世界规则',
+      title: item.layer === 'character' ? '角色卡' : '世界观设定',
+      reason: item.layer === 'character' ? '本次装入的角色设定' : '本次装入的世界设定',
       includedNames: item.id.startsWith('template-') ? undefined : [item.title],
     };
     grouped.set(item.layer, aggregate);
@@ -750,7 +750,6 @@ function App() {
             book={book}
             library={library}
             selectedSectionId={sectionId}
-            selectedCharacterId={selectedCharacterId}
             openBookSettingsRequest={bookSettingsRequest}
             onBookSettingsOpened={() => setBookSettingsRequest(0)}
             onBookSettingsClose={() => {
@@ -782,10 +781,6 @@ function App() {
             onWritingBriefChange={(value) => changeBook((current) => ({ ...current, writingBrief: value }))}
             onCharacterChange={updateCharacter}
             onWorldRuleChange={updateWorldRule}
-            onSetActiveCharacter={(id) => {
-              setSelectedCharacterId(id);
-              setMode('character');
-            }}
           />
         ) : (
           <p className="loading-copy">正在打开本地书库…</p>
@@ -1246,12 +1241,75 @@ function GuideEditor({ title, description, placeholder, value, onChange }: {
   );
 }
 
-function CharacterEditor({ bookTitle, character, isActiveRole, onChange, onSetActive }: {
+function SourceLoadScope({ chapters, loadedSectionIds, sourceLabel, onChange }: {
+  chapters: Book['chapters'];
+  loadedSectionIds?: string[];
+  sourceLabel: string;
+  onChange: (loadedSectionIds: string[] | undefined) => void;
+}) {
+  const sectionIds = chapters.flatMap((chapter) => chapter.sections.map((section) => section.id));
+  const validSectionIds = new Set(sectionIds);
+  const selectedIds = new Set((loadedSectionIds ?? []).filter((id) => validSectionIds.has(id)));
+  const loadsEverywhere = loadedSectionIds === undefined;
+  const scopeSummary = loadsEverywhere
+    ? '全书全部小节'
+    : selectedIds.size
+      ? `已选择 ${selectedIds.size} 个小节`
+      : '未选择小节';
+
+  const toggleSection = (sectionId: string, selected: boolean) => {
+    const nextIds = new Set(selectedIds);
+    if (selected) nextIds.add(sectionId);
+    else nextIds.delete(sectionId);
+    onChange(sectionIds.filter((id) => nextIds.has(id)));
+  };
+
+  return (
+    <details className="source-scope-drawer">
+      <summary>
+        <ListChecks aria-hidden="true" />
+        <span><strong>加载范围</strong><small>{scopeSummary}</small></span>
+        <ChevronDown aria-hidden="true" />
+      </summary>
+      <div className="source-scope-content">
+        <label className="source-scope-all">
+          <input
+            type="checkbox"
+            checked={loadsEverywhere}
+            onChange={(event) => onChange(event.target.checked ? undefined : [])}
+          />
+          <span><strong>全书全部小节</strong><small>新建小节也会自动加载。</small></span>
+        </label>
+        {!loadsEverywhere && (
+          <div className="source-scope-chapters" aria-label={`${sourceLabel}指定小节`}>
+            {chapters.map((chapter) => (
+              <fieldset key={chapter.id}>
+                <legend>{chapter.title}</legend>
+                {chapter.sections.map((section) => (
+                  <label className="source-scope-section" key={section.id}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(section.id)}
+                      onChange={(event) => toggleSection(section.id, event.target.checked)}
+                    />
+                    <span>{section.title}</span>
+                  </label>
+                ))}
+                {chapter.sections.length === 0 && <small className="source-scope-empty">这一章还没有小节。</small>}
+              </fieldset>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function CharacterEditor({ bookTitle, chapters, character, onChange }: {
   bookTitle: string;
+  chapters: Book['chapters'];
   character: CharacterCard;
-  isActiveRole: boolean;
   onChange: (patch: Partial<CharacterCard>) => void;
-  onSetActive: () => void;
 }) {
   return (
     <article className="source-editor-page">
@@ -1262,39 +1320,49 @@ function CharacterEditor({ bookTitle, character, isActiveRole, onChange, onSetAc
       </header>
       <section className="source-editor-fields" aria-label={`${character.name}角色卡内容`}>
         <label>角色名<input value={character.name} onChange={(event) => onChange({ name: event.target.value })} /></label>
-        <label>角色职责<input value={character.role} onChange={(event) => onChange({ role: event.target.value })} /></label>
-        <label>角色资料<textarea value={character.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
+        <label>角色要点<input value={character.role} onChange={(event) => onChange({ role: event.target.value })} /></label>
+        <label>角色设定<textarea value={character.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
         <label className="source-prompt-setting">
           <input type="checkbox" checked={character.includeInPrompt} onChange={(event) => onChange({ includeInPrompt: event.target.checked })} />
-          <span><strong>生成时引用角色卡</strong><small>开启后，角色资料会进入本书的 Prompt。</small></span>
+          <span><strong>加载角色卡</strong><small>开启后，角色设定将被加载进入 Prompt。</small></span>
         </label>
-        <button type="button" className="quiet-action" aria-pressed={isActiveRole} onClick={onSetActive}>
-          {isActiveRole ? '当前扮演角色' : '设为扮演角色'}
-        </button>
+        <SourceLoadScope
+          chapters={chapters}
+          loadedSectionIds={character.loadedSectionIds}
+          sourceLabel={`角色卡${character.name}`}
+          onChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
+        />
       </section>
     </article>
   );
 }
 
-function WorldRuleEditor({ bookTitle, rule, onChange }: {
+function WorldRuleEditor({ bookTitle, chapters, rule, onChange }: {
   bookTitle: string;
+  chapters: Book['chapters'];
   rule: WorldRule;
   onChange: (patch: Partial<WorldRule>) => void;
 }) {
   return (
     <article className="source-editor-page">
       <header className="source-editor-heading">
-        <p className="eyebrow">{bookTitle} · 世界观条例</p>
+        <p className="eyebrow">{bookTitle} · 世界观设定</p>
         <h1>{rule.title}</h1>
-        <p>这条设定只属于当前书目，并对书内全部章节与小节生效。</p>
+        <p>这条设定只属于当前书目，可按小节决定是否加载。</p>
       </header>
-      <section className="source-editor-fields" aria-label={`${rule.title}世界观条例内容`}>
-        <label>条例名称<input value={rule.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
-        <label>条例内容<textarea value={rule.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
+      <section className="source-editor-fields" aria-label={`${rule.title}世界观设定内容`}>
+        <label>设定名称<input value={rule.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
+        <label>设定内容<textarea value={rule.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
         <label className="source-prompt-setting">
           <input type="checkbox" checked={rule.includeInPrompt} onChange={(event) => onChange({ includeInPrompt: event.target.checked })} />
-          <span><strong>生成时引用世界观条例</strong><small>开启后，这条设定会进入本书的 Prompt。</small></span>
+          <span><strong>加载世界观设定</strong><small>开启后，这条设定将被加载进入 Prompt。</small></span>
         </label>
+        <SourceLoadScope
+          chapters={chapters}
+          loadedSectionIds={rule.loadedSectionIds}
+          sourceLabel={`世界观设定${rule.title}`}
+          onChange={(loadedSectionIds) => onChange({ loadedSectionIds })}
+        />
       </section>
     </article>
   );
@@ -1313,7 +1381,6 @@ interface BookshelfProps {
   book: Book;
   library: BookIndexEntry[];
   selectedSectionId: string;
-  selectedCharacterId: string;
   openBookSettingsRequest: number;
   onBookSettingsOpened: () => void;
   onBookSettingsClose: () => void;
@@ -1333,7 +1400,6 @@ interface BookshelfProps {
   onWritingBriefChange: (value: string) => void;
   onCharacterChange: (id: string, patch: Partial<CharacterCard>) => void;
   onWorldRuleChange: (id: string, patch: Partial<WorldRule>) => void;
-  onSetActiveCharacter: (id: string) => void;
 }
 
 type NameDialogState =
@@ -1422,7 +1488,7 @@ function Bookshelf(props: BookshelfProps) {
       case 'new-section': return { title: `在《${nameDialog.chapterTitle}》中新建小节`, label: '小节名称', placeholder: '输入小节名称', action: '确认新建' };
       case 'rename-chapter': return { title: '修改章节名称', label: '章节名称', placeholder: '输入章节名称', action: '保存' };
       case 'new-character': return { title: '新建角色卡', label: '角色名称', placeholder: '输入角色名称', action: '确认新建' };
-      case 'new-world': return { title: '新建世界观条例', label: '条例名称', placeholder: '输入条例名称', action: '确认新建' };
+      case 'new-world': return { title: '新建世界观设定', label: '设定名称', placeholder: '输入设定名称', action: '确认新建' };
       default: return { title: '命名', label: '名称', placeholder: '输入名称', action: '确认' };
     }
   })();
@@ -1441,10 +1507,10 @@ function Bookshelf(props: BookshelfProps) {
       };
     }
     if (deleteDialog.kind === 'source-selection') {
-      const label = deleteDialog.sourceKind === 'character' ? '角色卡' : '世界观条例';
+      const label = deleteDialog.sourceKind === 'character' ? '角色卡' : '世界观设定';
       const count = deleteDialog.sourceKind === 'character'
         ? `${deleteDialog.ids.length} 张角色卡`
-        : `${deleteDialog.ids.length} 条世界观条例`;
+        : `${deleteDialog.ids.length} 条世界观设定`;
       return {
         title: `删除所选${label}`,
         message: `将删除 ${count}。此操作无法撤销。`,
@@ -1545,7 +1611,7 @@ function Bookshelf(props: BookshelfProps) {
       : bookSettingsView.kind === 'character'
         ? settingsCharacter?.name ?? '角色卡'
         : bookSettingsView.kind === 'world'
-          ? settingsWorldRule?.title ?? '世界观条例'
+          ? settingsWorldRule?.title ?? '世界观设定'
           : '本书设定';
   const bookSettingsEyebrow = bookSettingsView.kind === 'root'
     ? '全局指引 · 角色 · 世界'
@@ -1612,7 +1678,7 @@ function Bookshelf(props: BookshelfProps) {
               <button
                 ref={bookSettingsTrigger}
                 type="button"
-                className="icon-button book-settings-button"
+                className="book-settings-button button-with-icon"
                 onClick={() => {
                   setBookSettingsView({ kind: 'root' });
                   bookSettingsDialog.current?.showModal();
@@ -1820,12 +1886,12 @@ function Bookshelf(props: BookshelfProps) {
                   <ChevronDown aria-hidden="true" />
                 </summary>
                 <div className="guide-link-list">
-                  <button type="button" className="guide-link-row" onClick={() => openBookSettingsPage({ kind: 'outline' })}>
-                    <span><strong>剧情大纲</strong><small>规划情节走向，生成时作为本书的长期指导。</small></span>
-                    <ChevronRight className="icon-directional" aria-hidden="true" />
-                  </button>
                   <button type="button" className="guide-link-row" onClick={() => openBookSettingsPage({ kind: 'style' })}>
                     <span><strong>写作风格指导</strong><small>指定行文风格、语气和语言表达。</small></span>
+                    <ChevronRight className="icon-directional" aria-hidden="true" />
+                  </button>
+                  <button type="button" className="guide-link-row" onClick={() => openBookSettingsPage({ kind: 'outline' })}>
+                    <span><strong>剧情大纲</strong><small>规划情节走向，生成时作为本书的长期指导。</small></span>
                     <ChevronRight className="icon-directional" aria-hidden="true" />
                   </button>
                 </div>
@@ -1890,18 +1956,18 @@ function Bookshelf(props: BookshelfProps) {
               <details className="source-group-drawer" open={openSettingsSections.has('world')} onToggle={(event) => setSettingsSectionOpen('world', event.currentTarget.open)}>
                 <summary>
                   <Globe2 aria-hidden="true" />
-                  <span><strong>世界观条例</strong><small>{props.book.worldRules.length} 条设定</small></span>
+                  <span><strong>世界观设定</strong><small>{props.book.worldRules.length} 条设定</small></span>
                   <ChevronDown aria-hidden="true" />
                 </summary>
                 <div className="source-group-content">
                   <div className="source-group-actions">
-                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-world', value: '' })} aria-label="新建世界观条例" title="新建世界观条例"><Plus aria-hidden="true" /></button>
+                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-world', value: '' })} aria-label="新建世界观设定" title="新建世界观设定"><Plus aria-hidden="true" /></button>
                     <button
                       type="button"
                       className="icon-button"
                       aria-pressed={sourceSelectionMode === 'world'}
                       onClick={() => toggleSourceSelectionMode('world')}
-                      aria-label={sourceSelectionMode === 'world' ? '退出世界观条例选择' : '选择世界观条例'}
+                      aria-label={sourceSelectionMode === 'world' ? '退出世界观设定选择' : '选择世界观设定'}
                       title={sourceSelectionMode === 'world' ? '退出选择' : '选择'}
                     >{sourceSelectionMode === 'world' ? <X aria-hidden="true" /> : <ListChecks aria-hidden="true" />}</button>
                     <button
@@ -1910,8 +1976,8 @@ function Bookshelf(props: BookshelfProps) {
                       aria-haspopup="dialog"
                       disabled={sourceSelectionMode !== 'world' || selectedSourceIds.size === 0}
                       onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'world', ids: [...selectedSourceIds] })}
-                      aria-label="删除所选世界观条例"
-                      title={sourceSelectionMode === 'world' && selectedSourceIds.size ? '删除所选世界观条例' : '请先选择世界观条例'}
+                      aria-label="删除所选世界观设定"
+                      title={sourceSelectionMode === 'world' && selectedSourceIds.size ? '删除所选世界观设定' : '请先选择世界观设定'}
                     ><Trash2 aria-hidden="true" /></button>
                   </div>
                   <div className="source-list">
@@ -1925,8 +1991,8 @@ function Bookshelf(props: BookshelfProps) {
                           ? setSelectedSourceIds((current) => toggleSourceSelection(current, rule.id))
                           : openBookSettingsPage({ kind: 'world', id: rule.id })}
                         aria-label={sourceSelectionMode === 'world'
-                          ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观条例${rule.title}`
-                          : `打开世界观条例${rule.title}`}
+                          ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观设定${rule.title}`
+                          : `打开世界观设定${rule.title}`}
                         key={rule.id}
                       >
                         {sourceSelectionMode === 'world' && (
@@ -1938,7 +2004,7 @@ function Bookshelf(props: BookshelfProps) {
                         {sourceSelectionMode !== 'world' && <ChevronRight className="icon-directional" aria-hidden="true" />}
                       </button>
                     ))}
-                    {props.book.worldRules.length === 0 && <p className="empty-source">还没有世界观条例。</p>}
+                    {props.book.worldRules.length === 0 && <p className="empty-source">还没有世界观设定。</p>}
                   </div>
                 </div>
               </details>
@@ -1964,20 +2030,20 @@ function Bookshelf(props: BookshelfProps) {
             settingsCharacter
               ? <CharacterEditor
                   bookTitle={props.book.title}
+                  chapters={props.book.chapters}
                   character={settingsCharacter}
-                  isActiveRole={props.selectedCharacterId === settingsCharacter.id}
                   onChange={(patch) => props.onCharacterChange(settingsCharacter.id, patch)}
-                  onSetActive={() => props.onSetActiveCharacter(settingsCharacter.id)}
                 />
               : <MissingSettingsItem label="角色卡" />
           ) : (
             settingsWorldRule
               ? <WorldRuleEditor
                   bookTitle={props.book.title}
+                  chapters={props.book.chapters}
                   rule={settingsWorldRule}
                   onChange={(patch) => props.onWorldRuleChange(settingsWorldRule.id, patch)}
                 />
-              : <MissingSettingsItem label="世界观条例" />
+              : <MissingSettingsItem label="世界观设定" />
           )}
         </div>
       </dialog>

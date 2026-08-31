@@ -82,6 +82,93 @@ describe('context plan', () => {
     ]);
   });
 
+  it('loads scoped character cards and world settings only for matching sections', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const secondSectionId = 'book-a-second-section';
+    book.chapters[0]?.sections.push({
+      id: secondSectionId,
+      title: 'Second section',
+      content: 'Second manuscript',
+    });
+
+    const alwaysCharacter = book.characters[0];
+    if (!alwaysCharacter) throw new Error('fixture character missing');
+    alwaysCharacter.includeInPrompt = true;
+    alwaysCharacter.loadedSectionIds = undefined;
+    const scopedCharacter = {
+      id: 'book-a-scoped-character',
+      name: 'Scoped character',
+      title: 'Scoped character',
+      role: 'Guide',
+      content: 'Only for the second section.',
+      includeInPrompt: true,
+      loadedSectionIds: [secondSectionId],
+    };
+    const disabledCharacter = {
+      id: 'book-a-disabled-character',
+      name: 'Disabled character',
+      title: 'Disabled character',
+      role: 'Extra',
+      content: 'Never load unless character mode forces it.',
+      includeInPrompt: false,
+      loadedSectionIds: [],
+    };
+    book.characters = [alwaysCharacter, scopedCharacter, disabledCharacter];
+
+    const alwaysWorld = book.worldRules[0];
+    if (!alwaysWorld) throw new Error('fixture world setting missing');
+    alwaysWorld.loadedSectionIds = undefined;
+    const scopedWorld = {
+      id: 'book-a-scoped-world',
+      title: 'Scoped setting',
+      content: 'Only for the second section.',
+      includeInPrompt: true,
+      loadedSectionIds: [secondSectionId],
+    };
+    const disabledWorld = {
+      id: 'book-a-disabled-world',
+      title: 'Disabled setting',
+      content: 'Never load.',
+      includeInPrompt: true,
+      loadedSectionIds: [],
+    };
+    book.worldRules = [alwaysWorld, scopedWorld, disabledWorld];
+
+    const firstSectionPlan = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue the first section.',
+    });
+    expect(firstSectionPlan.included.map((item) => item.sourceId)).toEqual(expect.arrayContaining([
+      alwaysCharacter.id,
+      alwaysWorld.id,
+    ]));
+    for (const sourceId of [scopedCharacter.id, disabledCharacter.id, scopedWorld.id, disabledWorld.id]) {
+      expect(firstSectionPlan.included.map((item) => item.sourceId)).not.toContain(sourceId);
+    }
+
+    const secondSectionPlan = buildContextPlan(book, {
+      sectionId: secondSectionId,
+      mode: 'author',
+      instruction: 'Continue the second section.',
+    });
+    expect(secondSectionPlan.included.map((item) => item.sourceId)).toEqual(expect.arrayContaining([
+      alwaysCharacter.id,
+      scopedCharacter.id,
+      alwaysWorld.id,
+      scopedWorld.id,
+    ]));
+    expect(secondSectionPlan.included.map((item) => item.sourceId)).not.toContain(disabledWorld.id);
+
+    const forcedCharacterPlan = buildContextPlan(book, {
+      sectionId: 'book-a-section',
+      mode: 'character',
+      selectedCharacterId: disabledCharacter.id,
+      instruction: 'Look around.',
+    });
+    expect(forcedCharacterPlan.included.map((item) => item.sourceId)).toContain(disabledCharacter.id);
+  });
+
   it('places a transient author note before the manuscript and ignores legacy Section notes', () => {
     const book = makeBook('book-a', 'ALPHA');
     const current = book.chapters[0]?.sections[0];

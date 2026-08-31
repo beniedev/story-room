@@ -64,6 +64,7 @@ const sourceBlock = (
   bookId: string,
   layer: PromptLayer,
   source: PromptSource,
+  sectionId: string,
   reason: string,
   forceInclude = false,
 ) => block(
@@ -74,13 +75,15 @@ const sourceBlock = (
   source.title,
   source.content,
   forceInclude ? `${reason}（当前模式必需）` : reason,
-  forceInclude || source.includeInPrompt,
+  forceInclude || (source.includeInPrompt
+    && (source.loadedSectionIds === undefined || source.loadedSectionIds.includes(sectionId))),
   false,
 );
 
 const characterBlock = (
   bookId: string,
   character: Book['characters'][number],
+  sectionId: string,
   reason: string,
   forceInclude = false,
 ) => block(
@@ -91,7 +94,8 @@ const characterBlock = (
   character.name,
   [`角色名：${character.name}`, `角色身份：${character.role}`, character.content].join('\n'),
   forceInclude ? `${reason}（当前模式必需）` : reason,
-  forceInclude || character.includeInPrompt,
+  forceInclude || (character.includeInPrompt
+    && (character.loadedSectionIds === undefined || character.loadedSectionIds.includes(sectionId))),
   false,
 );
 
@@ -112,11 +116,12 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
     block(book.id, 'system', 'stable', 'system:manuscript-contract', '正文合同', BASE_CONTRACT, '所有生成共享的正文与隔离底线', true, true),
     block(book.id, 'book', 'stable', `${book.id}:identity`, '当前书目', `书名：${book.title}`, '锁定本次生成所属的 Book', true, true),
     block(book.id, 'book', 'stable', `${book.id}:style`, '写作风格指导', book.writingBrief, '当前 Book 的全局行文风格与语言表达', Boolean(book.writingBrief.trim()), false),
-    ...book.worldRules.map((source) => sourceBlock(book.id, 'world', source, '本书启用的世界观条例')),
+    ...book.worldRules.map((source) => sourceBlock(book.id, 'world', source, request.sectionId, '当前小节加载的世界观设定')),
     ...book.characters.map((character) => characterBlock(
       book.id,
       character,
-      request.mode === 'author' ? '作者模式启用的角色卡' : '角色模式的角色资料',
+      request.sectionId,
+      request.mode === 'author' ? '当前小节加载的角色卡' : '角色模式的角色设定',
       request.mode === 'character' && character.id === selectedCharacter!.id,
     )),
     block(book.id, 'book', 'stable', `${book.id}:outline`, '剧情大纲', book.plotOutline ?? '', '当前 Book 的全局剧情指导', Boolean(book.plotOutline?.trim()), false),
@@ -169,7 +174,7 @@ export function buildContextPlan(book: Book, request: Omit<GenerationRequest, 'b
   const included = blocks.filter((item) => item.included);
   const excluded = blocks.filter((item) => !item.included).map((item) => ({
     ...item,
-    reason: item.content.trim() ? '已在本书 Prompt 管理中关闭' : '内容为空，未装入',
+    reason: item.content.trim() ? '当前小节未加载，或已在本书 Prompt 管理中关闭' : '内容为空，未装入',
   }));
   const prompt = included.map((item) => `## ${item.title}\n${item.content}`).join('\n\n');
 

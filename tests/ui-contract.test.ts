@@ -66,6 +66,20 @@ describe('writing UI contract', () => {
     expect(selectorIndex).toBeLessThan(toolbarIndex);
   });
 
+  it('keeps the home settings entry as a wide icon-and-label control', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const toolbarStart = source.indexOf('className="directory-toolbar"');
+    const chapterListStart = source.indexOf('<ol className="chapter-list"', toolbarStart);
+    const toolbar = source.slice(toolbarStart, chapterListStart);
+
+    expect(toolbar).toContain('book-settings-button');
+    expect(toolbar).toContain('button-with-icon');
+    expect(toolbar).toContain('<span>设定</span>');
+    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,300}padding-inline:/);
+    expect(styles).not.toMatch(/\.icon-button\.book-settings-button\s*\{[\s\S]{0,120}padding:\s*0/);
+  });
+
   it('keeps book actions above the list and gives book settings primary emphasis', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
@@ -74,7 +88,7 @@ describe('writing UI contract', () => {
     const panel = source.slice(panelStart, panelEnd);
 
     expect(panel.indexOf('className="book-actions-row"')).toBeLessThan(panel.indexOf('className="book-list"'));
-    expect(source).toContain('className="icon-button book-settings-button"');
+    expect(source).toContain('book-settings-button');
     expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,260}background:\s*var\(--accent-strong\)[\s\S]{0,120}color:\s*var\(--primary-text\)/);
   });
 
@@ -115,7 +129,7 @@ describe('writing UI contract', () => {
     expect(source).toMatch(/layer[\s\S]{0,160}character/);
     expect(source).toMatch(/layer[\s\S]{0,160}world/);
     expect(source).toContain('角色卡');
-    expect(source).toContain('世界观条例');
+    expect(source).toContain('世界观设定');
     expect(source).toContain('className="prompt-composition-map"');
     expect(source).toContain('className="prompt-connector-lines"');
     expect(source).toContain('className="prompt-included-names"');
@@ -146,7 +160,7 @@ describe('writing UI contract', () => {
     ] as const;
 
     const combined = combinePromptSources(items.map((item) => ({ ...item })));
-    expect(combined.map((item) => item.title)).toEqual(['正文合同', '世界观条例', '角色卡']);
+    expect(combined.map((item) => item.title)).toEqual(['正文合同', '世界观设定', '角色卡']);
     expect(combined.find((item) => item.layer === 'world')).toMatchObject({
       estimatedTokens: 7,
       includedNames: ['移动规则', '时间规则'],
@@ -201,13 +215,13 @@ describe('writing UI contract', () => {
     expect(app).not.toContain('Fake Provider 已生成待应用正文');
   });
 
-  it('keeps mode switching open and links an active role to character mode', async () => {
+  it('keeps mode switching open while role choice stays in the writing menu', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(app).toContain("onClick={() => props.onModeChange('author')}");
     expect(app).toContain("onClick={() => props.onModeChange('character')}");
-    expect(app).toContain('onSetActiveCharacter={(id) => {');
-    expect(app).toContain('setSelectedCharacterId(id);');
-    expect(app).toContain("setMode('character');");
+    expect(app).toContain('id="character-select"');
+    expect(app).not.toContain('onSetActiveCharacter');
+    expect(app).not.toContain('设为扮演角色');
   });
 
   it('opens a selected block in a full-screen editor with immediate autosave', async () => {
@@ -263,7 +277,7 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('bookSettingsOpenRequest');
     expect(source).toContain("kind: 'source-selection'");
     expect(source).toContain('删除所选角色卡');
-    expect(source).toContain('删除所选世界观条例');
+    expect(source).toContain('删除所选世界观设定');
     expect(source).not.toContain('editingCharacterId');
     expect(source).not.toContain('editingWorldId');
     expect(source).toContain('className="source-editor-page"');
@@ -317,6 +331,52 @@ describe('writing UI contract', () => {
     expect(styles).toContain('background: var(--surface)');
     expect(source).not.toContain('className="settings-list-row');
     expect(source).not.toContain('className="provider-profile-list');
+  });
+
+  it('lists writing style guidance before the plot outline', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const guidanceStart = source.indexOf('global-guidance-drawer');
+    const styleLink = source.indexOf("openBookSettingsPage({ kind: 'style' })", guidanceStart);
+    const outlineLink = source.indexOf("openBookSettingsPage({ kind: 'outline' })", guidanceStart);
+
+    expect(guidanceStart).toBeGreaterThanOrEqual(0);
+    expect(styleLink).toBeGreaterThan(guidanceStart);
+    expect(styleLink).toBeLessThan(outlineLink);
+  });
+
+  it('uses the updated character and world-setting vocabulary and exposes section loading scope', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const characterEditorStart = source.indexOf('function CharacterEditor');
+    const worldEditorStart = source.indexOf('function WorldRuleEditor');
+    const missingEditorStart = source.indexOf('function MissingSettingsItem');
+    const characterEditor = source.slice(characterEditorStart, worldEditorStart);
+    const worldEditor = source.slice(worldEditorStart, missingEditorStart);
+
+    expect(characterEditor).toContain('角色要点');
+    expect(characterEditor).toContain('角色设定');
+    expect(characterEditor).not.toContain('角色职责');
+    expect(characterEditor).not.toContain('角色资料');
+    expect(characterEditor).toContain('加载角色卡');
+    expect(characterEditor).toMatch(/加载角色卡[\s\S]{0,260}角色设定[\s\S]{0,260}Prompt/);
+    expect(characterEditor).toContain('<SourceLoadScope');
+    expect(characterEditor).toContain('type="checkbox"');
+
+    expect(worldEditor).toContain('世界观设定');
+    expect(worldEditor).toContain('设定名称');
+    expect(worldEditor).toContain('设定内容');
+    expect(worldEditor).not.toContain('世界观条例');
+    expect(worldEditor).toContain('加载世界观设定');
+    expect(worldEditor).toMatch(/加载世界观设定[\s\S]{0,260}(?:设定|内容)[\s\S]{0,260}Prompt/);
+    expect(worldEditor).toContain('<SourceLoadScope');
+    expect(worldEditor).toContain('type="checkbox"');
+    expect(source).toContain('loadedSectionIds');
+    expect(source).toContain('function SourceLoadScope');
+    expect(source).toContain('className="source-scope-drawer"');
+    expect(source).toContain('加载范围');
+    expect(source).toContain('全部小节');
+    expect(source).toContain('未选择小节');
+    expect(source).not.toContain('onSetActiveCharacter');
+    expect(source).not.toContain('设为扮演角色');
   });
 
   it('provides a persisted 12–24px font-size stepper without a slider', async () => {

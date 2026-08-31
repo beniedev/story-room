@@ -26,7 +26,13 @@ describe('story store', () => {
       plotOutline: 'Follow the signal.',
       writingBrief: 'Keep it quiet.',
       characters: [],
-      worldRules: [{ id: 'rule-one', title: 'Rule', content: 'A rule.', includeInPrompt: true }],
+      worldRules: [{
+        id: 'rule-one',
+        title: 'Rule',
+        content: 'A rule.',
+        includeInPrompt: true,
+        loadedSectionIds: ['section-one'],
+      }],
       canonFacts: [{ id: 'fact-one', title: 'Fact', content: 'A fact.', includeInPrompt: true }],
       summaries: [{
         id: 'summary-one',
@@ -63,6 +69,7 @@ describe('story store', () => {
       { id: 'section-one-assistant', kind: 'assistant', content: '微光仍未消失。' },
     ]);
     expect(loaded.plotOutline).toBe('Follow the signal.');
+    expect(loaded.worldRules[0]?.loadedSectionIds).toEqual(['section-one']);
     expect(await readFile(path.join(root, 'books', book.id, 'canon', 'fact-one.json'), 'utf8')).toContain('A fact.');
     expect(await readFile(path.join(root, 'books', book.id, 'summaries', 'summary-one.json'), 'utf8')).toContain('sourceSectionIds');
     expect(await readFile(path.join(root, 'books', book.id, 'world', 'rule-one.md'), 'utf8')).toBe('A rule.');

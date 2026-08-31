@@ -6,6 +6,7 @@ export interface PromptSource {
   title: string;
   content: string;
   includeInPrompt: boolean;
+  loadedSectionIds?: string[];
 }
 
 export interface CharacterCard extends PromptSource {

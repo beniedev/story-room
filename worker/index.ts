@@ -60,6 +60,11 @@ const validateSource = (value: unknown, label: string) => {
   requiredString(value.title, `${label}标题`);
   requiredString(value.content, `${label}正文`);
   if (typeof value.includeInPrompt !== 'boolean') throw new HttpError(`${label}启用状态无效。`);
+  if (value.loadedSectionIds !== undefined) {
+    for (const sectionId of requiredArray(value.loadedSectionIds, `${label}加载范围`)) {
+      validId(sectionId, `${label}加载范围 Section ID`);
+    }
+  }
 };
 
 const validateSection = (value: unknown) => {
@@ -91,10 +96,10 @@ function validateBook(value: unknown): asserts value is Book {
     validateSource(character, '角色卡');
     if (isRecord(character)) {
       requiredString(character.name, '角色名');
-      requiredString(character.role, '角色职责');
+      requiredString(character.role, '角色要点');
     }
   }
-  for (const rule of requiredArray(value.worldRules, '世界观条例')) validateSource(rule, '世界观条例');
+  for (const rule of requiredArray(value.worldRules, '世界观设定')) validateSource(rule, '世界观设定');
   for (const fact of requiredArray(value.canonFacts, 'Canon 事实')) validateSource(fact, 'Canon 事实');
   for (const summary of requiredArray(value.summaries, 'Summary')) {
     validateSource(summary, 'Summary');
