@@ -427,27 +427,18 @@ h3 {
   color: var(--danger);
 }
 
-.writer-mode-tabs {
+.writer-tool-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.3rem;
   width: min(100%, 72ch);
   margin-inline: auto;
   padding: 0.2rem clamp(0.45rem, 2vw, 0.8rem);
 }
 
-.writer-mode-tabs button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-width: 0;
+.writer-tool-row .icon-button {
+  width: 100%;
   background: var(--surface);
-  color: var(--muted);
-}
-
-.writer-mode-tabs button[aria-pressed="true"] {
-  background: var(--surface-active);
   color: var(--accent-strong);
 }
 
@@ -604,6 +595,16 @@ h3 {
   width: 100%;
   background: transparent;
   text-align: start;
+}
+
+.writer-menu-modes {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.writer-menu-modes .writer-menu-action[aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--accent-strong);
 }
 
 .writer-menu-character {

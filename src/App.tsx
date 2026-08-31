@@ -766,14 +766,38 @@ function Writer(props: WriterProps) {
           </span>
         </div>
 
-        <nav className="writer-mode-tabs" aria-label="写作模式">
-          <button type="button" aria-pressed={props.mode === 'author'} onClick={() => props.onModeChange('author')}>
-            <BookOpenText aria-hidden="true" />作者模式
-          </button>
-          <button type="button" aria-pressed={props.mode === 'character'} onClick={() => props.onModeChange('character')}>
-            <UsersRound aria-hidden="true" />角色模式 · 第一视角
-          </button>
-        </nav>
+        <div className="writer-tool-row" role="group" aria-label="写作工具">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={props.onShowPrompt}
+            disabled={props.busy}
+            aria-label="查看当前 Prompt"
+            title="查看当前 Prompt"
+          ><Layers3 aria-hidden="true" /></button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={openTitleDialog}
+            disabled={!props.section}
+            aria-label="修改小节名称"
+            title="修改小节名称"
+          ><Pencil aria-hidden="true" /></button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={props.onExport}
+            aria-label="导出当前书目"
+            title="导出当前书目"
+          ><Download aria-hidden="true" /></button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={props.onOpenSettings}
+            aria-label="打开设置"
+            title="设置"
+          ><Settings aria-hidden="true" /></button>
+        </div>
 
         <p className="writer-section-title" title={`${props.chapterTitle} · ${props.section?.title ?? ''}`}>
           <strong>{props.chapterTitle}</strong>
@@ -821,6 +845,20 @@ function Writer(props: WriterProps) {
             <span className="sr-only">打开写作操作</span>
           </summary>
           <div className="writer-action-sheet" aria-label="写作操作">
+            <div className="writer-menu-modes" role="group" aria-label="写作模式">
+              <button
+                type="button"
+                className="writer-menu-action"
+                aria-pressed={props.mode === 'author'}
+                onClick={() => runMenuAction(() => props.onModeChange('author'))}
+              ><BookOpenText aria-hidden="true" />作者模式</button>
+              <button
+                type="button"
+                className="writer-menu-action"
+                aria-pressed={props.mode === 'character'}
+                onClick={() => props.onModeChange('character')}
+              ><UsersRound aria-hidden="true" />角色模式 · 第一视角</button>
+            </div>
             {props.mode === 'character' && (
               <div className="character-select writer-menu-character">
                 <label htmlFor="character-select">扮演角色</label>
@@ -842,18 +880,6 @@ function Writer(props: WriterProps) {
                 </p>
               </div>
             )}
-            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onShowPrompt)} disabled={props.busy}>
-              <Layers3 aria-hidden="true" />查看当前 Prompt
-            </button>
-            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(openTitleDialog)} disabled={!props.section}>
-              <Pencil aria-hidden="true" />修改小节名称
-            </button>
-            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onExport)}>
-              <Download aria-hidden="true" />导出当前书目
-            </button>
-            <button type="button" className="writer-menu-action" onClick={() => runMenuAction(props.onOpenSettings)}>
-              <Settings aria-hidden="true" />设置
-            </button>
           </div>
         </details>
         <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '写作指令' : '角色行动或台词'}</label>

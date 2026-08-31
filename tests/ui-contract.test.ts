@@ -41,9 +41,11 @@ describe('writing UI contract', () => {
   it('keeps the writing surface reader-first and moves secondary actions into one menu', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain('className="writer-context-progress"');
-    expect(source).toContain('className="writer-mode-tabs"');
+    expect(source).toContain('className="writer-tool-row"');
+    expect(source).toContain('role="group" aria-label="写作工具"');
     expect(source).toContain('className="writer-section-title"');
     expect(source).toContain('className="writer-action-menu"');
+    expect(source).toContain('className="writer-menu-modes"');
     expect(source).toContain('打开写作操作');
     expect(source).toContain('修改小节名称');
     expect(source).toContain('closeActionMenu(true)');
