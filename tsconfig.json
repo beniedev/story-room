@@ -17,5 +17,5 @@
     "jsx": "react-jsx",
     "types": ["node", "vite/client", "vitest/globals", "@cloudflare/workers-types"]
   },
-  "include": ["src", "server", "worker", "db", "tests", "vite.config.ts", "drizzle.config.ts"]
+  "include": ["src", "server", "worker", "tests", "vite.config.ts"]
 }

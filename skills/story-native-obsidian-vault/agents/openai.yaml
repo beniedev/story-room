@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Native Obsidian Vault"
+  short_description: "把 Story Native JSON 书稿转换为可编辑的 Obsidian Vault"
+  default_prompt: "Use $story-native-obsidian-vault to convert this Story Native JSON export into an Obsidian vault."

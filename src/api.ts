@@ -5,6 +5,7 @@ import type {
   GenerationRequest,
   GenerationResult,
 } from './types';
+import { deviceLibrary } from './deviceLibrary';
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, {
@@ -16,8 +17,8 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
   return body;
 };
 
-export const api = {
-  runtime: import.meta.env.MODE === 'site' ? 'cloud' as const : 'local' as const,
+const hostApi = {
+  runtime: 'host' as const,
   listBooks: () => request<BookIndexEntry[]>('/api/library'),
   loadBook: (bookId: string) => request<Book>(`/api/books/${bookId}`),
   createBook: (title: string) => request<Book>('/api/books', {
@@ -40,3 +41,7 @@ export const api = {
     body: JSON.stringify(body),
   }),
 };
+
+export const api = import.meta.env.MODE === 'site'
+  ? { runtime: 'device' as const, ...deviceLibrary }
+  : hostApi;

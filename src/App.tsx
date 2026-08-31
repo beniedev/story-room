@@ -9,6 +9,8 @@ import {
   Circle,
   CircleCheckBig,
   Download,
+  FileJson,
+  FileText,
   FilePlus2,
   FolderPlus,
   Globe2,
@@ -30,6 +32,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from './api';
+import { createBookExport, type BookExportFormat } from './bookExport';
 import { buildContextPlan as composeContextPlan } from './contextPlan';
 import {
   deleteDirectorySelection,
@@ -198,13 +201,13 @@ const cacheBook = (book: Book) => {
   }
 };
 
-const newerBook = (remote: Book, cached: Book | null) => {
-  if (!cached) return remote;
-  const remoteTime = Date.parse(remote.updatedAt);
+const newerBook = (stored: Book, cached: Book | null) => {
+  if (!cached) return stored;
+  const storedTime = Date.parse(stored.updatedAt);
   const cachedTime = Date.parse(cached.updatedAt);
-  return Number.isFinite(cachedTime) && (!Number.isFinite(remoteTime) || cachedTime > remoteTime)
+  return Number.isFinite(cachedTime) && (!Number.isFinite(storedTime) || cachedTime > storedTime)
     ? cached
-    : remote;
+    : stored;
 };
 
 function App() {
@@ -232,9 +235,11 @@ function App() {
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState(api.runtime === 'cloud' ? '正在打开私有云端书库…' : '正在打开本地书库…');
+  const [status, setStatus] = useState(api.runtime === 'device' ? '正在打开此设备的书库…' : '正在打开本机书库…');
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
+  const exportDialog = useRef<HTMLDialogElement>(null);
+  const exportTrigger = useRef<HTMLElement | null>(null);
   const mainContent = useRef<HTMLElement>(null);
   const restoreShelfFocus = useRef(false);
   const restoreWriterFocus = useRef(false);
@@ -311,7 +316,7 @@ function App() {
         const entries = await api.listBooks();
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
-        setStatus(api.runtime === 'cloud' ? '私有云端书库已打开。' : '本地书库已打开。');
+        setStatus(api.runtime === 'device' ? '此设备的书库已打开。' : '本机书库已打开。');
       } catch (error) {
         setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
@@ -324,8 +329,8 @@ function App() {
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(cachedLocally
-      ? '已自动保存到此设备，正在同步私有书库…'
-      : '当前设备的浏览器存储不可用，正在尝试同步私有书库…');
+      ? (api.runtime === 'device' ? '已自动保存到此设备。' : '已自动保存到此设备，正在写入本机故事目录…')
+      : '当前设备的浏览器存储不可用。');
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
@@ -338,12 +343,14 @@ function App() {
         setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
           ...items.filter((item) => item.id !== saved.id)]);
         setDirty(false);
-        setStatus(api.runtime === 'cloud'
-          ? '已自动保存到此设备，并同步私有云端书库。'
+        setStatus(api.runtime === 'device'
+          ? '已自动保存到此设备。'
           : '已自动保存到此设备和本机故事目录。');
       }).catch((error) => {
         if (saveRevision.current === revision) {
-          setStatus(`${error instanceof Error ? error.message : '同步失败。'} 本机自动保存不受影响。`);
+          setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${cachedLocally
+            ? '当前设备缓存仍保留本次修改。'
+            : '请立即复制正文或导出仍可访问的内容。'}`);
         }
       });
     }, 700);
@@ -352,9 +359,9 @@ function App() {
   }, [book, dirty]);
 
   const openBook = async (bookId: string) => {
-    const remote = await api.loadBook(bookId);
+    const stored = await api.loadBook(bookId);
     const cached = readCachedBook(bookId);
-    const loaded = newerBook(remote, cached);
+    const loaded = newerBook(stored, cached);
     cacheBook(loaded);
     saveRevision.current += 1;
     setBook(loaded);
@@ -362,7 +369,7 @@ function App() {
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     setInstruction('');
     setAuthorNote('');
-    setDirty(loaded === cached && loaded.updatedAt !== remote.updatedAt);
+    setDirty(loaded === cached && loaded.updatedAt !== stored.updatedAt);
     setView('shelf');
   };
 
@@ -392,25 +399,44 @@ function App() {
     }
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
-    setStatus(api.runtime === 'cloud'
-      ? '已自动保存到此设备，并同步私有云端书库。'
+    setStatus(api.runtime === 'device'
+      ? '已自动保存到此设备。'
       : '已自动保存到此设备和本机故事目录。');
     return saved;
   };
 
-  const exportCurrentBook = () => {
+  const closeExport = () => {
+    exportDialog.current?.close();
+    window.requestAnimationFrame(() => exportTrigger.current?.focus());
+  };
+
+  const openExport = () => {
     if (!book) return;
-    cacheBook(book);
-    const safeTitle = book.title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').trim() || 'story-book';
-    const url = URL.createObjectURL(new Blob([`${JSON.stringify(book, null, 2)}\n`], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${safeTitle}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setStatus(`已导出《${book.title}》的 JSON 文件。`);
+    if (document.activeElement instanceof HTMLElement) exportTrigger.current = document.activeElement;
+    exportDialog.current?.showModal();
+  };
+
+  const exportCurrentBook = (format: BookExportFormat) => {
+    if (!book) return;
+    try {
+      cacheBook(book);
+      const file = createBookExport(book, format);
+      const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      closeExport();
+      const label = format === 'epub' ? 'EPUB 电子书'
+        : format === 'markdown' ? 'Markdown 文档'
+          : format === 'text' ? 'TXT 文档' : 'JSON 完整备份';
+      setStatus(`已从当前设备导出《${book.title}》的${label}。`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `导出失败：${error.message}` : '导出失败。');
+    }
   };
 
   const generationRequest = (saved: Book) => ({
@@ -528,7 +554,7 @@ function App() {
       setAuthorNote('');
       setDirty(false);
       setView('shelf');
-      setStatus(api.runtime === 'cloud' ? '新 Book 已建立在私有云端书库。' : '新 Book 已建立在本机。');
+      setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
     });
   };
 
@@ -692,7 +718,7 @@ function App() {
           <button
             type="button"
             className="icon-button"
-            onClick={exportCurrentBook}
+            onClick={openExport}
             disabled={!book}
             aria-label="导出当前书目"
             title="导出当前书目"
@@ -732,7 +758,7 @@ function App() {
               setView('shelf');
               setBookSettingsRequest((current) => current + 1);
             }}
-            onExport={exportCurrentBook}
+            onExport={openExport}
             onOpenSettings={openSettings}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
@@ -783,7 +809,7 @@ function App() {
             onWorldRuleChange={updateWorldRule}
           />
         ) : (
-          <p className="loading-copy">正在打开本地书库…</p>
+          <p className="loading-copy">正在打开此设备的书库…</p>
         )}
       </main>
 
@@ -805,7 +831,78 @@ function App() {
         onClose={() => settingsTrigger.current?.focus()}
       />
 
+      <ExportDialog
+        bookTitle={book?.title ?? ''}
+        dialogRef={exportDialog}
+        onExport={exportCurrentBook}
+        onClose={closeExport}
+      />
+
     </div>
+  );
+}
+
+function ExportDialog({
+  bookTitle,
+  dialogRef,
+  onExport,
+  onClose,
+}: {
+  bookTitle: string;
+  dialogRef: React.RefObject<HTMLDialogElement | null>;
+  onExport: (format: BookExportFormat) => void;
+  onClose: () => void;
+}) {
+  const options: Array<{
+    format: BookExportFormat;
+    title: string;
+    description: string;
+    icon: typeof BookOpenText;
+  }> = [
+    { format: 'epub', title: 'EPUB 电子书', description: '自带书、章、节目录，适合阅读器与 Kindle', icon: BookOpenText },
+    { format: 'markdown', title: 'Markdown 文档', description: '可编辑长文，自带章、节目录', icon: ScrollText },
+    { format: 'text', title: 'TXT 纯文字', description: '最简兼容格式，保留目录与层级编号', icon: FileText },
+    { format: 'json', title: 'JSON 完整备份', description: '保留角色卡、设定、加载范围与正文结构', icon: FileJson },
+  ];
+
+  return (
+    <dialog
+      className="export-dialog"
+      ref={dialogRef}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      aria-labelledby="export-dialog-title"
+    >
+      <div className="export-dialog-body">
+        <header className="dialog-heading">
+          <div>
+            <small>仅从当前设备生成文件</small>
+            <h2 id="export-dialog-title">导出《{bookTitle}》</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭导出选项" title="关闭">
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="export-option-list">
+          {options.map((option) => {
+            const OptionIcon = option.icon;
+            return (
+              <button
+                type="button"
+                className="export-option"
+                key={option.format}
+                onClick={() => onExport(option.format)}
+              >
+                <OptionIcon aria-hidden="true" />
+                <span><strong>{option.title}</strong><small>{option.description}</small></span>
+                <Download aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+        <p className="helper-copy">应用不会上传书稿；文档如何备份或同步由你选择。</p>
+      </div>
+    </dialog>
   );
 }
 
@@ -2446,7 +2543,9 @@ function SettingsDrawer({
       </section>
       <section className="settings-section" aria-labelledby="storage-heading">
         <h3 id="storage-heading">当前存储</h3>
-        <p className="helper-copy">正文和资料会先自动保存到当前设备。{api.runtime === 'cloud' ? '联网时同时同步到你的私有云端书库。' : '本机 host 同时写入故事目录。'}</p>
+        <p className="helper-copy">{api.runtime === 'device'
+          ? '正文和资料只保存在当前浏览器设备，不上传书稿。请按需导出备份，并自行选择同步方式。'
+          : '正文和资料保存在本机 host 的故事目录；请自行选择文件同步方式。'}</p>
       </section>
     </dialog>
   );

@@ -249,7 +249,11 @@ describe('writing UI contract', () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(source).toContain("localStorage.setItem(bookCacheKey(book.id)");
     expect(source).toContain('<Download aria-hidden="true" />');
-    expect(source).toContain('download = `${safeTitle}.json`');
+    expect(source).toContain('className="export-dialog"');
+    expect(source).toContain('EPUB 电子书');
+    expect(source).toContain('Markdown 文档');
+    expect(source).toContain('TXT 纯文字');
+    expect(source).toContain('JSON 完整备份');
     expect(source).toContain('className="book-library-drawer"');
     expect(source).toContain('<summary className="book-selector-card">');
     expect(source).not.toContain('id="book-select"');

@@ -18,11 +18,10 @@
     "prebuild": "npm run prepare:font",
     "build": "tsc --noEmit && vite build --mode site",
     "prebuild:local": "npm run prepare:font",
-    "build:local": "tsc --noEmit && vite build --mode local-build --outDir dist-local",
-    "db:generate": "drizzle-kit generate"
+    "build:local": "tsc --noEmit && vite build --mode local-build --outDir dist-local"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.2",
+    "fflate": "^0.8.2",
     "lucide-react": "^1.37.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
@@ -35,7 +34,6 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11",
