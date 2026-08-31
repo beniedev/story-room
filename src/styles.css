@@ -713,6 +713,7 @@ h3 {
 .instruction-dock textarea {
   min-height: 44px;
   max-height: min(40dvh, 20rem);
+  padding-inline-end: 2.75rem;
   background: var(--surface);
   resize: none;
   transition: background-color 120ms ease-out;
@@ -726,7 +727,7 @@ h3 {
 
 .instruction-resize-handle {
   position: absolute;
-  inset-block-start: -22px;
+  inset-block-start: 0;
   inset-inline-end: 0;
   z-index: 1;
   display: grid;
@@ -741,9 +742,19 @@ h3 {
   touch-action: none;
 }
 
-.instruction-resize-handle svg {
-  width: 1.1rem;
-  height: 1.1rem;
+.instruction-resize-handle > span {
+  position: absolute;
+  inset-block-start: 0.4rem;
+  inset-inline-end: 0.4rem;
+  width: 1rem;
+  height: 1rem;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    currentColor 3px 4.5px,
+    transparent 4.5px 7px
+  );
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
 }
 
 .instruction-resize-handle[data-resizing="true"] {

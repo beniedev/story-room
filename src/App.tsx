@@ -20,7 +20,6 @@ import {
   Menu,
   MessageSquareText,
   Minus,
-  MoveVertical,
   Pencil,
   PlugZap,
   Plus,
@@ -1320,7 +1319,7 @@ function Writer(props: WriterProps) {
                 ?? 44;
               setInstructionInputHeight(clampInstructionHeight(currentHeight + (event.key === 'ArrowUp' ? 16 : -16)));
             }}
-          ><MoveVertical aria-hidden="true" /></button>
+          ><span aria-hidden="true" /></button>
           <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '接龙正文' : '角色行动或台词'}</label>
           <textarea
             ref={instructionInput}
