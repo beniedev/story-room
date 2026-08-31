@@ -1091,8 +1091,17 @@ h3 {
 .book-settings-button {
   min-height: 44px;
   padding-inline: 0.85rem;
-  background: var(--surface);
-  color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--primary-text);
+}
+
+.icon-button.book-settings-button {
+  padding: 0;
+}
+
+.book-settings-button:hover {
+  background: var(--accent);
+  color: var(--primary-text);
 }
 
 .directory-actions {

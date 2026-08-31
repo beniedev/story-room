@@ -1562,24 +1562,10 @@ function Bookshelf(props: BookshelfProps) {
               <ChevronDown className="book-selector-chevron" aria-hidden="true" />
             </summary>
             <div className="book-library-panel">
-              <div className="book-list" aria-label="全部书目">
-                {props.library.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    aria-current={entry.id === props.book.id ? 'true' : undefined}
-                    onClick={() => props.onOpenBook(entry.id)}
-                  >
-                    <BookOpenText aria-hidden="true" />
-                    <span>{entry.title}</span>
-                    {entry.id === props.book.id && <Check aria-hidden="true" />}
-                  </button>
-                ))}
-              </div>
               <div className="book-actions-row">
                 <button
                   type="button"
-                  className="book-settings-button button-with-icon"
+                  className="icon-button"
                   aria-haspopup="dialog"
                   aria-label="新建书目"
                   title="新建书目"
@@ -1603,6 +1589,20 @@ function Bookshelf(props: BookshelfProps) {
                   onClick={() => openDeleteDialog({ kind: 'book', id: props.book.id, title: props.book.title })}
                 ><Trash2 aria-hidden="true" /></button>
               </div>
+              <div className="book-list" aria-label="全部书目">
+                {props.library.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    aria-current={entry.id === props.book.id ? 'true' : undefined}
+                    onClick={() => props.onOpenBook(entry.id)}
+                  >
+                    <BookOpenText aria-hidden="true" />
+                    <span>{entry.title}</span>
+                    {entry.id === props.book.id && <Check aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
             </div>
           </details>
         </aside>
@@ -1612,7 +1612,7 @@ function Bookshelf(props: BookshelfProps) {
               <button
                 ref={bookSettingsTrigger}
                 type="button"
-                className="icon-button"
+                className="icon-button book-settings-button"
                 onClick={() => {
                   setBookSettingsView({ kind: 'root' });
                   bookSettingsDialog.current?.showModal();

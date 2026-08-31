@@ -66,6 +66,18 @@ describe('writing UI contract', () => {
     expect(selectorIndex).toBeLessThan(toolbarIndex);
   });
 
+  it('keeps book actions above the list and gives book settings primary emphasis', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    const panelStart = source.indexOf('className="book-library-panel"');
+    const panelEnd = source.indexOf('</details>', panelStart);
+    const panel = source.slice(panelStart, panelEnd);
+
+    expect(panel.indexOf('className="book-actions-row"')).toBeLessThan(panel.indexOf('className="book-list"'));
+    expect(source).toContain('className="icon-button book-settings-button"');
+    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,260}background:\s*var\(--accent-strong\)[\s\S]{0,120}color:\s*var\(--primary-text\)/);
+  });
+
   it('passes the active provider metadata to the writer and emphasizes the context count', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
