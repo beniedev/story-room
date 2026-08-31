@@ -106,8 +106,9 @@ describe('writing UI contract', () => {
     expect(writerInvocation).toMatch(/provider(?:Profile)?Name\s*=/);
     expect(writerInvocation).toMatch(/modelId\s*=/);
     expect(source).toContain('className="writer-provider-line"');
-    expect(source).toContain('字数统计：');
-    expect(source).toContain('manuscriptCharacterCount');
+    expect(source).toContain('字数 <strong>{manuscriptWordCount');
+    expect(source).toContain('token <strong>{compactTokenCount(manuscriptTokenCount)');
+    expect(source).not.toContain(' 字符</small>');
     expect(source).toMatch(/className="writer-provider-line"[\s\S]{0,500}props\.(?:providerName|modelId)/);
     expect(styles).toMatch(/\.writer-context-count\s*\{[\s\S]{0,300}font-weight:\s*(?:7\d{2}|8\d{2})/);
   });

@@ -50,6 +50,7 @@ import {
   upsertProviderProfile,
   type ProviderProfile,
 } from './providerProfiles';
+import { countWords, estimateTokens } from './textMetrics';
 import type {
   Book,
   BookIndexEntry,
@@ -971,7 +972,9 @@ function Writer(props: WriterProps) {
   const [isResizingInstruction, setIsResizingInstruction] = useState(false);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
-  const manuscriptCharacterCount = Array.from(blocksAsContent(blocks).replace(/\s/gu, '')).length;
+  const manuscriptText = blocksAsContent(blocks);
+  const manuscriptWordCount = countWords(manuscriptText);
+  const manuscriptTokenCount = estimateTokens(manuscriptText);
 
   const contextPercent = props.maxContext > 0
     ? Math.round((props.contextTokens / props.maxContext) * 100)
@@ -1110,7 +1113,9 @@ function Writer(props: WriterProps) {
             title="返回故事书架"
           ><ArrowLeft aria-hidden="true" /></button>
           <span className="writer-manuscript-count">
-            字数统计：<strong>{manuscriptCharacterCount.toLocaleString('zh-CN')}</strong>
+            字数 <strong>{manuscriptWordCount.toLocaleString('zh-CN')}</strong>
+            <span aria-hidden="true"> | </span>
+            token <strong>{compactTokenCount(manuscriptTokenCount)}</strong>
           </span>
           <progress
             className="writer-context-progress"
@@ -1999,7 +2004,9 @@ function Bookshelf(props: BookshelfProps) {
                                 ? selection.sectionIds.has(section.id) ? <CircleCheckBig aria-hidden="true" /> : <Circle aria-hidden="true" />
                                 : `${chapterIndex + 1}.${sectionIndex + 1}`}
                             </span>
-                            <span><strong>{section.title}</strong><small>{section.content.length} 字符</small></span>
+                            <span><strong>{section.title}</strong><small>
+                              {countWords(section.content).toLocaleString('zh-CN')} 字 | {compactTokenCount(estimateTokens(section.content))} tokens
+                            </small></span>
                             {!selectionMode && <ChevronRight className="icon-directional" aria-hidden="true" />}
                           </button>
                         </li>

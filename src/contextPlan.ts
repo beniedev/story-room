@@ -7,6 +7,7 @@ import type {
   PromptLayer,
   PromptSource,
 } from './types';
+import { estimateTokens } from './textMetrics';
 
 export class ContextPlanInputError extends Error {
   constructor(message: string) {
@@ -32,8 +33,6 @@ const characterPolicy = (name: string) => [
   '使用第一人称连续小说正文。用户只控制所选角色的行动、台词、选择和明确表达的内心活动。',
   'AI 控制环境、事件后果、其他角色与叙述，但不得替用户决定所选角色的关键行动或承诺。',
 ].join('\n');
-
-const estimateTokens = (content: string) => Math.ceil(Array.from(content).length / 3);
 
 const block = (
   bookId: string,
