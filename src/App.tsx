@@ -2358,7 +2358,7 @@ function SettingsDrawer({
           <option value="paper">Nord · 默认</option>
           <option value="manga">少女漫画</option>
         </select>
-        <p className="compact-setting-note">{theme === 'paper' ? '参考 Obsidian Nord 的冷灰蓝默认版。' : '沿用酒馆的粉紫交互语言。'}</p>
+        <p className="compact-setting-note">{theme === 'paper' ? '白色内容页、灰蓝边缘与分级标题色。' : '沿用酒馆的粉紫交互语言。'}</p>
         <label className="font-family-setting" htmlFor="manuscript-font-select">
           <span>正文字体</span>
           <select

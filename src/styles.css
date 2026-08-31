@@ -13,16 +13,20 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --page: #e5e9f0;
-  --surface: #eceff4;
-  --surface-soft: #d8dee9;
-  --surface-active: #d6e1ee;
-  --field: #dfe5ed;
-  --text: #2e3440;
-  --muted: #4c566a;
+  --page: #e9edf3;
+  --surface: #ffffff;
+  --surface-soft: #eef1f5;
+  --surface-active: #e3e8ef;
+  --field: #f1f3f6;
+  --text: #2e3a50;
+  --muted: #526078;
   --accent: #5e81ac;
   --accent-strong: #486b94;
-  --manuscript-user: #2e3440;
+  --heading-1: #a86820;
+  --heading-2: #b34f5b;
+  --heading-3: #4f719b;
+  --heading-4: #80658f;
+  --manuscript-user: #2e3a50;
   --manuscript-ai: #486b94;
   --manuscript-dialogue: #8f5d50;
   --manuscript-font-size: 16px;
@@ -211,6 +215,22 @@ h2 {
 
 h3 {
   font-size: 0.95rem;
+}
+
+:root:not([data-theme="manga"]) h1 {
+  color: var(--heading-1);
+}
+
+:root:not([data-theme="manga"]) h2 {
+  color: var(--heading-2);
+}
+
+:root:not([data-theme="manga"]) h3 {
+  color: var(--heading-3);
+}
+
+:root:not([data-theme="manga"]) h4 {
+  color: var(--heading-4);
 }
 
 .sr-only {
