@@ -78,7 +78,7 @@ const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
-type ManuscriptFontFamily = 'system' | 'wenkai';
+type ManuscriptFontFamily = 'sans' | 'wenkai';
 const minManuscriptFontSize = 12;
 const maxManuscriptFontSize = 24;
 const defaultManuscriptFontSize = 16;
@@ -219,10 +219,12 @@ function App() {
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [instruction, setInstruction] = useState('');
   const [authorNote, setAuthorNote] = useState('');
-  const [theme, setTheme] = useState<ThemeName>(() =>
-    localStorage.getItem('story-theme') === 'manga' ? 'manga' : 'paper');
+  const [theme, setTheme] = useState<ThemeName>(() => {
+    const stored = localStorage.getItem('story-theme');
+    return stored === 'manga' || stored === 'gray' || stored === 'purple' ? stored : 'paper';
+  });
   const [manuscriptFontFamily, setManuscriptFontFamily] = useState<ManuscriptFontFamily>(() =>
-    localStorage.getItem(manuscriptFontFamilyKey) === 'wenkai' ? 'wenkai' : 'system');
+    localStorage.getItem(manuscriptFontFamilyKey) === 'wenkai' ? 'wenkai' : 'sans');
   const [manuscriptFontSize, setManuscriptFontSize] = useState(() => {
     const stored = localStorage.getItem(manuscriptFontSizeKey);
     if (stored === null) return defaultManuscriptFontSize;
@@ -2355,10 +2357,17 @@ function SettingsDrawer({
         <h3 id="theme-heading">皮肤</h3>
         <label className="sr-only" htmlFor="theme-select">选择皮肤</label>
         <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeName)}>
-          <option value="paper">Nord · 默认</option>
-          <option value="manga">少女漫画</option>
+          <option value="paper">蓝雪 · 默认</option>
+          <option value="manga">粉漫</option>
+          <option value="gray">灰度</option>
+          <option value="purple">紫雅</option>
         </select>
-        <p className="compact-setting-note">{theme === 'paper' ? '白色内容页、灰蓝边缘与分级标题色。' : '沿用酒馆的粉紫交互语言。'}</p>
+        <p className="compact-setting-note">{{
+          paper: '白色内容页、灰蓝边缘与分级标题色。',
+          manga: '沿用酒馆的粉紫交互语言。',
+          gray: '冷灰纸面配酒红、赭金与墨蓝标题。',
+          purple: '白色正文配淡紫边缘与深紫层级。',
+        }[theme]}</p>
         <label className="font-family-setting" htmlFor="manuscript-font-select">
           <span>正文字体</span>
           <select
@@ -2366,7 +2375,7 @@ function SettingsDrawer({
             value={manuscriptFontFamily}
             onChange={(event) => onManuscriptFontFamilyChange(event.target.value as ManuscriptFontFamily)}
           >
-            <option value="system">跟随系统 · 无衬线</option>
+            <option value="sans">无衬线 · 默认</option>
             <option value="wenkai">霞鹜文楷</option>
           </select>
         </label>

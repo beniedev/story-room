@@ -1,5 +1,5 @@
 export type GenerationMode = 'author' | 'character';
-export type ThemeName = 'paper' | 'manga';
+export type ThemeName = 'paper' | 'manga' | 'gray' | 'purple';
 
 export interface PromptSource {
   id: string;

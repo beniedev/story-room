@@ -30,7 +30,7 @@
   --manuscript-ai: #486b94;
   --manuscript-dialogue: #8f5d50;
   --manuscript-font-size: 16px;
-  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif;
   --primary-text: #f8fafc;
   --danger: #a94450;
   --focus: #5e81ac;
@@ -40,8 +40,13 @@
   --prompt-tone-4: #81a1c1;
   --prompt-tone-5: #6e8fb6;
   --prompt-tone-6: #5e81ac;
+  --backdrop: rgba(40, 51, 70, 0.24);
   --radius-card: 9px;
   --radius-control: 6px;
+}
+
+:root[data-manuscript-font="sans"] {
+  --manuscript-font-family: "Noto Sans", "Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif;
 }
 
 :root[data-manuscript-font="wenkai"] {
@@ -70,8 +75,71 @@
   --prompt-tone-4: #a76ab4;
   --prompt-tone-5: #85599f;
   --prompt-tone-6: #5e3f83;
+  --backdrop: rgba(35, 24, 37, 0.28);
   --radius-card: 10px;
   --radius-control: 5px;
+}
+
+:root[data-theme="gray"] {
+  --page: #cfd1d6;
+  --surface: #dfe0e3;
+  --surface-soft: #c6c8cd;
+  --surface-active: #bcc0c7;
+  --field: #d4d5d9;
+  --text: #26334d;
+  --muted: #465062;
+  --accent: #8f4052;
+  --accent-strong: #793244;
+  --heading-1: #8f4052;
+  --heading-2: #8f4052;
+  --heading-3: #895800;
+  --heading-4: #2f6765;
+  --manuscript-user: #26334d;
+  --manuscript-ai: #335d85;
+  --manuscript-dialogue: #8f4052;
+  --primary-text: #ffffff;
+  --danger: #812b3c;
+  --focus: #793244;
+  --prompt-tone-1: #c2c4c9;
+  --prompt-tone-2: #afb2b8;
+  --prompt-tone-3: #9b9fa7;
+  --prompt-tone-4: #878c96;
+  --prompt-tone-5: #737985;
+  --prompt-tone-6: #5e6573;
+  --backdrop: rgba(32, 37, 48, 0.3);
+  --radius-card: 4px;
+  --radius-control: 3px;
+}
+
+:root[data-theme="purple"] {
+  --page: #f0ecf8;
+  --surface: #ffffff;
+  --surface-soft: #f5f2fa;
+  --surface-active: #e7e0f0;
+  --field: #f3eff8;
+  --text: #332f43;
+  --muted: #685e78;
+  --accent: #7656a1;
+  --accent-strong: #5e3f83;
+  --heading-1: #5e3f83;
+  --heading-2: #684989;
+  --heading-3: #7656a1;
+  --heading-4: #80658f;
+  --manuscript-user: #332f43;
+  --manuscript-ai: #684989;
+  --manuscript-dialogue: #8f5d50;
+  --primary-text: #ffffff;
+  --danger: #a94450;
+  --focus: #7656a1;
+  --prompt-tone-1: #e5ddf0;
+  --prompt-tone-2: #d3c4e4;
+  --prompt-tone-3: #bba6d2;
+  --prompt-tone-4: #a38ac0;
+  --prompt-tone-5: #886dad;
+  --prompt-tone-6: #684989;
+  --backdrop: rgba(52, 37, 72, 0.24);
+  --radius-card: 18px;
+  --radius-control: 7px;
 }
 
 ::selection {
@@ -1786,7 +1854,7 @@ h3 {
 .confirm-dialog::backdrop,
 .export-dialog::backdrop,
 .prompt-dialog::backdrop {
-  background: rgba(35, 24, 37, 0.28);
+  background: var(--backdrop);
 }
 
 .drawer-heading {

@@ -12,6 +12,8 @@ describe('writing UI contract', () => {
   it('uses one stylesheet and semantic theme tokens', async () => {
     const source = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain(':root[data-theme="manga"]');
+    expect(source).toContain(':root[data-theme="gray"]');
+    expect(source).toContain(':root[data-theme="purple"]');
     expect(source).toContain('--surface-active: #faecf1');
     expect(source).toContain('.manuscript');
   });
@@ -311,6 +313,10 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('选择皮肤');
     expect(source).toContain('id="theme-select"');
+    expect(source).toContain('<option value="paper">蓝雪 · 默认</option>');
+    expect(source).toContain('<option value="manga">粉漫</option>');
+    expect(source).toContain('<option value="gray">灰度</option>');
+    expect(source).toContain('<option value="purple">紫雅</option>');
     expect(source).toContain('id="provider-profile-select"');
     expect(source).toContain('<span>设定</span>');
     expect(source).toContain('模型连接');
@@ -421,12 +427,14 @@ describe('writing UI contract', () => {
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
     expect(source).toContain('id="manuscript-font-select"');
-    expect(source).toContain('<option value="system">跟随系统 · 无衬线</option>');
+    expect(source).toContain('<option value="sans">无衬线 · 默认</option>');
+    expect(source).not.toContain('跟随系统');
     expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
     expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
     expect(styles).toContain('@font-face');
     expect(styles).toContain('/fonts/LXGWWenKaiLite-Regular.ttf');
     expect(styles).toContain(':root[data-manuscript-font="wenkai"]');
+    expect(styles).toContain(':root[data-manuscript-font="sans"]');
     expect(styles).toContain('font-family: var(--manuscript-font-family)');
     expect(packageJson).toContain('"prepare:font": "node scripts/materialize-font.mjs"');
     expect(materializer).toContain('brotliDecompressSync');
