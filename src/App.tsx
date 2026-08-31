@@ -948,14 +948,43 @@ function Writer(props: WriterProps) {
   const deleteBlockDialog = useRef<HTMLDialogElement>(null);
   const blockActionTrigger = useRef<HTMLElement | null>(null);
   const readerScrollPosition = useRef(0);
+  const instructionInput = useRef<HTMLTextAreaElement>(null);
+  const resizePressTimer = useRef<number | null>(null);
+  const resizeGesture = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
+  const resizeGestureActive = useRef(false);
+  const [instructionInputHeight, setInstructionInputHeight] = useState<number | null>(null);
+  const [isResizingInstruction, setIsResizingInstruction] = useState(false);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
+  const manuscriptCharacterCount = Array.from(blocksAsContent(blocks).replace(/\s/gu, '')).length;
 
   const contextPercent = props.maxContext > 0
     ? Math.round((props.contextTokens / props.maxContext) * 100)
     : 0;
   const progressMax = Math.max(1, props.maxContext);
   const progressValue = Math.min(props.contextTokens, progressMax);
+
+  useEffect(() => () => {
+    if (resizePressTimer.current !== null) window.clearTimeout(resizePressTimer.current);
+  }, []);
+
+  const clampInstructionHeight = (height: number) => Math.min(
+    Math.max(44, height),
+    Math.min(window.innerHeight * 0.45, 320),
+  );
+
+  const finishInstructionResize = (pointerId?: number, target?: HTMLButtonElement) => {
+    if (resizePressTimer.current !== null) {
+      window.clearTimeout(resizePressTimer.current);
+      resizePressTimer.current = null;
+    }
+    if (pointerId !== undefined && target?.hasPointerCapture(pointerId)) {
+      target.releasePointerCapture(pointerId);
+    }
+    resizeGesture.current = null;
+    resizeGestureActive.current = false;
+    setIsResizingInstruction(false);
+  };
 
   const openTitleDialog = () => {
     if (document.activeElement instanceof HTMLElement) {
@@ -1065,6 +1094,9 @@ function Writer(props: WriterProps) {
             aria-label="返回故事书架"
             title="返回故事书架"
           ><ArrowLeft aria-hidden="true" /></button>
+          <span className="writer-manuscript-count">
+            字数统计：<strong>{manuscriptCharacterCount.toLocaleString('zh-CN')}</strong>
+          </span>
           <progress
             className="writer-context-progress"
             max={progressMax}
@@ -1239,14 +1271,60 @@ function Writer(props: WriterProps) {
             )}
           </div>
         </details>
-        <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '接龙正文' : '角色行动或台词'}</label>
-        <textarea
-          id="writing-instruction"
-          rows={1}
-          value={props.instruction}
-          onChange={(event) => props.onInstructionChange(event.target.value)}
-          placeholder={props.mode === 'author' ? '写下一段正文，让 AI 从这里接着写……' : '以当前角色输入行动、台词或选择……'}
-        />
+        <div className="instruction-input-wrap">
+          <button
+            type="button"
+            className="instruction-resize-handle"
+            data-resizing={isResizingInstruction || undefined}
+            aria-label="长按后上下拖动调整输入框高度"
+            title="长按后上下拖动调整输入框高度"
+            onPointerDown={(event) => {
+              const textarea = instructionInput.current;
+              if (!textarea) return;
+              resizeGesture.current = {
+                pointerId: event.pointerId,
+                startY: event.clientY,
+                startHeight: textarea.getBoundingClientRect().height,
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+              resizePressTimer.current = window.setTimeout(() => {
+                resizeGestureActive.current = true;
+                setIsResizingInstruction(true);
+              }, 300);
+            }}
+            onPointerMove={(event) => {
+              const gesture = resizeGesture.current;
+              if (!gesture || gesture.pointerId !== event.pointerId) return;
+              const distance = gesture.startY - event.clientY;
+              if (!resizeGestureActive.current) {
+                if (Math.abs(distance) > 8) finishInstructionResize(event.pointerId, event.currentTarget);
+                return;
+              }
+              event.preventDefault();
+              setInstructionInputHeight(clampInstructionHeight(gesture.startHeight + distance));
+            }}
+            onPointerUp={(event) => finishInstructionResize(event.pointerId, event.currentTarget)}
+            onPointerCancel={(event) => finishInstructionResize(event.pointerId, event.currentTarget)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+              event.preventDefault();
+              const currentHeight = instructionInputHeight
+                ?? instructionInput.current?.getBoundingClientRect().height
+                ?? 44;
+              setInstructionInputHeight(clampInstructionHeight(currentHeight + (event.key === 'ArrowUp' ? 16 : -16)));
+            }}
+          ><span aria-hidden="true" /></button>
+          <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '接龙正文' : '角色行动或台词'}</label>
+          <textarea
+            ref={instructionInput}
+            id="writing-instruction"
+            rows={1}
+            value={props.instruction}
+            style={instructionInputHeight === null ? undefined : { height: instructionInputHeight }}
+            onChange={(event) => props.onInstructionChange(event.target.value)}
+            placeholder={props.mode === 'author' ? '写下一段正文，让 AI 从这里接着写……' : '以当前角色输入行动、台词或选择……'}
+          />
+        </div>
         <button
           type="submit"
           className="primary-action icon-button writer-send-button"
@@ -2357,7 +2435,7 @@ function SettingsDrawer({
         <h3 id="theme-heading">皮肤</h3>
         <label className="sr-only" htmlFor="theme-select">选择皮肤</label>
         <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeName)}>
-          <option value="paper">蓝雪 · 默认</option>
+          <option value="paper">蓝雪</option>
           <option value="manga">粉漫</option>
           <option value="gray">灰度</option>
           <option value="purple">紫雅</option>
@@ -2375,7 +2453,7 @@ function SettingsDrawer({
             value={manuscriptFontFamily}
             onChange={(event) => onManuscriptFontFamilyChange(event.target.value as ManuscriptFontFamily)}
           >
-            <option value="sans">无衬线 · 默认</option>
+            <option value="sans">无衬线</option>
             <option value="wenkai">霞鹜文楷</option>
           </select>
         </label>

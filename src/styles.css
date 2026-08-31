@@ -472,7 +472,7 @@ h3 {
 
 .writer-context-row {
   display: grid;
-  grid-template-columns: auto minmax(4rem, 1fr) auto;
+  grid-template-columns: auto auto minmax(4rem, 1fr) auto;
   align-items: center;
   gap: 0.6rem;
   width: min(100%, 72ch);
@@ -519,9 +519,21 @@ h3 {
   white-space: nowrap;
 }
 
+.writer-manuscript-count {
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.writer-manuscript-count strong {
+  color: var(--text);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .writer-provider-line {
   display: flex;
-  grid-column: 2 / 4;
+  grid-column: 3 / 5;
   gap: 0.35rem;
   min-width: 0;
   color: var(--muted);
@@ -700,10 +712,20 @@ h3 {
 
 .instruction-dock textarea {
   min-height: 44px;
-  max-height: 8rem;
+  max-height: min(40dvh, 20rem);
   background: var(--surface);
-  resize: none;
+  resize: vertical;
   transition: background-color 120ms ease-out;
+}
+
+.instruction-input-wrap {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.instruction-resize-handle {
+  display: none;
 }
 
 .instruction-dock textarea:focus {
@@ -2533,6 +2555,54 @@ h3 {
     margin: 0;
     padding: 0.35rem;
     padding-block-end: max(0.35rem, env(safe-area-inset-bottom));
+  }
+
+  .instruction-dock textarea {
+    resize: none;
+  }
+
+  .instruction-resize-handle {
+    position: absolute;
+    inset-block-start: -22px;
+    inset-inline-start: 50%;
+    z-index: 1;
+    display: grid;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    place-items: center;
+    background: transparent;
+    color: var(--muted);
+    touch-action: none;
+    translate: -50% 0;
+  }
+
+  .instruction-resize-handle::before,
+  .instruction-resize-handle::after,
+  .instruction-resize-handle > span {
+    position: absolute;
+    width: 1.35rem;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+    content: '';
+  }
+
+  .instruction-resize-handle::before {
+    translate: 0 -5px;
+  }
+
+  .instruction-resize-handle::after {
+    translate: 0 5px;
+  }
+
+  .instruction-resize-handle[data-resizing="true"] {
+    color: var(--accent-strong);
+  }
+
+  .instruction-resize-handle:active {
+    scale: 1;
   }
 
   .shelf-page {

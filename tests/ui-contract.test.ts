@@ -106,6 +106,8 @@ describe('writing UI contract', () => {
     expect(writerInvocation).toMatch(/provider(?:Profile)?Name\s*=/);
     expect(writerInvocation).toMatch(/modelId\s*=/);
     expect(source).toContain('className="writer-provider-line"');
+    expect(source).toContain('字数统计：');
+    expect(source).toContain('manuscriptCharacterCount');
     expect(source).toMatch(/className="writer-provider-line"[\s\S]{0,500}props\.(?:providerName|modelId)/);
     expect(styles).toMatch(/\.writer-context-count\s*\{[\s\S]{0,300}font-weight:\s*(?:7\d{2}|8\d{2})/);
   });
@@ -313,7 +315,8 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('选择皮肤');
     expect(source).toContain('id="theme-select"');
-    expect(source).toContain('<option value="paper">蓝雪 · 默认</option>');
+    expect(source).toContain('<option value="paper">蓝雪</option>');
+    expect(source).not.toContain('蓝雪 · 默认');
     expect(source).toContain('<option value="manga">粉漫</option>');
     expect(source).toContain('<option value="gray">灰度</option>');
     expect(source).toContain('<option value="purple">紫雅</option>');
@@ -427,7 +430,8 @@ describe('writing UI contract', () => {
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
     expect(source).toContain('id="manuscript-font-select"');
-    expect(source).toContain('<option value="sans">无衬线 · 默认</option>');
+    expect(source).toContain('<option value="sans">无衬线</option>');
+    expect(source).not.toContain('无衬线 · 默认');
     expect(source).not.toContain('跟随系统');
     expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
     expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
@@ -440,6 +444,19 @@ describe('writing UI contract', () => {
     expect(materializer).toContain('brotliDecompressSync');
     expect(materializer).toContain('LXGWWenKaiLite-Regular.ttf.br');
     expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1');
+  });
+
+  it('supports native desktop resizing and long-press mobile input resizing', async () => {
+    const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+    expect(source).toContain('className="instruction-resize-handle"');
+    expect(source).toContain('长按后上下拖动调整输入框高度');
+    expect(source).toContain('setPointerCapture');
+    expect(source).toContain('}, 300)');
+    expect(source).toContain("event.key !== 'ArrowUp' && event.key !== 'ArrowDown'");
+    expect(styles).toMatch(/\.instruction-dock textarea\s*\{[\s\S]{0,240}resize:\s*vertical/);
+    expect(styles).toMatch(/@media \(max-width: 46rem\)[\s\S]{0,3000}\.instruction-dock textarea\s*\{[\s\S]{0,100}resize:\s*none/);
+    expect(styles).toContain('touch-action: none');
   });
 
   it('provides three example books with the requested character and chapter depth', () => {
