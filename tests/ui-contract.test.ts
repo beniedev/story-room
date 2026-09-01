@@ -611,6 +611,11 @@ describe('writing UI contract', () => {
     expect(source).toContain('仅在你信任当前页面和目标 URL 时输入 API Key');
     expect(source).toContain('当前页面脚本可读取且不会持久化');
     expect(source).toContain('type="password"');
+    expect(source).toContain('<strong>访问令牌</strong>');
+    expect(source).toContain('role="switch"');
+    expect(source).toContain('默认关闭；只有 Host 已开启令牌保护时才需要。');
+    expect(source).toContain('保存并连接');
+    expect(source).not.toContain('window.prompt');
     expect(source).toContain('event.target === event.currentTarget');
     expect(source).toContain('const restoreProfileBaseline = () => {');
     expect(source).toMatch(/if \(action\) \{[\s\S]{0,180}restoreProfileBaseline\(\);[\s\S]{0,100}applySettingsAction\(action\);/);

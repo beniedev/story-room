@@ -31,12 +31,18 @@ import {
   ScrollText,
   Send,
   Settings,
+  ShieldCheck,
   Sparkles,
   Trash2,
   UsersRound,
   X,
 } from 'lucide-react';
-import { api } from './api';
+import {
+  api,
+  readHostAccessTokenSettings,
+  saveHostAccessTokenSettings,
+  type HostAccessTokenSettings,
+} from './api';
 import { createBookExport, type BookExportFormat } from './bookExport';
 import { buildContextPlan as composeContextPlan } from './contextPlan';
 import {
@@ -358,6 +364,8 @@ function App() {
     : []);
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
+  const [hostAccessTokenSettings, setHostAccessTokenSettings] = useState<HostAccessTokenSettings>(() =>
+    api.runtime === 'host' ? readHostAccessTokenSettings() : { enabled: false, token: '' });
   const [dirty, setDirty] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
@@ -599,6 +607,29 @@ function App() {
     restoreSectionDraft(loaded.id, '');
     setDirty(Boolean(cached && loaded.updatedAt !== stored.updatedAt));
     setView('shelf');
+  };
+
+  const updateHostAccessToken = async (enabled: boolean, token: string) => {
+    const next = saveHostAccessTokenSettings(enabled, token);
+    setHostAccessTokenSettings(next);
+    setStatus('正在重新连接本机书库…');
+    try {
+      const [entries, profiles] = await Promise.all([
+        api.listBooks(),
+        api.listProviderProfiles(),
+      ]);
+      setLibrary(entries);
+      setProviderProfiles(profiles);
+      setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
+        ? current
+        : profiles[0]?.id ?? '');
+      if (!book && entries[0]) await openBook(entries[0].id);
+      setStatus('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法重新连接本机书库。';
+      setStatus(message);
+      throw new Error(message);
+    }
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
@@ -1329,6 +1360,8 @@ function App() {
         onSaveProviderProfile={saveProviderProfile}
         onTestProviderProfile={api.testProviderProfile}
         providerRuntime={api.runtime}
+        hostAccessTokenSettings={hostAccessTokenSettings}
+        onHostAccessTokenChange={updateHostAccessToken}
         onClose={() => settingsTrigger.current?.focus()}
       />
 
@@ -3439,6 +3472,8 @@ function SettingsDrawer({
   onSaveProviderProfile,
   onTestProviderProfile,
   providerRuntime,
+  hostAccessTokenSettings,
+  onHostAccessTokenChange,
   onClose,
 }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
@@ -3454,6 +3489,8 @@ function SettingsDrawer({
   onSaveProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<ProviderProfile>;
   onTestProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<{ ok: true; modelId: string }>;
   providerRuntime: 'host' | 'device';
+  hostAccessTokenSettings: HostAccessTokenSettings;
+  onHostAccessTokenChange: (enabled: boolean, token: string) => Promise<void>;
   onClose: () => void;
 }) {
   const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
@@ -3477,6 +3514,10 @@ function SettingsDrawer({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
   const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
+  const [hostAccessEnabled, setHostAccessEnabled] = useState(hostAccessTokenSettings.enabled);
+  const [hostAccessTokenDraft, setHostAccessTokenDraft] = useState(hostAccessTokenSettings.token);
+  const [hostAccessStatus, setHostAccessStatus] = useState('');
+  const [hostAccessState, setHostAccessState] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const discardChangesDialog = useRef<HTMLDialogElement>(null);
   const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
   useEffect(() => {
@@ -3485,6 +3526,10 @@ function SettingsDrawer({
     setProfileDraft({ ...currentProfile });
     setProfileBaseline({ profile: { ...currentProfile }, key: sessionKeys[currentProfile.id] ?? '' });
   }, [currentProfile, editingId]);
+  useEffect(() => {
+    setHostAccessEnabled(hostAccessTokenSettings.enabled);
+    setHostAccessTokenDraft(hostAccessTokenSettings.token);
+  }, [hostAccessTokenSettings]);
   const performCloseDrawer = () => dialogRef.current?.close();
   const clearConnectionResult = () => {
     setConnectionStatus('');
@@ -3601,6 +3646,39 @@ function SettingsDrawer({
     } catch (error) {
       setConnectionState('error');
       setConnectionStatus(error instanceof Error ? error.message : '无法连接。');
+    }
+  };
+  const applyHostAccessToken = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const token = hostAccessTokenDraft.trim();
+    if (!token) {
+      setHostAccessState('error');
+      setHostAccessStatus('请填写访问令牌。');
+      return;
+    }
+    setHostAccessState('saving');
+    setHostAccessStatus('正在重新连接…');
+    try {
+      await onHostAccessTokenChange(true, token);
+      setHostAccessState('success');
+      setHostAccessStatus('访问令牌已保存到当前浏览器会话。');
+    } catch (error) {
+      setHostAccessState('error');
+      setHostAccessStatus(error instanceof Error ? error.message : '无法使用这个访问令牌连接。');
+    }
+  };
+  const disableHostAccessToken = async () => {
+    setHostAccessEnabled(false);
+    setHostAccessTokenDraft('');
+    setHostAccessState('saving');
+    setHostAccessStatus('正在关闭…');
+    try {
+      await onHostAccessTokenChange(false, '');
+      setHostAccessState('success');
+      setHostAccessStatus('访问令牌已关闭。');
+    } catch (error) {
+      setHostAccessState('error');
+      setHostAccessStatus(error instanceof Error ? error.message : '已关闭访问令牌，但无法重新连接书库。');
     }
   };
 
@@ -3739,6 +3817,65 @@ function SettingsDrawer({
           </div>
         </details>
       </section>
+      {providerRuntime === 'host' && (
+        <section className="settings-section" aria-labelledby="host-access-heading">
+          <h3 id="host-access-heading" className="sr-only">访问保护</h3>
+          <details className="settings-subdrawer">
+            <summary>
+              <ShieldCheck aria-hidden="true" />
+              <span><strong>访问令牌</strong><small>{hostAccessTokenSettings.enabled ? '已开启' : '关闭'}</small></span>
+              <ChevronDown aria-hidden="true" />
+            </summary>
+            <div className="host-access-settings">
+              <label className="toggle-setting" htmlFor="host-access-toggle">
+                <span><strong>使用访问令牌</strong><small>默认关闭；只有 Host 已开启令牌保护时才需要。</small></span>
+                <input
+                  id="host-access-toggle"
+                  type="checkbox"
+                  role="switch"
+                  checked={hostAccessEnabled}
+                  disabled={hostAccessState === 'saving'}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setHostAccessEnabled(true);
+                      setHostAccessState('idle');
+                      setHostAccessStatus('');
+                    } else {
+                      void disableHostAccessToken();
+                    }
+                  }}
+                />
+              </label>
+              {hostAccessEnabled && (
+                <form className="host-access-form" onSubmit={applyHostAccessToken}>
+                  <label htmlFor="host-access-token">访问令牌</label>
+                  <div className="host-access-input-row">
+                    <input
+                      id="host-access-token"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={hostAccessTokenDraft}
+                      onChange={(event) => {
+                        setHostAccessTokenDraft(event.target.value);
+                        setHostAccessState('idle');
+                        setHostAccessStatus('');
+                      }}
+                      placeholder="输入 Host 的访问令牌"
+                    />
+                    <button type="submit" className="primary-action" disabled={hostAccessState === 'saving'}>
+                      {hostAccessState === 'saving' ? '连接中…' : '保存并连接'}
+                    </button>
+                  </div>
+                </form>
+              )}
+              <p className="host-access-status" data-state={hostAccessState} role="status" aria-live="polite">
+                {hostAccessStatus}
+              </p>
+            </div>
+          </details>
+        </section>
+      )}
       <section className="settings-section" aria-labelledby="storage-heading">
         <h3 id="storage-heading">当前存储</h3>
         <p className="helper-copy">{api.runtime === 'device'

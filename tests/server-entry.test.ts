@@ -6,7 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
-import { api, HOST_ACCESS_TOKEN_STORAGE_KEY } from '../src/api';
+import {
+  api,
+  HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY,
+  HOST_ACCESS_TOKEN_STORAGE_KEY,
+  saveHostAccessTokenSettings,
+} from '../src/api';
 import { createSectionMemory } from '../src/sectionMemory';
 
 const requestWithHost = (port: number, pathname: string, host: string) => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
@@ -372,27 +377,43 @@ describe('local server entry', () => {
     }
   });
 
-  it('sends the session token and retries a 401 only once after prompting', async () => {
-    const stored = new Map([[HOST_ACCESS_TOKEN_STORAGE_KEY, 'stale-session-token']]);
-    const prompt = vi.fn(() => 'fresh-session-token');
-    vi.stubGlobal('sessionStorage', {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value),
+  it('keeps access tokens opt-in and never opens a browser prompt', async () => {
+    const localStored = new Map<string, string>();
+    const sessionStored = new Map([[HOST_ACCESS_TOKEN_STORAGE_KEY, 'stale-session-token']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStored.get(key) ?? null,
+      setItem: (key: string, value: string) => localStored.set(key, value),
+      removeItem: (key: string) => localStored.delete(key),
     });
-    vi.stubGlobal('window', { prompt });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: '需要访问凭据。' }), { status: 401 }))
-      .mockResolvedValueOnce(new Response('[]', { status: 200 }));
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => sessionStored.get(key) ?? null,
+      setItem: (key: string, value: string) => sessionStored.set(key, value),
+      removeItem: (key: string) => sessionStored.delete(key),
+    });
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => (
+      new Response('[]', { status: 200 })
+    ));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(api.listBooks()).resolves.toEqual([]);
-    expect(prompt).toHaveBeenCalledOnce();
-    expect(stored.get(HOST_ACCESS_TOKEN_STORAGE_KEY)).toBe('fresh-session-token');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('authorization'))
-      .toBe('Bearer stale-session-token');
+      .toBeNull();
+
+    saveHostAccessTokenSettings(true, 'fresh-session-token');
+    await expect(api.listBooks()).resolves.toEqual([]);
+    expect(localStored.get(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY)).toBe('1');
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('authorization'))
       .toBe('Bearer fresh-session-token');
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/library');
+  });
+
+  it('turns a 401 into settings guidance without retrying', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: '需要访问凭据。' }), { status: 401 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listBooks()).rejects.toThrow('请在设置中开启或检查访问令牌');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

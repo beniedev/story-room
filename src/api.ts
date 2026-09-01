@@ -12,30 +12,45 @@ import {
 } from './providerProfiles';
 
 export const HOST_ACCESS_TOKEN_STORAGE_KEY = 'story-native:host-access-token';
+export const HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY = 'story-native:host-access-token-enabled';
+
+export type HostAccessTokenSettings = {
+  enabled: boolean;
+  token: string;
+};
+
+export const readHostAccessTokenSettings = (): HostAccessTokenSettings => {
+  try {
+    const enabled = typeof localStorage !== 'undefined'
+      && localStorage.getItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY) === '1';
+    const token = enabled && typeof sessionStorage !== 'undefined'
+      ? sessionStorage.getItem(HOST_ACCESS_TOKEN_STORAGE_KEY)?.trim() ?? ''
+      : '';
+    return { enabled, token };
+  } catch {
+    return { enabled: false, token: '' };
+  }
+};
+
+export const saveHostAccessTokenSettings = (enabled: boolean, token: string): HostAccessTokenSettings => {
+  const normalized = enabled ? token.trim() : '';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (enabled) localStorage.setItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY, '1');
+      else localStorage.removeItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY);
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      if (normalized) sessionStorage.setItem(HOST_ACCESS_TOKEN_STORAGE_KEY, normalized);
+      else sessionStorage.removeItem(HOST_ACCESS_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    throw new Error('当前浏览器无法保存访问令牌设置。');
+  }
+  return { enabled, token: normalized };
+};
 
 const readHostAccessToken = () => {
-  try {
-    return typeof sessionStorage === 'undefined' ? '' : sessionStorage.getItem(HOST_ACCESS_TOKEN_STORAGE_KEY)?.trim() ?? '';
-  } catch {
-    return '';
-  }
-};
-
-const saveHostAccessToken = (token: string) => {
-  try {
-    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(HOST_ACCESS_TOKEN_STORAGE_KEY, token);
-  } catch {
-    // Session storage may be unavailable in a locked-down browser context.
-  }
-};
-
-const promptForHostAccessToken = () => {
-  try {
-    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return '';
-    return window.prompt('请输入本机访问令牌。')?.trim() ?? '';
-  } catch {
-    return '';
-  }
+  return readHostAccessTokenSettings().token;
 };
 
 const requestOnce = async (url: string, init: RequestInit | undefined, accessToken: string) => {
@@ -46,18 +61,10 @@ const requestOnce = async (url: string, init: RequestInit | undefined, accessTok
 };
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
-  let accessToken = readHostAccessToken();
+  const accessToken = readHostAccessToken();
   let response: Response;
   try {
     response = await requestOnce(url, init, accessToken);
-    if (response.status === 401) {
-      const promptedToken = promptForHostAccessToken();
-      if (promptedToken) {
-        accessToken = promptedToken;
-        saveHostAccessToken(promptedToken);
-        response = await requestOnce(url, init, accessToken);
-      }
-    }
   } catch (error) {
     if (init?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       throw error;
@@ -74,8 +81,9 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
       ? '本地书库返回了无法读取的数据。'
       : `本地书库请求失败（HTTP ${response.status}）。`);
   }
-  if (!response.ok) throw new Error(body.error
-    ?? (response.status === 502 || response.status === 503
+  if (!response.ok) throw new Error(response.status === 401
+    ? '此书库已开启访问令牌，请在设置中开启或检查访问令牌。'
+    : body.error ?? (response.status === 502 || response.status === 503
       ? '本地书库服务暂时不可用，请确认故事书架仍在运行。'
       : `请求失败（HTTP ${response.status}）。`));
   return body;
