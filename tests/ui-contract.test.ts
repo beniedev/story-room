@@ -507,8 +507,8 @@ describe('writing UI contract', () => {
     expect(source).toMatch(/useEffect\(\(\) => \{\s+clearHostBookCaches\(\);\s+\}, \[\]\);/);
     expect(source).toContain("const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;");
     expect(source).toContain("if (api.runtime === 'device') cacheBook(candidate);");
-    expect(source).toContain('正在写入本机故事目录…');
-    expect(source).toContain('已自动保存到本机故事目录。');
+    expect(source).toContain('正在保存到书库…');
+    expect(source).toContain('已自动保存。');
     expect(source).not.toContain('已自动保存到此设备，正在写入本机故事目录…');
     expect(source).not.toContain('已自动保存到此设备和本机故事目录。');
     expect(source).toContain('<Download aria-hidden="true" />');
@@ -611,9 +611,12 @@ describe('writing UI contract', () => {
     expect(source).toContain('仅在你信任当前页面和目标 URL 时输入 API Key');
     expect(source).toContain('当前页面脚本可读取且不会持久化');
     expect(source).toContain('type="password"');
-    expect(source).toContain('<strong>访问令牌</strong>');
+    expect(source).toContain('<strong>访问密码（可选）</strong>');
     expect(source).toContain('role="switch"');
-    expect(source).toContain('默认关闭；只有 Host 已开启令牌保护时才需要。');
+    expect(source).toContain('默认关闭。只在需要密码才能打开书库时开启。');
+    expect(source).toContain('<h3 id="storage-heading">保存位置</h3>');
+    expect(source).toContain('正文和资料保存在运行书库的电脑上，不会自动上传。请自行备份。');
+    expect(source).not.toContain('本机 host 的故事目录');
     expect(source).toContain('保存并连接');
     expect(source).not.toContain('window.prompt');
     expect(source).toContain('event.target === event.currentTarget');

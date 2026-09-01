@@ -563,7 +563,7 @@ function App() {
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
       ? (cachedLocally ? '已自动保存到此设备。' : '当前设备的浏览器存储不可用。')
-      : '正在写入本机故事目录…');
+      : '正在保存到书库…');
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
@@ -579,7 +579,7 @@ function App() {
         setDirty(false);
         setStatus(api.runtime === 'device'
           ? '已自动保存到此设备。'
-          : '已自动保存到本机故事目录。');
+          : '已自动保存。');
       }).catch((error) => {
         if (saveRevision.current === revision) {
           const recovery = api.runtime === 'device' && cachedLocally
@@ -651,7 +651,7 @@ function App() {
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook(currentBook);
     const revision = saveRevision.current;
-    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在写入本机故事目录…');
+    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     if (api.runtime === 'device') cacheBook(candidate);
     const saved = normalizeBook(await queueBookSave(candidate));
     if (saveRevision.current === revision) {
@@ -663,7 +663,7 @@ function App() {
       ...items.filter((item) => item.id !== saved.id)]);
     setStatus(api.runtime === 'device'
       ? '已自动保存到此设备。'
-      : '已自动保存到本机故事目录。');
+      : '已自动保存。');
     return saved;
   };
 
@@ -3653,7 +3653,7 @@ function SettingsDrawer({
     const token = hostAccessTokenDraft.trim();
     if (!token) {
       setHostAccessState('error');
-      setHostAccessStatus('请填写访问令牌。');
+      setHostAccessStatus('请填写访问密码。');
       return;
     }
     setHostAccessState('saving');
@@ -3661,10 +3661,10 @@ function SettingsDrawer({
     try {
       await onHostAccessTokenChange(true, token);
       setHostAccessState('success');
-      setHostAccessStatus('访问令牌已保存到当前浏览器会话。');
+      setHostAccessStatus('访问密码仅保存于当前浏览器会话。');
     } catch (error) {
       setHostAccessState('error');
-      setHostAccessStatus(error instanceof Error ? error.message : '无法使用这个访问令牌连接。');
+      setHostAccessStatus(error instanceof Error ? error.message : '无法使用这个访问密码连接。');
     }
   };
   const disableHostAccessToken = async () => {
@@ -3675,10 +3675,10 @@ function SettingsDrawer({
     try {
       await onHostAccessTokenChange(false, '');
       setHostAccessState('success');
-      setHostAccessStatus('访问令牌已关闭。');
+      setHostAccessStatus('访问密码已关闭。');
     } catch (error) {
       setHostAccessState('error');
-      setHostAccessStatus(error instanceof Error ? error.message : '已关闭访问令牌，但无法重新连接书库。');
+      setHostAccessStatus(error instanceof Error ? error.message : '已关闭访问密码，但无法重新连接书库。');
     }
   };
 
@@ -3823,12 +3823,12 @@ function SettingsDrawer({
           <details className="settings-subdrawer">
             <summary>
               <ShieldCheck aria-hidden="true" />
-              <span><strong>访问令牌</strong><small>{hostAccessTokenSettings.enabled ? '已开启' : '关闭'}</small></span>
+              <span><strong>访问密码（可选）</strong><small>{hostAccessTokenSettings.enabled ? '已启用' : '关闭'}</small></span>
               <ChevronDown aria-hidden="true" />
             </summary>
             <div className="host-access-settings">
               <label className="toggle-setting" htmlFor="host-access-toggle">
-                <span><strong>使用访问令牌</strong><small>默认关闭；只有 Host 已开启令牌保护时才需要。</small></span>
+                <span><strong>启用访问密码</strong><small>默认关闭。只在需要密码才能打开书库时开启。</small></span>
                 <input
                   id="host-access-toggle"
                   type="checkbox"
@@ -3848,7 +3848,7 @@ function SettingsDrawer({
               </label>
               {hostAccessEnabled && (
                 <form className="host-access-form" onSubmit={applyHostAccessToken}>
-                  <label htmlFor="host-access-token">访问令牌</label>
+                  <label htmlFor="host-access-token">访问密码</label>
                   <div className="host-access-input-row">
                     <input
                       id="host-access-token"
@@ -3861,7 +3861,7 @@ function SettingsDrawer({
                         setHostAccessState('idle');
                         setHostAccessStatus('');
                       }}
-                      placeholder="输入 Host 的访问令牌"
+                      placeholder="输入访问密码"
                     />
                     <button type="submit" className="primary-action" disabled={hostAccessState === 'saving'}>
                       {hostAccessState === 'saving' ? '连接中…' : '保存并连接'}
@@ -3877,10 +3877,10 @@ function SettingsDrawer({
         </section>
       )}
       <section className="settings-section" aria-labelledby="storage-heading">
-        <h3 id="storage-heading">当前存储</h3>
+        <h3 id="storage-heading">保存位置</h3>
         <p className="helper-copy">{api.runtime === 'device'
-          ? '正文和资料只保存在当前浏览器设备，不上传书稿。请按需导出备份，并自行选择同步方式。'
-          : '正文和资料保存在本机 host 的故事目录；请自行选择文件同步方式。'}</p>
+          ? '正文和资料只保存在这个浏览器中，不会自动上传。请按需导出备份。'
+          : '正文和资料保存在运行书库的电脑上，不会自动上传。请自行备份。'}</p>
       </section>
       <dialog
         className="confirm-dialog"

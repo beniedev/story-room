@@ -44,7 +44,7 @@ export const saveHostAccessTokenSettings = (enabled: boolean, token: string): Ho
       else sessionStorage.removeItem(HOST_ACCESS_TOKEN_STORAGE_KEY);
     }
   } catch {
-    throw new Error('当前浏览器无法保存访问令牌设置。');
+    throw new Error('当前浏览器无法保存访问密码。');
   }
   return { enabled, token: normalized };
 };
@@ -82,7 +82,7 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
       : `本地书库请求失败（HTTP ${response.status}）。`);
   }
   if (!response.ok) throw new Error(response.status === 401
-    ? '此书库已开启访问令牌，请在设置中开启或检查访问令牌。'
+    ? '此书库设置了访问密码，请在设置中启用或检查密码。'
     : body.error ?? (response.status === 502 || response.status === 503
       ? '本地书库服务暂时不可用，请确认故事书架仍在运行。'
       : `请求失败（HTTP ${response.status}）。`));

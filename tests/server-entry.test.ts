@@ -413,7 +413,7 @@ describe('local server entry', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.listBooks()).rejects.toThrow('请在设置中开启或检查访问令牌');
+    await expect(api.listBooks()).rejects.toThrow('请在设置中启用或检查密码');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
