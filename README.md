@@ -24,7 +24,9 @@ npm run dev
 
 Open `http://127.0.0.1:4310`.
 
-The local host binds only to loopback (`127.0.0.1`, `localhost`, or `::1`) and is intended for the current machine. Non-loopback addresses are not a supported deployment mode. `STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
+The default bind address is `127.0.0.1`. To use the same host from another device on a trusted LAN or private network, choose the bind address explicitly, for example `npm run dev -- --host 0.0.0.0`. The app does not add an access-password, token, or Host allowlist; any device that can reach the chosen address can use it. State-changing browser requests that include an `Origin` header must remain same-origin.
+
+`STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
 
 ## Provider trust boundary
 

@@ -10,7 +10,7 @@ In the hosted/device build, the current browser owns its Book data in unencrypte
 
 Author and character modes use the same writing pipeline. Character mode adds a selected in-Book character, first-person viewpoint, and narrower user authority. Prompt plans expose ordered Provider-input blocks and provenance without claiming to expose model reasoning.
 
-The local host binds only to loopback (`127.0.0.1`, `localhost`, or `::1`). Non-loopback binding is unsupported. State-changing browser requests with an `Origin` header must be same-origin. `STORY_ALLOW_PRIVATE_PROVIDERS=1` is an explicit HTTPS private-network Provider opt-in; metadata, link-local, and redirect targets remain blocked.
+The local host defaults to `127.0.0.1` and accepts an explicitly configured LAN or private-network bind address. It does not add an access-password, token, or Host allowlist. State-changing browser requests with an `Origin` header must be same-origin. `STORY_ALLOW_PRIVATE_PROVIDERS=1` is an explicit HTTPS private-network Provider opt-in; metadata, link-local, and redirect targets remain blocked.
 
 ## Consequences
 

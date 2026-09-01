@@ -4,6 +4,11 @@ import react from '@vitejs/plugin-react';
 const apiHost = process.env.STORY_API_HOST ?? '127.0.0.1';
 const apiPort = process.env.STORY_API_PORT ?? '4311';
 
+export const formatUrlHost = (value: string) => {
+  const hostname = value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+  return hostname.includes(':') ? `[${hostname}]` : hostname;
+};
+
 export default defineConfig(async ({ mode }) => {
   const siteBuild = mode === 'site';
   const plugins: PluginOption[] = [react()];
@@ -34,7 +39,7 @@ export default defineConfig(async ({ mode }) => {
       strictPort: true,
       proxy: siteBuild ? undefined : {
         '/api': {
-          target: `http://${apiHost}:${apiPort}`,
+          target: `http://${formatUrlHost(apiHost)}:${apiPort}`,
           changeOrigin: false,
         },
       },

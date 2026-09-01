@@ -72,6 +72,7 @@ export const deleteDirectorySelection = (
       ...book,
       characters: book.characters.map(removeDeletedSectionReferences),
       worldRules: book.worldRules.map(removeDeletedSectionReferences),
+      canonFacts: book.canonFacts.map(removeDeletedSectionReferences),
       chapters: book.chapters
         .filter((chapter) => !selection.chapterIds.has(chapter.id))
         .map((chapter) => ({
@@ -81,7 +82,7 @@ export const deleteDirectorySelection = (
             .map(removeDeletedContextReferences),
         })),
       summaries: book.summaries.map((summary) => ({
-        ...summary,
+        ...removeDeletedSectionReferences(summary),
         sourceSectionIds: summary.sourceSectionIds.filter((id) => !removedSectionIds.has(id)),
       })),
       branches: book.branches.filter((branch) => !removedSectionIds.has(branch.fromSectionId)),

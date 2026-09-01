@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { BlockList, isIP } from 'node:net';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -33,29 +33,10 @@ type HostAuthority = {
   port?: string;
 };
 
-const loopbackHosts = new BlockList();
-loopbackHosts.addSubnet('127.0.0.0', 8, 'ipv4');
-loopbackHosts.addAddress('::1', 'ipv6');
-loopbackHosts.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
-
 const normalizeHost = (value: string) => {
   const trimmed = value.trim().toLowerCase();
   if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1);
   return trimmed;
-};
-
-const isLoopbackHost = (value: string) => {
-  const hostname = normalizeHost(value);
-  if (hostname === 'localhost') return true;
-  const version = isIP(hostname);
-  return version === 4
-    ? loopbackHosts.check(hostname, 'ipv4')
-    : version === 6 && loopbackHosts.check(hostname, 'ipv6');
-};
-
-const isWildcardHost = (value: string) => {
-  const hostname = normalizeHost(value);
-  return hostname === '0.0.0.0' || hostname === '::';
 };
 
 const parseHostAuthority = (value: string): HostAuthority | null => {
@@ -70,7 +51,7 @@ const parseHostAuthority = (value: string): HostAuthority | null => {
   }
   if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
   const hostname = normalizeHost(parsed.hostname);
-  if (!hostname || isWildcardHost(hostname)) return null;
+  if (!hostname) return null;
   return { hostname, port: parsed.port || undefined };
 };
 
@@ -97,9 +78,7 @@ const sameOrigin = (request: IncomingMessage, actualHost: HostAuthority) => {
   return parsed.origin === expected.origin;
 };
 
-const validateEntryConfiguration = (configuredHost: string) => {
-  if (!isLoopbackHost(configuredHost)) throw new Error('Story host 只支持本机 loopback 地址。');
-};
+const formatUrlHost = (value: string) => value.includes(':') && !value.startsWith('[') ? `[${value}]` : value;
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -385,13 +364,12 @@ const isEntryPoint = process.argv[1]
   && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isEntryPoint) {
-  validateEntryConfiguration(host);
   const staticRoot = process.env.STORY_STATIC_DIR ?? path.resolve('dist-local');
   const providerStore = new ProviderStore(undefined, {
     allowPrivateNetwork: process.env.STORY_ALLOW_PRIVATE_PROVIDERS === '1',
   });
   const server = createStoryServer(undefined, providerStore, staticRoot);
   server.listen(port, host, () => {
-    console.log(`Story host ready at http://${host}:${port}`);
+    console.log(`Story host ready at http://${formatUrlHost(host)}:${port}`);
   });
 }

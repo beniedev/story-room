@@ -34,15 +34,15 @@ for (const file of binaryAllowlist.keys()) {
 }
 
 const syntheticNetworkRules = [
-  { file: 'README.md', pattern: /(?:127\.0\.0\.1|::1)/g },
+  { file: 'README.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
   { file: 'SECURITY.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'docs/decisions/0001-local-host-web-demo.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'server/main.ts', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|0\.0\.0\.0|::1)/g },
   { file: 'server/providers.ts', pattern: /(?:0\.0\.0\.0|10\.0\.0\.0|100\.64\.0\.0|127\.0\.0\.0|169\.254\.0\.0|172\.16\.0\.0|192\.0\.0\.0|192\.168\.0\.0|198\.18\.0\.0|224\.0\.0\.0|240\.0\.0\.0|169\.254\.169\.254|100\.100\.100\.200|192\.0\.0\.192|fd00:ec2::254|fc00::|fec0::|ff00::|fe80::|::1|::ffff:(?:0\.0\.0\.0|10\.0\.0\.0|100\.64\.0\.0|127\.0\.0\.0|169\.254\.0\.0|172\.16\.0\.0|192\.0\.0\.0|192\.168\.0\.0|198\.18\.0\.0|224\.0\.0\.0|240\.0\.0\.0)|::$)/g },
   { file: 'tests/providers.test.ts', pattern: /(?:127\.0\.0\.1|8\.8\.8\.8|1\.1\.1\.1|192\.168\.1\.10|169\.254\.169\.254|100\.100\.100\.200|192\.0\.0\.192|fd00:ec2::254|fe80::1|fd12::10|::ffff:192\.168\.1\.10|::1)/g },
-  { file: 'tests/server-entry.test.ts', pattern: /127\.0\.0\.1/g },
+  { file: 'tests/server-entry.test.ts', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
   { file: 'tests/store.test.ts', pattern: /127\.0\.0\.1/g },
-  { file: 'scripts/dev.mjs', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|::1|::ffff:127\.0\.0\.0)/g },
+  { file: 'scripts/dev.mjs', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)$/g },
   { file: 'vite.config.ts', pattern: /127\.0\.0\.1/g },
 ];
 

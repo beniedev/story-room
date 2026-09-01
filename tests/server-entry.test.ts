@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
 import { createSectionMemory } from '../src/sectionMemory';
+import { formatUrlHost } from '../vite.config';
 
 const requestWithHost = (
   port: number,
@@ -392,7 +393,7 @@ describe('local server entry', () => {
     }
   });
 
-  it('keeps loopback APIs available through a valid proxy Host', async () => {
+  it('keeps APIs available through configured proxy Hosts', async () => {
     const providerStore = { list: vi.fn(async () => []) };
     const server = createStoryServer(undefined, providerStore as never);
 
@@ -413,23 +414,25 @@ describe('local server entry', () => {
       const proxiedHost = await requestWithHost(address.port, '/api/health', 'bookshelf.test:8000');
       expect(proxiedHost.status).toBe(200);
       expect(JSON.parse(proxiedHost.body)).toEqual({ ok: true });
+
+      const wildcardHost = await requestWithHost(address.port, '/api/health', '0.0.0.0:8000');
+      expect(wildcardHost.status).toBe(200);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
 
-  it('rejects non-loopback entry configuration before listen', () => {
-    const root = fileURLToPath(new URL('..', import.meta.url));
-    const run = (variables: Record<string, string>) => spawnSync(process.execPath, ['server/main.ts'], {
-      cwd: root,
-      env: { ...process.env, STORY_API_PORT: '0', ...variables },
-      encoding: 'utf8',
-      timeout: 3000,
-    });
+  it('formats IPv6 proxy targets without changing the bind hostname', async () => {
+    expect(formatUrlHost('127.0.0.1')).toBe('127.0.0.1');
+    expect(formatUrlHost('::1')).toBe('[::1]');
+    expect(formatUrlHost('[::1]')).toBe('[::1]');
 
-    const rejected = run({ STORY_HOST: '192.0.2.10' });
-    expect(rejected.status).not.toBe(0);
-    expect(`${rejected.stdout}${rejected.stderr}`).not.toContain('192.0.2.10');
+    const launcher = await readFile(new URL('../scripts/dev.mjs', import.meta.url), 'utf8');
+    const serverEntry = await readFile(new URL('../server/main.ts', import.meta.url), 'utf8');
+    expect(launcher).toContain('STORY_HOST: host');
+    expect(launcher).toContain('STORY_API_HOST: apiHost');
+    expect(launcher).toContain("host === '0.0.0.0' ? '127.0.0.1'");
+    expect(serverEntry).toContain('server.listen(port, host');
   });
 
   it('requires same-origin for state-changing requests', async () => {

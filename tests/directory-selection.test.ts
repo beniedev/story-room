@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { StoryStore } from '../server/store.ts';
 import {
   deleteDirectorySelection,
   toggleChapterSelection,
@@ -28,13 +32,20 @@ const book: Book = {
     includeInPrompt: true,
     loadedSectionIds: ['section-b', 'section-c'],
   }],
-  canonFacts: [],
+  canonFacts: [{
+    id: 'canon-one',
+    title: 'Canon',
+    content: '',
+    includeInPrompt: true,
+    loadedSectionIds: ['section-a'],
+  }],
   summaries: [{
     id: 'summary-one',
     title: 'Summary',
     content: '',
     includeInPrompt: false,
     sourceSectionIds: ['section-a', 'section-c'],
+    loadedSectionIds: ['section-a'],
   }],
   chapters: [
     {
@@ -91,7 +102,30 @@ describe('directory selection', () => {
     expect(result.book.branches).toEqual([]);
     expect(result.book.characters[0].loadedSectionIds).toEqual([]);
     expect(result.book.worldRules[0].loadedSectionIds).toEqual([]);
+    expect(result.book.canonFacts[0].loadedSectionIds).toEqual([]);
+    expect(result.book.summaries[0].loadedSectionIds).toEqual([]);
     expect([...result.removedSectionIds].sort()).toEqual(['section-a', 'section-b', 'section-c']);
+  });
+
+  it('clears deleted Canon and Summary scopes before saving the Book', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-directory-selection-'));
+    try {
+      const result = deleteDirectorySelection(structuredClone(book), {
+        chapterIds: new Set(),
+        sectionIds: new Set(['section-a']),
+      });
+
+      expect(result.book.canonFacts[0]?.loadedSectionIds).toEqual([]);
+      expect(result.book.summaries[0]?.loadedSectionIds).toEqual([]);
+      expect(result.book.summaries[0]?.sourceSectionIds).toEqual(['section-c']);
+
+      await expect(new StoryStore(root).saveBook(result.book)).resolves.toMatchObject({
+        canonFacts: [{ loadedSectionIds: [] }],
+        summaries: [{ loadedSectionIds: [], sourceSectionIds: ['section-c'] }],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('clears deleted source sections from surviving context references', () => {

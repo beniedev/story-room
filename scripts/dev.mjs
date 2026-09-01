@@ -1,34 +1,19 @@
 import { spawn } from 'node:child_process';
-import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const hostFlag = process.argv.indexOf('--host');
-const host = (hostFlag >= 0 ? process.argv[hostFlag + 1] : '127.0.0.1')?.trim();
-
-const loopbackHosts = new BlockList();
-loopbackHosts.addSubnet('127.0.0.0', 8, 'ipv4');
-loopbackHosts.addAddress('::1', 'ipv6');
-loopbackHosts.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
-
-const isLoopbackHost = (value) => {
-  const hostname = value.toLowerCase().replace(/^\[|\]$/g, '');
-  if (hostname === 'localhost') return true;
-  const version = isIP(hostname);
-  return version === 4
-    ? loopbackHosts.check(hostname, 'ipv4')
-    : version === 6 && loopbackHosts.check(hostname, 'ipv6');
-};
+const requestedHost = (hostFlag >= 0 ? process.argv[hostFlag + 1] : '127.0.0.1')?.trim();
+const host = requestedHost?.startsWith('[') && requestedHost.endsWith(']')
+  ? requestedHost.slice(1, -1)
+  : requestedHost;
 
 if (!host || host.startsWith('--')) {
-  console.error('Use: npm run dev -- --host 127.0.0.1');
+  console.error('Use: npm run dev -- --host <address>');
   process.exit(1);
 }
 
-if (!isLoopbackHost(host)) {
-  console.error('Story host only supports local loopback addresses.');
-  process.exit(1);
-}
+const apiHost = host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -39,7 +24,7 @@ try {
 const env = {
   ...process.env,
   STORY_HOST: host,
-  STORY_API_HOST: host,
+  STORY_API_HOST: apiHost,
   VITE_HOST: host,
 };
 

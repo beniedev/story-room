@@ -14,7 +14,7 @@ The important assets are:
 - local-host Provider configuration and API Keys;
 - temporary Provider test keys entered in a hosted/device page.
 
-The local host accepts loopback addresses only (`127.0.0.1`, `localhost`, or `::1`). Non-loopback binding is unsupported. State-changing requests with an `Origin` header must match the request Host. This is a development boundary, not a production service or a guarantee of network security.
+The local host defaults to `127.0.0.1` and may bind to an explicitly configured LAN or private-network address. It has no access-password, token, or Host allowlist, so any device that can reach that address can use it. State-changing requests with an `Origin` header must match the request Host. This is a deployment choice, not a production service or a guarantee of network security.
 
 Provider requests validate the URL and all DNS results before each request. Public HTTP is rejected, HTTPS private-network access requires `STORY_ALLOW_PRIVATE_PROVIDERS=1`, metadata and link-local targets remain rejected, and redirects are not followed. Local-host Provider Keys are stored as plaintext in the configured Provider file; POSIX writes use mode `0600`, while Windows permissions are not treated as an equivalent credential store.
 
