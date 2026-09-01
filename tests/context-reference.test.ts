@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   reconcileReferencesAfterMemoryDeletion,
   selectAllUnsetReferences,
-  setReferenceMode,
 } from '../src/contextReferences';
 import type { Book, Section } from '../src/types';
 
@@ -22,15 +21,7 @@ const bookWithReferences = (sections: Section[]): Book => ({
 });
 
 describe('context reference helpers', () => {
-  it('sets one finite mode and removes it with none', () => {
-    const full = setReferenceMode(undefined, 'source', 'full');
-    expect(full).toEqual([{ sectionId: 'source', mode: 'full', reason: 'manual' }]);
-    const summary = setReferenceMode(full, 'source', 'summary');
-    expect(summary).toEqual([{ sectionId: 'source', mode: 'summary', reason: 'manual' }]);
-    expect(setReferenceMode(summary, 'source', 'none')).toBeUndefined();
-  });
-
-  it('selects only nonblank unset sections and preserves every existing mode', () => {
+  it('selects only nonblank unset sections and preserves existing references', () => {
     const references = [
       { sectionId: 'summary', mode: 'summary' as const, reason: 'manual' as const },
       { sectionId: 'blank', mode: 'both' as const, reason: 'manual' as const },

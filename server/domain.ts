@@ -1,6 +1,7 @@
 import type {
   Book,
   ContextPlan,
+  ContextPlanPreview,
   GenerationRequest,
   ProviderLimits,
 } from '../src/types.ts';
@@ -9,6 +10,7 @@ import {
   ContextPlanInputError,
   hasManualReference,
   largestContextItems,
+  toContextPlanPreview,
 } from '../src/contextPlan.ts';
 import {
   parseSectionMemoryDraft,
@@ -38,6 +40,21 @@ export function buildContextPlan(
   }
 }
 
+export const buildContextPreview = (
+  book: Book,
+  request: Omit<GenerationRequest, 'bookId'>,
+  limits?: ProviderLimits,
+): ContextPlanPreview => toContextPlanPreview(buildContextPlan(book, request, limits));
+
+export class ProviderResponseError extends Error {
+  readonly statusCode = 502;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderResponseError';
+  }
+}
+
 export function assertGenerationExecutable(request: Omit<GenerationRequest, 'bookId'>) {
   const generationKind = request.generationKind ?? 'continue-section';
   if (generationKind === 'rewrite-selection') throw new RequestValidationError('rewrite-selection 当前尚未实现。');
@@ -47,7 +64,7 @@ export function normalizeSectionMemoryResponse(draft: string): string {
   try {
     return serializeSectionMemoryDraft(parseSectionMemoryDraft(draft));
   } catch {
-    throw new RequestValidationError('Provider 返回的 Section memory draft 无效。');
+    throw new ProviderResponseError('Provider 返回的 Section memory draft 无效。');
   }
 }
 

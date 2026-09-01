@@ -11,12 +11,7 @@ import {
   Settings,
   X,
 } from 'lucide-react';
-import {
-  api,
-  readHostAccessTokenSettings,
-  saveHostAccessTokenSettings,
-  type HostAccessTokenSettings,
-} from './api';
+import { api } from './api';
 import { createBookExport, type BookExportFormat } from './bookExport';
 import {
   buildContextPlan as composeContextPlan,
@@ -28,10 +23,7 @@ import {
   makeRegenerateBlockRequest,
 } from './generationRequests';
 import {
-  referenceModeFor,
   reconcileReferencesAfterMemoryDeletion,
-  setReferenceMode,
-  type SectionReferenceMode,
 } from './contextReferences';
 import {
   deleteDirectorySelection,
@@ -43,6 +35,7 @@ import {
 } from './sourceSelection';
 import {
   readProviderProfiles,
+  PROVIDER_PROFILES_STORAGE_KEY,
   upsertProviderProfile,
   type ProviderProfile,
 } from './providerProfiles';
@@ -50,7 +43,6 @@ import {
   commitSectionMemoryDraft,
   clearPreviousSectionMemory,
   deleteCurrentSectionMemory,
-  isEligibleSectionMemory,
   normalizeBook,
   parseSectionMemoryDraft,
   rollbackSectionMemory,
@@ -80,7 +72,6 @@ import type {
 type ViewName = 'write' | 'shelf';
 const bookCachePrefix = 'story-native:book:';
 const bookCacheKey = (bookId: string) => `${bookCachePrefix}${bookId}`;
-const providerProfilesKey = 'story-native:provider-profiles';
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
@@ -209,12 +200,10 @@ function App() {
     return Number.isFinite(parsed) ? clampManuscriptFontSize(parsed) : defaultManuscriptFontSize;
   });
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() => api.runtime === 'device'
-    ? readProviderProfiles(localStorage.getItem(providerProfilesKey))
+    ? readProviderProfiles(localStorage.getItem(PROVIDER_PROFILES_STORAGE_KEY))
     : []);
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
-  const [hostAccessTokenSettings, setHostAccessTokenSettings] = useState<HostAccessTokenSettings>(() =>
-    api.runtime === 'host' ? readHostAccessTokenSettings() : { enabled: false, token: '' });
   const [dirty, setDirty] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
@@ -293,7 +282,7 @@ function App() {
   useEffect(() => {
     if (api.runtime !== 'device') return;
     try {
-      localStorage.setItem(providerProfilesKey, JSON.stringify(providerProfiles));
+      localStorage.setItem(PROVIDER_PROFILES_STORAGE_KEY, JSON.stringify(providerProfiles));
       localStorage.setItem(activeProviderProfileKey, activeProviderProfileId);
     } catch {
       // Settings still work for the current page when browser persistence is unavailable.
@@ -450,29 +439,6 @@ function App() {
     restoreSectionDraft(loaded.id, '');
     setDirty(Boolean(cached && loaded.updatedAt !== stored.updatedAt));
     setView('shelf');
-  };
-
-  const updateHostAccessToken = async (enabled: boolean, token: string) => {
-    const next = saveHostAccessTokenSettings(enabled, token);
-    setHostAccessTokenSettings(next);
-    setStatus('正在重新连接本机书库…');
-    try {
-      const [entries, profiles] = await Promise.all([
-        api.listBooks(),
-        api.listProviderProfiles(),
-      ]);
-      setLibrary(entries);
-      setProviderProfiles(profiles);
-      setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
-        ? current
-        : profiles[0]?.id ?? '');
-      if (!book && entries[0]) await openBook(entries[0].id);
-      setStatus('');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '无法重新连接本机书库。';
-      setStatus(message);
-      throw new Error(message);
-    }
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
@@ -857,17 +823,18 @@ function App() {
     }));
   };
 
-  const updateContextReference = (sourceSectionId: string, mode: SectionReferenceMode) => {
+  const updateContextReference = (sourceSectionId: string, selected: boolean) => {
     if (!book || !section) return;
     const source = referenceLocation(book, sourceSectionId);
     const targetOrdinal = book
       ? book.chapters.flatMap((chapter) => chapter.sections).findIndex((item) => item.id === section.id)
       : -1;
     if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) return;
-    if (!source.section.content.trim() && mode !== 'none') return;
-    if ((mode === 'summary' || mode === 'both')
-      && !isEligibleSectionMemory(source.section.memory, source.section.content)) return;
-    updateContextReferences(setReferenceMode(section.contextReferences, sourceSectionId, mode));
+    if (!source.section.content.trim() && selected) return;
+    const references = (section.contextReferences ?? [])
+      .filter((reference) => reference.sectionId !== sourceSectionId);
+    if (selected) references.push({ sectionId: sourceSectionId, mode: 'full', reason: 'manual' });
+    updateContextReferences(references);
   };
 
   const generateSectionMemory = async (sourceSectionId: string) => {
@@ -1262,8 +1229,6 @@ function App() {
         onSaveProviderProfile={saveProviderProfile}
         onTestProviderProfile={api.testProviderProfile}
         providerRuntime={api.runtime}
-        hostAccessTokenSettings={hostAccessTokenSettings}
-        onHostAccessTokenChange={updateHostAccessToken}
         onClose={() => settingsTrigger.current?.focus()}
       />
 
@@ -1276,9 +1241,6 @@ function App() {
           onContextReferencesChange={updateContextReferences}
           onGenerateMemory={generateSectionMemory}
           onSaveMemoryAndLoad={saveSectionMemoryAndLoad}
-          onDeleteMemory={deleteSectionMemory}
-          onRollbackMemory={rollbackMemory}
-          onClearPreviousMemory={clearPreviousMemory}
           busy={busy}
           onCancelGeneration={cancelGeneration}
           onClose={closeContextTools}
@@ -1377,8 +1339,6 @@ function SettingsDrawer({
   onSaveProviderProfile,
   onTestProviderProfile,
   providerRuntime,
-  hostAccessTokenSettings,
-  onHostAccessTokenChange,
   onClose,
 }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
@@ -1394,8 +1354,6 @@ function SettingsDrawer({
   onSaveProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<ProviderProfile>;
   onTestProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<{ ok: true; modelId: string }>;
   providerRuntime: 'host' | 'device';
-  hostAccessTokenSettings: HostAccessTokenSettings;
-  onHostAccessTokenChange: (enabled: boolean, token: string) => Promise<void>;
   onClose: () => void;
 }) {
   const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
@@ -1419,10 +1377,6 @@ function SettingsDrawer({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
   const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
-  const [hostAccessEnabled, setHostAccessEnabled] = useState(hostAccessTokenSettings.enabled);
-  const [hostAccessTokenDraft, setHostAccessTokenDraft] = useState(hostAccessTokenSettings.token);
-  const [hostAccessStatus, setHostAccessStatus] = useState('');
-  const [hostAccessState, setHostAccessState] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const discardChangesDialog = useRef<HTMLDialogElement>(null);
   const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
   useEffect(() => {
@@ -1431,10 +1385,6 @@ function SettingsDrawer({
     setProfileDraft({ ...currentProfile });
     setProfileBaseline({ profile: { ...currentProfile }, key: sessionKeys[currentProfile.id] ?? '' });
   }, [currentProfile, editingId]);
-  useEffect(() => {
-    setHostAccessEnabled(hostAccessTokenSettings.enabled);
-    setHostAccessTokenDraft(hostAccessTokenSettings.token);
-  }, [hostAccessTokenSettings]);
   const performCloseDrawer = () => dialogRef.current?.close();
   const clearConnectionResult = () => {
     setConnectionStatus('');
@@ -1553,40 +1503,6 @@ function SettingsDrawer({
       setConnectionStatus(error instanceof Error ? error.message : '无法连接。');
     }
   };
-  const applyHostAccessToken = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const token = hostAccessTokenDraft.trim();
-    if (!token) {
-      setHostAccessState('error');
-      setHostAccessStatus('请填写访问密码。');
-      return;
-    }
-    setHostAccessState('saving');
-    setHostAccessStatus('正在重新连接…');
-    try {
-      await onHostAccessTokenChange(true, token);
-      setHostAccessState('success');
-      setHostAccessStatus('访问密码仅保存于当前浏览器会话。');
-    } catch (error) {
-      setHostAccessState('error');
-      setHostAccessStatus(error instanceof Error ? error.message : '无法使用这个访问密码连接。');
-    }
-  };
-  const disableHostAccessToken = async () => {
-    setHostAccessEnabled(false);
-    setHostAccessTokenDraft('');
-    setHostAccessState('saving');
-    setHostAccessStatus('正在关闭…');
-    try {
-      await onHostAccessTokenChange(false, '');
-      setHostAccessState('success');
-      setHostAccessStatus('访问密码已关闭。');
-    } catch (error) {
-      setHostAccessState('error');
-      setHostAccessStatus(error instanceof Error ? error.message : '已关闭访问密码，但无法重新连接书库。');
-    }
-  };
-
   return (
     <dialog
       className="settings-drawer"
@@ -1662,29 +1578,12 @@ function SettingsDrawer({
         apiKeyDraft={apiKeyDraft}
         providerRuntime={providerRuntime}
         connectionStatus={connectionStatus}
-        hostAccessTokenSettings={hostAccessTokenSettings}
-        hostAccessEnabled={hostAccessEnabled}
-        hostAccessState={hostAccessState}
-        hostAccessTokenDraft={hostAccessTokenDraft}
-        hostAccessStatus={hostAccessStatus}
         onRequestSettingsAction={(action) => requestSettingsAction(action)}
         onClearConnectionResult={clearConnectionResult}
         onProfileDraftChange={(recipe) => setProfileDraft(recipe)}
         onApiKeyDraftChange={setApiKeyDraft}
         onSubmitProfile={submitProfile}
         onTestProfileConnection={() => void testProfileConnection()}
-        onEnableHostAccess={() => {
-          setHostAccessEnabled(true);
-          setHostAccessState('idle');
-          setHostAccessStatus('');
-        }}
-        onDisableHostAccess={() => void disableHostAccessToken()}
-        onApplyHostAccessToken={applyHostAccessToken}
-        onHostAccessTokenDraftChange={(value) => {
-          setHostAccessTokenDraft(value);
-          setHostAccessState('idle');
-          setHostAccessStatus('');
-        }}
       />
 
       <section className="settings-section" aria-labelledby="storage-heading">

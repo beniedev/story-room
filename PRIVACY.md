@@ -6,9 +6,7 @@ Story-native Writing Harness does not provide cloud manuscript storage, account 
 
 The local Node host writes Book data as readable files under `STORY_DATA_DIR` (default `.data/`). The local-host Provider configuration is a separate plaintext file (default `.data/private/providers.json`, or `STORY_PROVIDER_CONFIG`). It may contain an OpenAI-compatible API Key and is not part of the Book manifest.
 
-When you use an OpenAI-compatible Provider, the messages shown for the current request are sent to the endpoint you configured. Book summaries and Canon facts remain local Book data and are not hidden prompt inputs. The host does not choose a third-party sync destination. Provider responses are used for the current generation and are not presented as a cloud backup.
-
-The local-host `访问密码` setting is optional and off by default. If you enable it, the current browser tab keeps the entered password for requests; this does not encrypt Book files or turn the host into a multi-user service.
+When you use an OpenAI-compatible Provider, the host assembles the request and sends its internal Provider messages to the endpoint you configured. The browser receives a compact context preview or the generated draft; it does not receive or display raw Provider messages. Book summaries and Canon facts remain local Book data and are not hidden prompt inputs. The host does not choose a third-party sync destination. Provider responses are used for the current generation and are not presented as a cloud backup.
 
 ## Hosted/device build
 

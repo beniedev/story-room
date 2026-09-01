@@ -208,7 +208,28 @@ export interface ContextPlan {
   included: PromptBlock[];
   excluded: PromptBlock[];
   messages: PromptMessage[];
-  prompt: string;
+  estimatedTokens: number;
+  budget: ContextBudget;
+}
+
+export interface ContextPreviewItem {
+  layer: PromptLayer;
+  cacheBand: PromptCacheBand;
+  title: string;
+  reason: string;
+  included: boolean;
+  charCount: number;
+  estimatedTokens: number;
+  semanticRole: PromptSemanticRole;
+  manualSelection?: boolean;
+  future?: boolean;
+}
+
+export interface ContextPlanPreview {
+  mode: GenerationMode;
+  generationKind: GenerationKind;
+  included: ContextPreviewItem[];
+  excluded: ContextPreviewItem[];
   estimatedTokens: number;
   budget: ContextBudget;
 }
@@ -226,6 +247,5 @@ export interface GenerationRequest {
 }
 
 export interface GenerationResult {
-  plan: ContextPlan;
   draft: string;
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, useState, type ReactNode } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ContextCompositionDrawer } from '../src/components/ContextCompositionDrawer';
@@ -11,8 +11,6 @@ import type {
   PromptBlock,
   SectionMemoryDraft,
 } from '../src/types';
-import type { SectionReferenceMode } from '../src/contextReferences';
-import { setReferenceMode } from '../src/contextReferences';
 import { hashSectionContent } from '../src/sectionMemory';
 
 const memoryDraft: SectionMemoryDraft = {
@@ -48,8 +46,7 @@ const makeBook = (): Book => ({
       { id: 'source-blank-selected', title: '已选空白节', content: '', contextReferences: undefined },
       { id: 'source-blank', title: '空白节', content: '' },
       { id: 'target-ui', title: '当前小节', content: '正文。', contextReferences: [
-        { sectionId: 'source-ready', mode: 'summary', reason: 'manual' },
-        { sectionId: 'source-blank-selected', mode: 'both', reason: 'manual' },
+        { sectionId: 'source-ready', mode: 'full', reason: 'manual' },
       ] },
     ],
   }],
@@ -95,7 +92,6 @@ const compositionPlan: ContextPlan = {
     { role: 'system', content: '系统规则。', blockIds: ['system-id'] },
     { role: 'user', content: 'Provider packet 完整正文。', blockIds: ['manual-reference', 'target'] },
   ],
-  prompt: 'system: 系统规则。\n\nuser: Provider packet 完整正文。',
   estimatedTokens: 100,
   budget: {
     maxContext: 10_000,
@@ -127,39 +123,14 @@ const makeToolProps = (book: Book, section = book.chapters[0]!.sections[4]!) => 
   open: true,
   book,
   section,
-  onContextReferenceChange: vi.fn<(sourceSectionId: string, mode: SectionReferenceMode) => void>(),
+  onContextReferenceChange: vi.fn<(sourceSectionId: string, selected: boolean) => void>(),
   onContextReferencesChange: vi.fn<(references: Book['chapters'][number]['sections'][number]['contextReferences']) => void>(),
   onGenerateMemory: vi.fn(async () => memoryDraft),
   onSaveMemoryAndLoad: vi.fn(async () => undefined),
-  onDeleteMemory: vi.fn(async () => undefined),
-  onRollbackMemory: vi.fn(async () => undefined),
-  onClearPreviousMemory: vi.fn(async () => undefined),
   busy: false,
   onCancelGeneration: vi.fn(),
   onClose: vi.fn(),
 });
-
-const ModeHarness = ({ initialBook }: { initialBook: Book }) => {
-  const [book, setBook] = useState(initialBook);
-  const section = book.chapters[0]!.sections[4]!;
-  const props = makeToolProps(book, section);
-  return (
-    <ContextToolsDrawer
-      {...props}
-      onContextReferenceChange={(sourceSectionId, mode) => {
-        setBook((current) => ({
-          ...current,
-          chapters: current.chapters.map((chapter) => ({
-            ...chapter,
-            sections: chapter.sections.map((item) => item.id === section.id
-              ? { ...item, contextReferences: setReferenceMode(item.contextReferences, sourceSectionId, mode) }
-              : item),
-          })),
-        }));
-      }}
-    />
-  );
-};
 
 beforeAll(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -237,116 +208,56 @@ describe('context drawers real interactions', () => {
     await unmount(root);
   });
 
-  it('supports finite modes, excludes blank sections from the count, and keeps them visible', async () => {
+  it('restores the checkbox and disclosure layout without a mode control', async () => {
     const book = makeBook();
     const props = makeToolProps(book);
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
     await flushAnimation();
-    const selects = [...container.querySelectorAll('select')] as HTMLSelectElement[];
-    expect(selects).toHaveLength(4);
+
     expect(container.textContent).toContain('已选 1/2 小节');
-    expect(container.textContent).toContain('尚无正文');
-    expect(container.textContent).toContain('摘要预览：尚无摘要');
+    expect(container.querySelector('select')).toBeNull();
+    expect(container.textContent).not.toContain('清空全部');
+    expect(container.querySelectorAll('.context-reference-checkbox')).toHaveLength(4);
 
-    const noMemorySummary = [...selects[1]!.options].find((option) => option.value === 'summary');
-    expect(noMemorySummary?.disabled).toBe(true);
-    expect(selects[3]?.disabled).toBe(true);
-    expect([...selects[0]!.options].map((option) => option.value)).toEqual(['none', 'full', 'summary', 'both']);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    const row = disclosure?.closest('.context-reference-row');
+    const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkbox?.checked).toBe(true);
+    await act(async () => checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(props.onContextReferenceChange).toHaveBeenCalledWith('source-ready', false);
+    expect(container.querySelector('textarea')).toBeNull();
 
-    await act(async () => {
-      selects[1]!.value = 'full';
-      selects[1]!.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(props.onContextReferenceChange).toHaveBeenCalledWith('source-no-memory', 'full');
+    await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
+    expect(disclosure?.getAttribute('aria-expanded')).toBe('true');
     await unmount(root);
   });
 
-  it('keeps a selected control value through every finite mode transition', async () => {
-    const book = makeBook();
-    book.chapters[0]!.sections[4]!.contextReferences = undefined;
-    const { container, root } = await render(<ModeHarness initialBook={book} />);
-    await flushAnimation();
-    const label = '设置已有 Memory的前文模式';
-    for (const mode of ['none', 'full', 'summary', 'both', 'none'] as const) {
-      const select = container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement | null;
-      expect(select).toBeTruthy();
-      await act(async () => {
-        select!.value = mode;
-        select!.dispatchEvent(new Event('change', { bubbles: true }));
-      });
-      expect((container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement | null)?.value).toBe(mode);
-    }
-    await unmount(root);
-  });
-
-  it('keeps stale Memory visible and disables its summary modes', async () => {
-    const book = makeBook();
-    book.chapters[0]!.sections[0]!.memory = { ...memory, status: 'stale' };
-    const props = makeToolProps(book);
-    const { container, root } = await render(<ContextToolsDrawer {...props} />);
-    await flushAnimation();
-    const row = container.querySelector('[data-reference-mode="summary"]');
-    const select = row?.querySelector('select') as HTMLSelectElement | null;
-    expect(row?.textContent).toContain('Memory 已过期');
-    expect([...select!.options].filter((option) => option.value === 'summary' || option.value === 'both')
-      .every((option) => option.disabled)).toBe(true);
-    await unmount(root);
-  });
-
-  it('selects only unset nonblank rows and clear-all sees invalid blank references', async () => {
+  it('selects all nonblank previous sections and leaves blank rows disabled', async () => {
     const book = makeBook();
     const props = makeToolProps(book);
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
-    const selectAll = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('全部'));
-    const clearAll = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('清空全部'));
-    expect(selectAll?.hasAttribute('disabled')).toBe(false);
-    expect(clearAll?.hasAttribute('disabled')).toBe(false);
+    const selectAll = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('全部'));
+    const blankDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开空白节梗概"]');
+    const blankCheckbox = blankDisclosure?.closest('.context-reference-row')
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(blankCheckbox?.disabled).toBe(true);
 
-    await act(async () => clearAll?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(props.onContextReferencesChange).toHaveBeenCalledWith(undefined);
     await act(async () => selectAll?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    const selected = props.onContextReferencesChange.mock.calls.at(-1)?.[0];
-    expect(selected).toEqual(expect.arrayContaining([
-      { sectionId: 'source-ready', mode: 'summary', reason: 'manual' },
-      { sectionId: 'source-blank-selected', mode: 'both', reason: 'manual' },
+    expect(props.onContextReferencesChange).toHaveBeenCalledWith([
+      { sectionId: 'source-ready', mode: 'full', reason: 'manual' },
       { sectionId: 'source-no-memory', mode: 'full', reason: 'manual' },
-    ]));
-    expect(selected).not.toEqual(expect.arrayContaining([{ sectionId: 'source-blank', mode: 'full', reason: 'manual' }]));
+    ]);
     await unmount(root);
   });
 
-  it('opens a five-field Memory child view, exposes previous content, and restores focus', async () => {
-    const book = makeBook();
-    book.chapters[0]!.sections[0]!.previousMemory = { ...memory, synopsis: '更旧摘要' };
-    const props = makeToolProps(book);
-    const { container, root } = await render(<ContextToolsDrawer {...props} />);
-    const row = container.querySelector<HTMLButtonElement>('[aria-label="编辑已有 Memory Memory"]');
-    expect(row).toBeTruthy();
-    row?.focus();
-    await act(async () => row?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    await flushAnimation();
-
-    expect(container.textContent).toContain('上一版本：有');
-    expect(container.textContent).toContain('更旧摘要');
-    expect(container.querySelectorAll('fieldset.context-memory-array')).toHaveLength(4);
-    expect(container.querySelector('textarea')).toBeTruthy();
-    expect(container.textContent).toContain('删除当前 Memory');
-    expect(container.textContent).toContain('回滚上一版本');
-    expect(document.activeElement?.classList.contains('context-memory-back')).toBe(true);
-
-    const back = container.querySelector<HTMLButtonElement>('.context-memory-back');
-    await act(async () => back?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    await flushAnimation();
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('编辑已有 Memory Memory');
-    await unmount(root);
-  });
-
-  it('keeps generated Memory as a draft until confirmation, then saves only after confirmation', async () => {
+  it('keeps generated synopsis as a draft until confirmation, then saves the complete draft', async () => {
     const book = makeBook();
     const props = makeToolProps(book);
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
-    const row = container.querySelector<HTMLButtonElement>('[aria-label="编辑无 Memory 前文 Memory"]');
-    await act(async () => row?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await flushAnimation();
     const generate = container.querySelector<HTMLButtonElement>('.context-summary-generate');
     await act(async () => generate?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -356,8 +267,7 @@ describe('context drawers real interactions', () => {
     await act(async () => confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await flushAnimation();
     expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
-    expect([...container.querySelectorAll<HTMLInputElement>('.context-memory-array-row input')]
-      .map((input) => input.value)).toEqual(['节拍一', '事实一', '状态一', '伏笔一']);
+    expect(container.querySelector('.context-memory-array-row')).toBeNull();
     expect(props.onSaveMemoryAndLoad).not.toHaveBeenCalled();
 
     const save = container.querySelector<HTMLButtonElement>('.context-summary-save');
@@ -370,12 +280,12 @@ describe('context drawers real interactions', () => {
     await unmount(root);
   });
 
-  it('closes only the nested Memory confirmation on Escape and restores its trigger', async () => {
+  it('closes only the nested synopsis confirmation on Escape and restores its trigger', async () => {
     const book = makeBook();
     const props = makeToolProps(book);
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
-    const row = container.querySelector<HTMLButtonElement>('[aria-label="编辑无 Memory 前文 Memory"]');
-    await act(async () => row?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await flushAnimation();
     const generate = container.querySelector<HTMLButtonElement>('.context-summary-generate');
     generate?.focus();

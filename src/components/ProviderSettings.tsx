@@ -1,10 +1,8 @@
 import type { FormEvent } from 'react';
-import { Check, ChevronDown, KeyRound, Plus, PlugZap, ShieldCheck } from 'lucide-react';
-import type { HostAccessTokenSettings } from '../api';
+import { Check, ChevronDown, KeyRound, Plus, PlugZap } from 'lucide-react';
 import type { ProviderProfile } from '../providerProfiles';
 
 export type ProviderConnectionState = 'idle' | 'testing' | 'saving' | 'success' | 'error';
-export type HostAccessState = 'idle' | 'saving' | 'success' | 'error';
 
 export type ProviderSettingsProps = {
   currentProfile?: ProviderProfile;
@@ -15,21 +13,12 @@ export type ProviderSettingsProps = {
   apiKeyDraft: string;
   providerRuntime: 'host' | 'device';
   connectionStatus: string;
-  hostAccessTokenSettings: HostAccessTokenSettings;
-  hostAccessEnabled: boolean;
-  hostAccessState: HostAccessState;
-  hostAccessTokenDraft: string;
-  hostAccessStatus: string;
   onRequestSettingsAction: (action: 'new' | ProviderProfile) => void;
   onClearConnectionResult: () => void;
   onProfileDraftChange: (recipe: (current: ProviderProfile) => ProviderProfile) => void;
   onApiKeyDraftChange: (value: string) => void;
   onSubmitProfile: (event: FormEvent) => void;
   onTestProfileConnection: () => void;
-  onEnableHostAccess: () => void;
-  onDisableHostAccess: () => void;
-  onApplyHostAccessToken: (event: FormEvent) => void;
-  onHostAccessTokenDraftChange: (value: string) => void;
 };
 
 export function ProviderSettings({
@@ -41,21 +30,12 @@ export function ProviderSettings({
   apiKeyDraft,
   providerRuntime,
   connectionStatus,
-  hostAccessTokenSettings,
-  hostAccessEnabled,
-  hostAccessState,
-  hostAccessTokenDraft,
-  hostAccessStatus,
   onRequestSettingsAction,
   onClearConnectionResult,
   onProfileDraftChange,
   onApiKeyDraftChange,
   onSubmitProfile,
   onTestProfileConnection,
-  onEnableHostAccess,
-  onDisableHostAccess,
-  onApplyHostAccessToken,
-  onHostAccessTokenDraftChange,
 }: ProviderSettingsProps) {
   return (
     <>
@@ -128,61 +108,6 @@ export function ProviderSettings({
         </div>
       </details>
     </section>
-    {providerRuntime === 'host' && (
-      <section className="settings-section" aria-labelledby="host-access-heading">
-        <h3 id="host-access-heading" className="sr-only">访问保护</h3>
-        <details className="settings-subdrawer">
-          <summary>
-            <ShieldCheck aria-hidden="true" />
-            <span><strong>访问密码（可选）</strong><small>{hostAccessTokenSettings.enabled ? '已启用' : '关闭'}</small></span>
-            <ChevronDown aria-hidden="true" />
-          </summary>
-          <div className="host-access-settings">
-            <label className="toggle-setting" htmlFor="host-access-toggle">
-              <span><strong>启用访问密码</strong><small>默认关闭。只在需要密码才能打开书库时开启。</small></span>
-              <input
-                id="host-access-toggle"
-                type="checkbox"
-                role="switch"
-                checked={hostAccessEnabled}
-                disabled={hostAccessState === 'saving'}
-                onChange={(event) => {
-                  if (event.target.checked) {
-                    onEnableHostAccess();
-                  } else {
-                    void onDisableHostAccess();
-                  }
-                }}
-              />
-            </label>
-            {hostAccessEnabled && (
-              <form className="host-access-form" onSubmit={onApplyHostAccessToken}>
-                <label htmlFor="host-access-token">访问密码</label>
-                <div className="host-access-input-row">
-                  <input
-                    id="host-access-token"
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={hostAccessTokenDraft}
-                    onChange={(event) => {
-                      onHostAccessTokenDraftChange(event.target.value);
-                    }}
-                    placeholder="输入访问密码"
-                  />
-                  <button type="submit" className="primary-action" disabled={hostAccessState === 'saving'}>
-                    {hostAccessState === 'saving' ? '连接中…' : '保存并连接'}
-                  </button>
-                </div>
-              </form>
-            )}
-            <p className="host-access-status" data-state={hostAccessState} role="status" aria-live="polite">
-              {hostAccessStatus}
-            </p>
-          </div>
-        </details>
-      </section>
-    )}
     </>
   );
 }

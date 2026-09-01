@@ -116,16 +116,15 @@ type EvalPacket = {
   generationKind: string;
   target: {
     locator: {
-      book: { id: string; title: string; index: number };
-      chapter: { id: string; title: string; index: number };
-      section: { id: string; title: string; index: number };
+      book: { title: string; index: number };
+      chapter: { title: string; index: number };
+      section: { title: string; index: number };
     };
   };
   blocks: Array<{
     content: string;
-    semanticRole: string;
-    transformedFrom?: string;
-    source?: { bookId?: string; sectionId?: string };
+    kind: string;
+    location?: { chapterIndex?: number; sectionIndex?: number };
   }>;
 };
 
@@ -169,9 +168,9 @@ describe('deterministic synthetic prompt eval', () => {
 
     expect(packets.every((packet) => packet.generationKind === 'continue-section')).toBe(true);
     expect(packets.map((packet) => packet.target.locator)).toEqual(plans.map(() => ({
-      book: { id: 'eval-book', title: 'Synthetic continuity book', index: 0 },
-      chapter: { id: 'eval-chapter', title: 'Synthetic chapter', index: 0 },
-      section: { id: 'eval-section-three', title: 'Third synthetic section', index: 2 },
+      book: { title: 'Synthetic continuity book', index: 0 },
+      chapter: { title: 'Synthetic chapter', index: 0 },
+      section: { title: 'Third synthetic section', index: 2 },
     })));
 
     expect(referenceShape(targetOnly)).toEqual([]);
@@ -212,8 +211,10 @@ describe('deterministic synthetic prompt eval', () => {
       expect(plan.budget.overflow).toBe(false);
     }
 
-    expect(packets.every((packet) => packet.blocks.some((block) => block.semanticRole === 'target'))).toBe(true);
-    expect(packets.every((packet) => packet.blocks.every((block) => block.source?.bookId !== 'other-book'))).toBe(true);
+    expect(packets.every((packet) => packet.blocks.some((block) => block.kind === 'target'))).toBe(true);
+    expect(packets.every((packet) => packet.blocks.every((block) => !('source' in block)))).toBe(true);
+    expect(packets.every((packet) => packet.blocks.every((block) => Object.keys(block)
+      .every((key) => ['kind', 'title', 'content', 'location', 'future'].includes(key))))).toBe(true);
   });
 
   it('keeps the target locator in the third section and rejects future or cross-Book references', () => {

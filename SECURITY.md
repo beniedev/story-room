@@ -12,16 +12,15 @@ The important assets are:
 
 - Book files and exports, including manuscript text, blocks, branches, source material, and Section Memory snapshots;
 - local-host Provider configuration and API Keys;
-- the optional local-host access password (disabled by default) and the server-side token used for a non-loopback bind;
 - temporary Provider test keys entered in a hosted/device page.
 
-The local host defaults to loopback. The page's access-password setting is optional and disabled by default. A non-loopback bind still requires `STORY_ACCESS_TOKEN` and explicit `STORY_ALLOWED_HOSTS` values; when page protection is enabled, the password is held in the current browser tab's `sessionStorage`. State-changing requests with an `Origin` header must match the request Host. This is a development boundary, not a guarantee that a LAN service is safe to expose publicly.
+The local host accepts loopback addresses only (`127.0.0.1`, `localhost`, or `::1`). Non-loopback binding is unsupported. State-changing requests with an `Origin` header must match the request Host. This is a development boundary, not a production service or a guarantee of network security.
 
 Provider requests validate the URL and all DNS results before each request. Public HTTP is rejected, HTTPS private-network access requires `STORY_ALLOW_PRIVATE_PROVIDERS=1`, metadata and link-local targets remain rejected, and redirects are not followed. Local-host Provider Keys are stored as plaintext in the configured Provider file; POSIX writes use mode `0600`, while Windows permissions are not treated as an equivalent credential store.
 
 The hosted/device build keeps Books in unencrypted browser `localStorage`. Same-origin scripts can read that storage, and clearing site data removes the device-local library. A hosted/device Provider test sends its temporary key directly to the entered URL; the page can read it while it is running and the app does not persist it.
 
-The prompt view is limited to Provider input: it shows the current messages, approximate budget, and any explicit exclusion or degradation. It does not expose hidden model reasoning, and stored Book summaries or Canon facts are not silently added as prompt material.
+The prompt view is limited to a compact Provider-input preview: it shows categories, approximate budget, and any explicit exclusion or degradation. It does not expose raw Provider messages or hidden model reasoning, and stored Book summaries or Canon facts are not silently added as prompt material. The context-plan API returns preview metadata and the generation API returns the draft without echoing the full internal plan.
 
 ## Known limitations
 

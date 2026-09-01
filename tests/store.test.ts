@@ -1,19 +1,75 @@
 import type { AddressInfo } from 'node:net';
 import { createStoryServer } from '../server/main.ts';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StoryStore } from '../server/store.ts';
 import { createLegacyFixtureBook } from '../src/fixtures.ts';
 import { createSectionMemory } from '../src/sectionMemory';
-import type { Book } from '../src/types.ts';
+import type { Book, BookIndexEntry } from '../src/types.ts';
 
 const temporaryRoots: string[] = [];
 
 const expectMissing = async (file: string) => {
   await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
 };
+
+const makeIntegrityBook = (): Book => ({
+  id: 'integrity-book',
+  title: 'Integrity Book',
+  writingBrief: '',
+  characters: [{
+    id: 'integrity-character',
+    name: 'Character',
+    role: 'lead',
+    title: 'Character',
+    content: 'Character context.',
+    includeInPrompt: true,
+  }],
+  worldRules: [{
+    id: 'integrity-rule',
+    title: 'Rule',
+    content: 'Rule context.',
+    includeInPrompt: true,
+  }],
+  canonFacts: [{
+    id: 'integrity-fact',
+    title: 'Fact',
+    content: 'Fact context.',
+    includeInPrompt: true,
+  }],
+  summaries: [{
+    id: 'integrity-summary',
+    title: 'Summary',
+    content: 'Summary context.',
+    includeInPrompt: true,
+    sourceSectionIds: ['integrity-source'],
+  }],
+  chapters: [{
+    id: 'integrity-chapter',
+    title: 'Chapter',
+    sections: [
+      { id: 'integrity-source', title: 'Source', content: 'Source.' },
+      {
+        id: 'integrity-target',
+        title: 'Target',
+        content: 'Target.',
+        blocks: [{ id: 'integrity-block', kind: 'assistant', content: 'Target block.' }],
+        plan: { goal: 'Continue.', intendedBeats: ['Beat'], povCharacterId: 'integrity-character' },
+        contextReferences: [{ sectionId: 'integrity-source', mode: 'full', reason: 'manual' }],
+      },
+    ],
+  }],
+  branches: [{ id: 'integrity-branch', title: 'Branch', fromSectionId: 'integrity-source' }],
+  updatedAt: '2026-01-01T00:00:00.000Z',
+});
+
+class FailingDeleteStore extends StoryStore {
+  protected override async removeBookTree(_directory: string) {
+    throw new Error('synthetic quarantine removal failure');
+  }
+}
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -183,6 +239,46 @@ describe('story store', () => {
     };
 
     await expect(new StoryStore(root).saveBook(book)).rejects.toThrow('不得重复');
+  });
+
+  it('rejects duplicate IDs and broken references before writing a Book', async () => {
+    const cases: Array<[string, (book: Book) => void]> = [
+      ['duplicate character IDs', (book) => book.characters.push({ ...book.characters[0]! })],
+      ['duplicate world rule IDs', (book) => book.worldRules.push({ ...book.worldRules[0]! })],
+      ['duplicate canon fact IDs', (book) => book.canonFacts.push({ ...book.canonFacts[0]! })],
+      ['duplicate summary IDs', (book) => book.summaries.push({ ...book.summaries[0]! })],
+      ['duplicate chapter IDs', (book) => book.chapters.push({ ...book.chapters[0]! })],
+      ['duplicate section IDs', (book) => book.chapters.push({
+        id: 'integrity-second-chapter',
+        title: 'Second Chapter',
+        sections: [{ ...book.chapters[0]!.sections[0]! }],
+      })],
+      ['duplicate block IDs', (book) => {
+        const target = book.chapters[0]!.sections[1]!;
+        target.blocks = [...target.blocks!, { ...target.blocks![0]! }];
+      }],
+      ['duplicate branch IDs', (book) => book.branches.push({ ...book.branches[0]! })],
+      ['unknown loaded Section', (book) => { book.characters[0]!.loadedSectionIds = ['missing-section']; }],
+      ['unknown Summary source', (book) => { book.summaries[0]!.sourceSectionIds = ['missing-section']; }],
+      ['unknown context reference', (book) => {
+        book.chapters[0]!.sections[1]!.contextReferences = [{ sectionId: 'missing-section', mode: 'full', reason: 'manual' }];
+      }],
+      ['future context reference', (book) => {
+        book.chapters[0]!.sections[1]!.contextReferences = [{ sectionId: 'integrity-target', mode: 'full', reason: 'manual' }];
+      }],
+      ['unknown Branch source', (book) => { book.branches[0]!.fromSectionId = 'missing-section'; }],
+      ['unknown POV character', (book) => { book.chapters[0]!.sections[1]!.plan!.povCharacterId = 'missing-character'; }],
+    ];
+
+    for (const [label, mutate] of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+      temporaryRoots.push(root);
+      const store = new StoryStore(root);
+      const book = makeIntegrityBook();
+      mutate(book);
+      await expect(store.saveBook(book), label).rejects.toThrow();
+      await expectMissing(path.join(root, 'library.json'));
+    }
   });
 
   it('serializes concurrent saves so the library keeps both Books', async () => {
@@ -372,6 +468,43 @@ describe('story store', () => {
     await writeFile(path.join(bookRoot, 'world'), 'not a directory', 'utf8');
     await expect(store.saveBook(book)).rejects.toThrow();
     expect(await readFile(sentinel, 'utf8')).toBe('unchanged');
+  });
+
+  it('fails closed when a managed source directory is replaced by a junction', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = makeIntegrityBook();
+    await store.saveBook(book);
+
+    const outside = path.join(root, 'outside-characters');
+    const charactersDirectory = path.join(root, 'books', book.id, 'characters');
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, `${book.characters[0]!.id}.json`), JSON.stringify(book.characters[0]), 'utf8');
+    await rm(charactersDirectory, { recursive: true, force: true });
+    try {
+      await symlink(outside, charactersDirectory, 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await expect(store.loadBook(book.id)).rejects.toThrow('结构异常');
+  });
+
+  it('restores the Book and library when quarantine removal fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const book = makeIntegrityBook();
+    const store = new StoryStore(root);
+    await store.saveBook(book);
+
+    const failingStore = new FailingDeleteStore(root);
+    await expect(failingStore.deleteBook(book.id)).rejects.toThrow('synthetic quarantine removal failure');
+
+    expect((await JSON.parse(await readFile(path.join(root, 'library.json'), 'utf8')) as BookIndexEntry[])
+      .map((entry) => entry.id)).toContain(book.id);
+    expect((await failingStore.loadBook(book.id)).title).toBe(book.title);
+    expect(await readdir(path.join(root, 'books'))).toEqual([book.id]);
   });
 
   it('loads a legacy Section without optional note or blocks', async () => {

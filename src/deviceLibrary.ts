@@ -1,5 +1,5 @@
 import { createExampleBooks } from './fixtures';
-import { buildContextPlan } from './contextPlan';
+import { buildContextPlan, toContextPlanPreview } from './contextPlan';
 import {
   normalizeBook,
   serializeSectionMemoryDraft,
@@ -8,7 +8,7 @@ import {
 import type {
   Book,
   BookIndexEntry,
-  ContextPlan,
+  ContextPlanPreview,
   GenerationRequest,
   GenerationResult,
 } from './types';
@@ -149,13 +149,13 @@ export const deviceLibrary = {
   createBook: async (title: string) => createBook(title),
   saveBook: async (book: Book) => saveBook(book),
   deleteBook: async (bookId: string) => deleteBook(bookId),
-  contextPlan: async (request: GenerationRequest): Promise<ContextPlan> => (
-    buildContextPlan(loadBook(request.bookId), request)
+  contextPlan: async (request: GenerationRequest): Promise<ContextPlanPreview> => (
+    toContextPlanPreview(buildContextPlan(loadBook(request.bookId), request))
   ),
   generate: async (request: GenerationRequest, signal?: AbortSignal): Promise<GenerationResult> => {
     if (signal?.aborted) throw new DOMException('生成已取消。', 'AbortError');
+    buildContextPlan(loadBook(request.bookId), request);
     return {
-      plan: buildContextPlan(loadBook(request.bookId), request),
       draft: request.generationKind === 'summarize-section'
         ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
         : fakeDraft(request.mode),

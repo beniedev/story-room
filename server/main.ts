@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { BlockList, isIP } from 'node:net';
@@ -8,8 +7,10 @@ import {
   assertContextBudget,
   assertGenerationExecutable,
   buildContextPlan,
+  buildContextPreview,
   fakeGenerate,
   normalizeSectionMemoryResponse,
+  ProviderResponseError,
   RequestValidationError,
 } from './domain.ts';
 import { BookNotFoundError, StoreInputError, StoryStore } from './store.ts';
@@ -27,11 +28,6 @@ const port = Number(process.env.STORY_API_PORT ?? 4311);
 const MAX_BODY_BYTES = 1_000_000;
 const generationKinds = new Set(['continue-section', 'regenerate-block', 'rewrite-selection', 'summarize-section']);
 
-export type StoryServerOptions = {
-  accessToken?: string;
-  allowedHosts?: string[];
-};
-
 type HostAuthority = {
   hostname: string;
   port?: string;
@@ -40,6 +36,7 @@ type HostAuthority = {
 const loopbackHosts = new BlockList();
 loopbackHosts.addSubnet('127.0.0.0', 8, 'ipv4');
 loopbackHosts.addAddress('::1', 'ipv6');
+loopbackHosts.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
 
 const normalizeHost = (value: string) => {
   const trimmed = value.trim().toLowerCase();
@@ -77,21 +74,6 @@ const parseHostAuthority = (value: string): HostAuthority | null => {
   return { hostname, port: parsed.port || undefined };
 };
 
-const parseAllowedHosts = (values: string[] | undefined): HostAuthority[] => {
-  if (!values) return [];
-  const result: HostAuthority[] = [];
-  for (const value of values) {
-    const parsed = parseHostAuthority(value);
-    if (!parsed) throw new Error('服务器可信 Host 配置无效。');
-    result.push(parsed);
-  }
-  return result;
-};
-
-const hostMatches = (actual: HostAuthority, trusted: HostAuthority) => (
-  actual.hostname === trusted.hostname && (!trusted.port || actual.port === trusted.port)
-);
-
 const requestHost = (request: IncomingMessage) => {
   const value = request.headers.host;
   return typeof value === 'string' ? parseHostAuthority(value) : null;
@@ -115,21 +97,8 @@ const sameOrigin = (request: IncomingMessage, actualHost: HostAuthority) => {
   return parsed.origin === expected.origin;
 };
 
-const validToken = (request: IncomingMessage, expected: string) => {
-  const header = request.headers.authorization;
-  if (typeof header !== 'string') return false;
-  const match = /^Bearer ([^\s]+)$/.exec(header);
-  if (!match) return false;
-  const actual = Buffer.from(match[1], 'utf8');
-  const wanted = Buffer.from(expected, 'utf8');
-  return actual.length === wanted.length && timingSafeEqual(actual, wanted);
-};
-
-const safeAccessToken = (value: string | undefined) => value?.trim() || '';
-
-const validateEntryConfiguration = (configuredHost: string, accessToken: string, allowedHosts: HostAuthority[]) => {
-  if (isLoopbackHost(configuredHost)) return;
-  if (!accessToken || !allowedHosts.length) throw new Error('Story host 安全配置无效。');
+const validateEntryConfiguration = (configuredHost: string) => {
+  if (!isLoopbackHost(configuredHost)) throw new Error('Story host 只支持本机 loopback 地址。');
 };
 
 const contentTypes: Record<string, string> = {
@@ -271,26 +240,17 @@ export const createStoryServer = (
   storyStore = new StoryStore(),
   providerStore = new ProviderStore(),
   staticRoot?: string,
-  options: StoryServerOptions = {},
 ) => {
-  const accessToken = safeAccessToken(options.accessToken);
-  const allowedHosts = parseAllowedHosts(options.allowedHosts);
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
     let generationSignal: AbortSignal | undefined;
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const actualHost = requestHost(request);
-      const hostAllowed = actualHost && (allowedHosts.length
-        ? allowedHosts.some((trustedHost) => hostMatches(actualHost, trustedHost))
-        : isLoopbackHost(actualHost.hostname));
+      const hostAllowed = actualHost && isLoopbackHost(actualHost.hostname);
       if (!hostAllowed) return sendJson(response, 403, { error: '请求来源不被允许。' });
       const stateChanging = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE';
       if (stateChanging && actualHost && !sameOrigin(request, actualHost)) {
         return sendJson(response, 403, { error: '请求来源不被允许。' });
-      }
-      const isHealth = request.method === 'GET' && url.pathname === '/api/health';
-      if (accessToken && url.pathname.startsWith('/api/') && !isHealth && !validToken(request, accessToken)) {
-        return sendJson(response, 401, { error: '需要访问凭据。' });
       }
       if (request.method === 'GET' && url.pathname === '/api/health') {
         return sendJson(response, 200, { ok: true });
@@ -340,7 +300,7 @@ export const createStoryServer = (
         const body = await readGenerationRequest(request);
         const book = await storyStore.loadBook(body.bookId);
         const limits = await providerStore.getContextLimits(body.providerProfileId);
-        return sendJson(response, 200, buildContextPlan(book, body, limits));
+        return sendJson(response, 200, buildContextPreview(book, body, limits));
       }
       if (request.method === 'POST' && url.pathname === '/api/generate') {
         const generationController = new AbortController();
@@ -368,14 +328,13 @@ export const createStoryServer = (
           if (generated !== null) {
             responseStarted = true;
             return sendJson(response, 200, {
-              plan,
               draft: body.generationKind === 'summarize-section'
                 ? normalizeSectionMemoryResponse(generated)
                 : generated,
             });
           }
           responseStarted = true;
-          return sendJson(response, 200, fakeGenerate(book, body, limits));
+          return sendJson(response, 200, { draft: fakeGenerate(book, body, limits).draft });
         } finally {
           responseStarted = true;
           request.off('aborted', abortOnClientDisconnect);
@@ -385,6 +344,9 @@ export const createStoryServer = (
       if (knownRouteMethods[url.pathname]) {
         response.setHeader('allow', knownRouteMethods[url.pathname].join(', '));
         return sendJson(response, 405, { error: '这个 DEMO API 不支持当前请求方法。' });
+      }
+      if (url.pathname.startsWith('/api/')) {
+        return sendJson(response, 404, { error: '未找到这个 DEMO API。' });
       }
       if (staticRoot && await serveStatic(request, response, staticRoot, url.pathname)) return;
       return sendJson(response, 404, { error: '未找到这个 DEMO API。' });
@@ -399,6 +361,8 @@ export const createStoryServer = (
           ? error.statusCode
           : error instanceof RequestValidationError || error instanceof StoreInputError
             ? error.statusCode
+            : error instanceof ProviderResponseError
+              ? error.statusCode
             : error instanceof ProviderInputError || error instanceof ProviderConnectionError
               ? error.statusCode
               : 500;
@@ -406,6 +370,7 @@ export const createStoryServer = (
         || error instanceof BookNotFoundError
         || error instanceof RequestValidationError
         || error instanceof StoreInputError
+        || error instanceof ProviderResponseError
         || error instanceof ProviderInputError
         || error instanceof ProviderConnectionError
         ? error.message
@@ -421,15 +386,12 @@ const isEntryPoint = process.argv[1]
   && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isEntryPoint) {
-  const accessToken = safeAccessToken(process.env.STORY_ACCESS_TOKEN);
-  const rawAllowedHosts = process.env.STORY_ALLOWED_HOSTS?.split(',').map((value) => value.trim()).filter(Boolean);
-  const allowedHosts = parseAllowedHosts(rawAllowedHosts);
-  validateEntryConfiguration(host, accessToken, allowedHosts);
+  validateEntryConfiguration(host);
   const staticRoot = process.env.STORY_STATIC_DIR ?? path.resolve('dist-local');
   const providerStore = new ProviderStore(undefined, {
     allowPrivateNetwork: process.env.STORY_ALLOW_PRIVATE_PROVIDERS === '1',
   });
-  const server = createStoryServer(undefined, providerStore, staticRoot, { accessToken, allowedHosts: rawAllowedHosts });
+  const server = createStoryServer(undefined, providerStore, staticRoot);
   server.listen(port, host, () => {
     console.log(`Story host ready at http://${host}:${port}`);
   });

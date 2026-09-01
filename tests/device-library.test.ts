@@ -100,4 +100,26 @@ describe('device-local library', () => {
     });
     expect(loaded.chapters[0]?.sections[0]?.plan).toBeUndefined();
   });
+
+  it('returns only aggregate preview metadata and a draft-only generation result', async () => {
+    const book = (await deviceLibrary.listBooks())[0];
+    if (!book) throw new Error('device fixture book missing');
+    const loaded = await deviceLibrary.loadBook(book.id);
+    const section = loaded.chapters[0]?.sections[0];
+    if (!section) throw new Error('device fixture section missing');
+    const request = {
+      bookId: loaded.id,
+      sectionId: section.id,
+      mode: 'author' as const,
+      instruction: 'Synthetic continuation input.',
+    };
+
+    const preview = await deviceLibrary.contextPlan(request);
+    expect(preview).not.toHaveProperty('messages');
+    expect(JSON.stringify(preview)).not.toContain(section.content);
+
+    const result = await deviceLibrary.generate(request);
+    expect(result).toEqual({ draft: expect.any(String) });
+    expect(result).not.toHaveProperty('plan');
+  });
 });

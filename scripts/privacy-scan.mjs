@@ -16,34 +16,6 @@ const binaryAllowlist = new Map([
     format: 'brotli-font',
     sha256: 'b3eb68cfb287957f43c8752dcac219a144b41306d71b2b46cdf3dbc2f89e126a',
   }],
-  ['public/icons/apple-icon-57x57.png', {
-    format: 'png',
-    sha256: '10eae804d2e5d289552e73337084cf6af38ef79a3b6917ba0ad8922a161e63f6',
-  }],
-  ['public/icons/apple-icon-72x72.png', {
-    format: 'png',
-    sha256: '5cdf8d43db49ffc00efe4e8076414da34a0f3a0604955acf4507a9570fb5140c',
-  }],
-  ['public/icons/apple-icon-114x114.png', {
-    format: 'png',
-    sha256: '844e78300180b904b3b27493263d00d149dab8d46ab51db6dfbc9fc662a2bcee',
-  }],
-  ['public/icons/apple-icon-144x144.png', {
-    format: 'png',
-    sha256: 'daf5373ebe1af2d7463fce26e64e92285410212b809d7a5b4c9a51fd47323e50',
-  }],
-  ['public/icons/apple-icon-192x192.png', {
-    format: 'png',
-    sha256: 'f836bab8263c21e279ba489cce0554d0e25014fbac4e8f38f722c0b80580f63e',
-  }],
-  ['public/icons/apple-icon-512x512.png', {
-    format: 'png',
-    sha256: '86b85c728ca97eccf8d59b5e6a2819a5119406fa5288945310ed456c3e16d786',
-  }],
-  ['public/icons/favicon.ico', {
-    format: 'ico',
-    sha256: '05eb23508b4cb8e6a917eab4d6a41ace7ca12b76a21654a8a64ffa69ed21ee38',
-  }],
 ]);
 
 for (const [file, entry] of binaryAllowlist) {
@@ -62,13 +34,15 @@ for (const file of binaryAllowlist.keys()) {
 }
 
 const syntheticNetworkRules = [
-  { file: 'README.md', pattern: /127\.0\.0\.1/g },
+  { file: 'README.md', pattern: /(?:127\.0\.0\.1|::1)/g },
+  { file: 'SECURITY.md', pattern: /(?:127\.0\.0\.1|::1)/g },
+  { file: 'docs/decisions/0001-local-host-web-demo.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'server/main.ts', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|0\.0\.0\.0|::1)/g },
   { file: 'server/providers.ts', pattern: /(?:0\.0\.0\.0|10\.0\.0\.0|100\.64\.0\.0|127\.0\.0\.0|169\.254\.0\.0|172\.16\.0\.0|192\.0\.0\.0|192\.168\.0\.0|198\.18\.0\.0|224\.0\.0\.0|240\.0\.0\.0|169\.254\.169\.254|100\.100\.100\.200|192\.0\.0\.192|fd00:ec2::254|fc00::|fec0::|ff00::|fe80::|::1|::ffff:(?:0\.0\.0\.0|10\.0\.0\.0|100\.64\.0\.0|127\.0\.0\.0|169\.254\.0\.0|172\.16\.0\.0|192\.0\.0\.0|192\.168\.0\.0|198\.18\.0\.0|224\.0\.0\.0|240\.0\.0\.0)|::$)/g },
   { file: 'tests/providers.test.ts', pattern: /(?:127\.0\.0\.1|8\.8\.8\.8|1\.1\.1\.1|192\.168\.1\.10|169\.254\.169\.254|100\.100\.100\.200|192\.0\.0\.192|fd00:ec2::254|fe80::1|fd12::10|::ffff:192\.168\.1\.10|::1)/g },
   { file: 'tests/server-entry.test.ts', pattern: /127\.0\.0\.1/g },
   { file: 'tests/store.test.ts', pattern: /127\.0\.0\.1/g },
-  { file: 'scripts/dev.mjs', pattern: /127\.0\.0\.1/g },
+  { file: 'scripts/dev.mjs', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|::1|::ffff:127\.0\.0\.0)/g },
   { file: 'vite.config.ts', pattern: /127\.0\.0\.1/g },
 ];
 

@@ -6,12 +6,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
-import {
-  api,
-  HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY,
-  HOST_ACCESS_TOKEN_STORAGE_KEY,
-  saveHostAccessTokenSettings,
-} from '../src/api';
 import { createSectionMemory } from '../src/sectionMemory';
 
 const requestWithHost = (port: number, pathname: string, host: string) => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
@@ -71,6 +65,11 @@ describe('local server entry', () => {
       expect(assetResponse.headers.get('content-type')).toBe('text/css; charset=utf-8');
       expect(await assetResponse.text()).toContain('purple');
       await expect(healthResponse.json()).resolves.toEqual({ ok: true });
+
+      const unknownApi = await fetch(`${origin}/api/not-a-route`);
+      expect(unknownApi.status).toBe(404);
+      expect(unknownApi.headers.get('content-type')).toContain('application/json');
+      expect(await unknownApi.text()).not.toContain('Story Bookshelf');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       await rm(staticRoot, { recursive: true, force: true });
@@ -161,7 +160,7 @@ describe('local server entry', () => {
         }),
       });
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({ draft: 'Synthetic generated text.' });
+      await expect(response.json()).resolves.toEqual({ draft: 'Synthetic generated text.' });
       expect(providerStore.getContextLimits).toHaveBeenCalledWith('synthetic-provider');
       expect(providerStore.generate).toHaveBeenCalledOnce();
     } finally {
@@ -243,7 +242,7 @@ describe('local server entry', () => {
         body,
       });
       expect(first.status).toBe(200);
-      await expect(first.json()).resolves.toMatchObject({ draft: validDraft });
+      await expect(first.json()).resolves.toEqual({ draft: validDraft });
       const messages = providerStore.generate.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
       expect(messages[1]?.content).toContain('Only this text is summarized.');
       expect(messages[1]?.content).not.toContain('Should not enter summary input.');
@@ -254,9 +253,67 @@ describe('local server entry', () => {
         headers: { 'content-type': 'application/json' },
         body,
       });
-      expect(second.status).toBe(400);
+      expect(second.status).toBe(502);
       expect(await second.text()).toContain('Section memory draft');
       expect(storyStore.saveBook).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('returns a redacted context preview without manuscript, messages, or internal IDs', async () => {
+    const book = {
+      id: 'preview-book',
+      title: 'Synthetic Preview Book',
+      plotOutline: 'Private outline that must stay server-side.',
+      writingBrief: 'Private writing brief that must stay server-side.',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'preview-chapter',
+        title: 'Synthetic Chapter',
+        sections: [{ id: 'preview-section', title: 'Synthetic Section', content: 'Private manuscript body.' }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const storyStore = { loadBook: vi.fn(async () => book) };
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+    };
+    const server = createStoryServer(storyStore as never, providerStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/context-plan`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          bookId: book.id,
+          sectionId: 'preview-section',
+          providerProfileId: 'synthetic-provider',
+          mode: 'author',
+          instruction: 'Private instruction that must stay server-side.',
+        }),
+      });
+      expect(response.status).toBe(200);
+      const preview = await response.json() as Record<string, unknown>;
+      expect(preview).toHaveProperty('included');
+      expect(preview).toHaveProperty('excluded');
+      expect(preview).not.toHaveProperty('bookId');
+      expect(preview).not.toHaveProperty('target');
+      expect(preview).not.toHaveProperty('messages');
+      const serialized = JSON.stringify(preview);
+      expect(serialized).not.toContain('Private manuscript body.');
+      expect(serialized).not.toContain('Private outline that must stay server-side.');
+      expect(serialized).not.toContain('Private instruction that must stay server-side.');
+      for (const key of ['id', 'content', 'source', 'sourceId', 'messageRole', 'blockIds']) {
+        expect(serialized).not.toContain(`"${key}"`);
+      }
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -327,11 +384,9 @@ describe('local server entry', () => {
     }
   });
 
-  it('keeps loopback health public and protects other APIs with the configured token', async () => {
-    const server = createStoryServer(undefined, undefined, undefined, {
-      accessToken: 'synthetic-access-token',
-      allowedHosts: ['127.0.0.1'],
-    });
+  it('keeps loopback APIs available and rejects untrusted Host headers', async () => {
+    const providerStore = { list: vi.fn(async () => []) };
+    const server = createStoryServer(undefined, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -344,19 +399,8 @@ describe('local server entry', () => {
       await expect(health.json()).resolves.toEqual({ ok: true });
 
       const missing = await fetch(`${origin}/api/providers`);
-      expect(missing.status).toBe(401);
-      expect(await missing.text()).not.toContain('synthetic-access-token');
-
-      const wrong = await fetch(`${origin}/api/providers`, {
-        headers: { authorization: 'Bearer wrong-token' },
-      });
-      expect(wrong.status).toBe(401);
-
-      const correct = await fetch(`${origin}/api/providers`, {
-        headers: { authorization: 'Bearer synthetic-access-token' },
-      });
-      expect(correct.status).toBe(200);
-      expect(await correct.text()).not.toContain('synthetic-access-token');
+      expect(missing.status).toBe(200);
+      await expect(missing.json()).resolves.toEqual([]);
 
       const untrustedHost = await requestWithHost(address.port, '/api/health', 'untrusted.synthetic');
       expect(untrustedHost.status).toBe(403);
@@ -374,21 +418,9 @@ describe('local server entry', () => {
       timeout: 3000,
     });
 
-    const missingToken = run({
-      STORY_HOST: '192.0.2.10',
-      STORY_ACCESS_TOKEN: '',
-      STORY_ALLOWED_HOSTS: '192.0.2.10',
-    });
-    expect(missingToken.status).not.toBe(0);
-    expect(`${missingToken.stdout}${missingToken.stderr}`).not.toContain('192.0.2.10');
-
-    const missingTrustedHost = run({
-      STORY_HOST: '192.0.2.10',
-      STORY_ACCESS_TOKEN: 'synthetic-entry-token',
-      STORY_ALLOWED_HOSTS: '',
-    });
-    expect(missingTrustedHost.status).not.toBe(0);
-    expect(`${missingTrustedHost.stdout}${missingTrustedHost.stderr}`).not.toContain('synthetic-entry-token');
+    const rejected = run({ STORY_HOST: '192.0.2.10' });
+    expect(rejected.status).not.toBe(0);
+    expect(`${rejected.stdout}${rejected.stderr}`).not.toContain('192.0.2.10');
   });
 
   it('requires same-origin for state-changing requests', async () => {
@@ -404,10 +436,7 @@ describe('local server entry', () => {
     const providerStore = {
       save: vi.fn(async () => savedProfile),
     };
-    const server = createStoryServer(undefined, providerStore as never, undefined, {
-      accessToken: 'synthetic-origin-token',
-      allowedHosts: ['127.0.0.1'],
-    });
+    const server = createStoryServer(undefined, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -417,7 +446,6 @@ describe('local server entry', () => {
       const request = {
         method: 'POST',
         headers: {
-          authorization: 'Bearer synthetic-origin-token',
           'content-type': 'application/json',
         },
         body: JSON.stringify({ profile: savedProfile }),
@@ -428,7 +456,6 @@ describe('local server entry', () => {
         headers: { ...request.headers, Origin: 'http://untrusted.synthetic' },
       });
       expect(crossOrigin.status).toBe(403);
-      expect(await crossOrigin.text()).not.toContain('synthetic-origin-token');
       expect(providerStore.save).not.toHaveBeenCalled();
 
       const sameOrigin = await fetch(`${origin}/api/providers`, {
@@ -442,43 +469,4 @@ describe('local server entry', () => {
     }
   });
 
-  it('keeps access tokens opt-in and never opens a browser prompt', async () => {
-    const localStored = new Map<string, string>();
-    const sessionStored = new Map([[HOST_ACCESS_TOKEN_STORAGE_KEY, 'stale-session-token']]);
-    vi.stubGlobal('localStorage', {
-      getItem: (key: string) => localStored.get(key) ?? null,
-      setItem: (key: string, value: string) => localStored.set(key, value),
-      removeItem: (key: string) => localStored.delete(key),
-    });
-    vi.stubGlobal('sessionStorage', {
-      getItem: (key: string) => sessionStored.get(key) ?? null,
-      setItem: (key: string, value: string) => sessionStored.set(key, value),
-      removeItem: (key: string) => sessionStored.delete(key),
-    });
-    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => (
-      new Response('[]', { status: 200 })
-    ));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(api.listBooks()).resolves.toEqual([]);
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('authorization'))
-      .toBeNull();
-
-    saveHostAccessTokenSettings(true, 'fresh-session-token');
-    await expect(api.listBooks()).resolves.toEqual([]);
-    expect(localStored.get(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY)).toBe('1');
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('authorization'))
-      .toBe('Bearer fresh-session-token');
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/library');
-  });
-
-  it('turns a 401 into settings guidance without retrying', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: '需要访问凭据。' }), { status: 401 }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(api.listBooks()).rejects.toThrow('请在设置中启用或检查密码');
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
 });

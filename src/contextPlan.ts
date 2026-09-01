@@ -1,10 +1,16 @@
-import { defaultProviderProfiles } from './providerProfiles.ts';
+import {
+  defaultProviderProfiles,
+  isValidProviderLimit,
+  MAX_PROVIDER_CONTEXT_TOKENS,
+  MAX_PROVIDER_OUTPUT_TOKENS,
+} from './providerProfiles.ts';
 import { isEligibleSectionMemory, normalizeBook, sectionMemoryFreshness } from './sectionMemory.ts';
 import { estimateTokens } from './textMetrics.ts';
 import type {
   Book,
   ContextBudget,
   ContextPlan,
+  ContextPlanPreview,
   ContextTarget,
   GenerationKind,
   GenerationRequest,
@@ -374,8 +380,8 @@ const generationKinds: GenerationKind[] = [
 ];
 
 const normalizedLimits = (limits?: ProviderLimits): ProviderLimits => (
-  limits && Number.isFinite(limits.maxContext) && limits.maxContext > 0
-    && Number.isFinite(limits.maxOutput) && limits.maxOutput > 0
+  limits && isValidProviderLimit(limits.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
+    && isValidProviderLimit(limits.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS)
     ? { maxContext: limits.maxContext, maxOutput: limits.maxOutput }
     : { ...DEFAULT_PROVIDER_LIMITS }
 );
@@ -420,31 +426,27 @@ const packetFor = (
   version: 1,
   generationKind,
   target: {
-    ...target,
     locator: {
-      book: { id: book.id, title: book.title, index: 0 },
-      chapter: { id: chapter.id, title: chapter.title, index: target.chapterIndex },
-      section: { id: section.id, title: section.title, index: target.sectionIndex },
+      book: { title: book.title, index: 0 },
+      chapter: { title: chapter.title, index: target.chapterIndex },
+      section: { title: section.title, index: target.sectionIndex },
     },
   },
   mode: request.mode,
   ...(generationKind === 'summarize-section' ? {} : {
-    selectedCharacterId: selectedCharacter?.id,
     selectedCharacterName: selectedCharacter?.name,
   }),
   blocks: userBlocks.map((item) => ({
-    id: item.id,
+    kind: item.semanticRole,
     title: item.title,
     content: item.content,
-    messageRole: item.messageRole,
-    semanticRole: item.semanticRole,
-    source: item.source,
-    manualSelection: item.manualSelection,
-    freshness: item.freshness,
-    transformedFrom: item.transformedFrom,
-    truncated: item.truncated,
-    ...(item.truncationReason ? { truncationReason: item.truncationReason } : {}),
-    future: item.future,
+    ...(item.source?.chapterIndex !== undefined || item.source?.sectionIndex !== undefined ? {
+      location: {
+        ...(item.source.chapterIndex !== undefined ? { chapterIndex: item.source.chapterIndex } : {}),
+        ...(item.source.sectionIndex !== undefined ? { sectionIndex: item.source.sectionIndex } : {}),
+      },
+    } : {}),
+    ...(item.future ? { future: true } : {}),
   })),
 });
 
@@ -477,10 +479,6 @@ const messagesFor = (
   ];
 };
 
-const promptFrom = (messages: PromptMessage[]) => messages
-  .map((message) => `${message.role}: ${message.content}`)
-  .join('\n\n');
-
 export const estimateMessages = (messages: PromptMessage[]): number => estimateTokens(JSON.stringify(
   messages.map((message) => ({ role: message.role, content: message.content })),
 ));
@@ -501,6 +499,28 @@ export const messageFramingResidual = (plan: Pick<ContextPlan, 'included' | 'est
   0,
   plan.estimatedTokens - plan.included.reduce((total, item) => total + item.estimatedTokens, 0),
 );
+
+const previewItem = (item: PromptBlock) => ({
+  layer: item.layer,
+  cacheBand: item.cacheBand,
+  title: item.title,
+  reason: item.reason,
+  included: item.included,
+  charCount: item.charCount,
+  estimatedTokens: item.estimatedTokens,
+  semanticRole: item.semanticRole,
+  ...(item.manualSelection ? { manualSelection: true } : {}),
+  ...(item.future ? { future: true } : {}),
+});
+
+export const toContextPlanPreview = (plan: ContextPlan): ContextPlanPreview => ({
+  mode: plan.mode,
+  generationKind: plan.generationKind,
+  included: plan.included.map(previewItem),
+  excluded: plan.excluded.map(previewItem),
+  estimatedTokens: plan.estimatedTokens,
+  budget: plan.budget,
+});
 
 const budgetFor = (limits: ProviderLimits, estimatedInput: number): ContextBudget => {
   const availableInput = Math.max(
@@ -537,9 +557,11 @@ export function buildContextPlan(
   const target = findTarget(book, request.sectionId);
   const chapter = book.chapters[target.chapterIndex];
   const section = chapter.sections[target.sectionIndex];
-  assertReferenceMemoryAvailability(book, target, section);
   let selectedCharacter: Book['characters'][number] | undefined;
-  if (request.mode === 'character') {
+  if (generationKind !== 'summarize-section') {
+    assertReferenceMemoryAvailability(book, target, section);
+  }
+  if (generationKind !== 'summarize-section' && request.mode === 'character') {
     selectedCharacter = book.characters.find((character) => character.id === request.selectedCharacterId);
     if (!selectedCharacter) throw new ContextPlanInputError('角色模式只能选择当前 Book 中的角色。');
   }
@@ -658,7 +680,7 @@ export function buildContextPlan(
     ));
   }
 
-  if (generationKind !== 'summarize-section') {
+  if (generationKind === 'continue-section') {
     blocks.push(block(
       book.id,
       'note',
@@ -677,7 +699,7 @@ export function buildContextPlan(
     ));
   }
 
-  if (generationKind !== 'summarize-section') {
+  if (generationKind === 'continue-section') {
     blocks.push(block(
       book.id,
       'instruction',
@@ -713,7 +735,6 @@ export function buildContextPlan(
     included,
     excluded,
     messages,
-    prompt: promptFrom(messages),
     estimatedTokens,
     budget,
   };

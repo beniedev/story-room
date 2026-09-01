@@ -3,7 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
-import { defaultProviderProfiles, type ProviderProfile } from '../src/providerProfiles.ts';
+import {
+  defaultProviderProfiles,
+  isValidProviderLimit,
+  MAX_PROVIDER_CONTEXT_TOKENS,
+  MAX_PROVIDER_OUTPUT_TOKENS,
+  type ProviderProfile,
+} from '../src/providerProfiles.ts';
 import type { PromptMessage, ProviderLimits } from '../src/types.ts';
 
 type StoredProviderProfile = ProviderProfile & {
@@ -137,9 +143,9 @@ const validateProfile = (profile: ProviderProfile) => {
     throw new ProviderInputError('连接方案名称和模型 ID 不能为空。');
   }
   if (profile.kind !== 'fake' && profile.kind !== 'openai-compatible') throw new ProviderInputError('连接方案类型无效。');
-  if (!Number.isFinite(profile.maxContext) || profile.maxContext <= 0
-    || !Number.isFinite(profile.maxOutput) || profile.maxOutput <= 0) {
-    throw new ProviderInputError('上下文与输出上限必须是正数。');
+  if (!isValidProviderLimit(profile.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
+    || !isValidProviderLimit(profile.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS)) {
+    throw new ProviderInputError('上下文与输出上限必须是合理的正整数。');
   }
   if (typeof profile.baseUrl !== 'string') throw new ProviderInputError('连接地址必须是有效 URL。');
   parseProviderUrl(profile.baseUrl);

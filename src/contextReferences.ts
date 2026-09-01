@@ -2,33 +2,7 @@ import type {
   Book,
   Section,
   SectionContextReference,
-  SectionContextReferenceMode,
 } from './types';
-
-export type SectionReferenceMode = SectionContextReferenceMode | 'none';
-
-export const sectionReferenceModes: readonly SectionReferenceMode[] = [
-  'none',
-  'full',
-  'summary',
-  'both',
-];
-
-export const referenceModeFor = (
-  references: SectionContextReference[] | undefined,
-  sectionId: string,
-): SectionReferenceMode => references?.find((reference) => reference.sectionId === sectionId)?.mode ?? 'none';
-
-export const setReferenceMode = (
-  references: SectionContextReference[] | undefined,
-  sectionId: string,
-  mode: SectionReferenceMode,
-): SectionContextReference[] | undefined => {
-  const next = new Map((references ?? []).map((reference) => [reference.sectionId, reference] as const));
-  next.delete(sectionId);
-  if (mode !== 'none') next.set(sectionId, { sectionId, mode, reason: 'manual' });
-  return next.size ? [...next.values()] : undefined;
-};
 
 export const selectAllUnsetReferences = (
   references: SectionContextReference[] | undefined,

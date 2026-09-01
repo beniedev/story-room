@@ -8,6 +8,14 @@ export interface ProviderProfile {
   maxOutput: number;
 }
 
+export const PROVIDER_PROFILES_STORAGE_KEY = 'story-native:provider-profiles';
+export const MAX_PROVIDER_CONTEXT_TOKENS = 10_000_000;
+export const MAX_PROVIDER_OUTPUT_TOKENS = 1_000_000;
+
+export const isValidProviderLimit = (value: number, maximum: number) => (
+  Number.isSafeInteger(value) && value > 0 && value <= maximum
+);
+
 export const defaultProviderProfiles: ProviderProfile[] = [
   {
     id: 'provider-primary',
@@ -37,10 +45,10 @@ const isProviderProfile = (value: unknown): value is ProviderProfile => {
     && (candidate.kind === 'fake' || candidate.kind === 'openai-compatible')
     && typeof candidate.baseUrl === 'string'
     && typeof candidate.modelId === 'string'
-    && Number.isFinite(candidate.maxContext)
-    && Number.isFinite(candidate.maxOutput)
-    && Number(candidate.maxContext) > 0
-    && Number(candidate.maxOutput) > 0;
+    && typeof candidate.maxContext === 'number'
+    && typeof candidate.maxOutput === 'number'
+    && isValidProviderLimit(candidate.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
+    && isValidProviderLimit(candidate.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS);
 };
 
 const normalizeProviderProfile = (profile: ProviderProfile): ProviderProfile => ({

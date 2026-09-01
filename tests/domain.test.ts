@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildContextPlan, fakeGenerate } from '../server/domain.ts';
-import { estimateMessages, messageFramingResidual } from '../src/contextPlan.ts';
+import { estimateMessages, messageFramingResidual, toContextPlanPreview } from '../src/contextPlan.ts';
 import { estimateTokens } from '../src/textMetrics.ts';
 import { createSectionMemory } from '../src/sectionMemory';
-import type { Book } from '../src/types.ts';
+import type { Book, ContextPlan } from '../src/types.ts';
+
+const promptText = (plan: ContextPlan) => plan.messages
+  .map((message) => `${message.role}: ${message.content}`)
+  .join('\n\n');
 
 const makeBook = (id: string, marker: string): Book => ({
   id,
@@ -46,18 +50,18 @@ describe('context plan', () => {
     });
 
     expect(plan.included.every((item) => item.bookId === 'book-a')).toBe(true);
-    expect(plan.prompt).toContain('Outline ALPHA');
+    expect(promptText(plan)).toContain('Outline ALPHA');
     expect(plan.messages[1]?.content).toContain('Outline ALPHA');
     expect(plan.included.find((item) => item.sourceId === 'book-a:outline')).toMatchObject({
       title: '剧情大纲',
       semanticRole: 'outline-future',
       future: true,
     });
-    expect(plan.prompt).toContain('Brief ALPHA');
-    expect(plan.prompt).toContain('World context ALPHA');
-    expect(plan.prompt).not.toContain('Canon context ALPHA');
-    expect(plan.prompt).not.toContain('Summary context ALPHA');
-    expect(plan.prompt).not.toContain('BRAVO');
+    expect(promptText(plan)).toContain('Brief ALPHA');
+    expect(promptText(plan)).toContain('World context ALPHA');
+    expect(promptText(plan)).not.toContain('Canon context ALPHA');
+    expect(promptText(plan)).not.toContain('Summary context ALPHA');
+    expect(promptText(plan)).not.toContain('BRAVO');
     expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-summary');
     expect([...plan.included, ...plan.excluded].map((item) => item.sourceId)).not.toContain('book-a-canon');
   });
@@ -100,6 +104,24 @@ describe('context plan', () => {
       'dynamic',
       'dynamic',
     ]);
+  });
+
+  it('exposes only aggregate context metadata in the API preview shape', () => {
+    const plan = buildContextPlan(makeBook('book-a', 'ALPHA'), {
+      sectionId: 'book-a-section',
+      mode: 'author',
+      instruction: 'Continue ALPHA',
+    });
+    const preview = toContextPlanPreview(plan);
+    const serialized = JSON.stringify(preview);
+
+    expect(preview.included.length).toBe(plan.included.length);
+    expect(preview.estimatedTokens).toBe(plan.estimatedTokens);
+    expect(serialized).not.toContain('Manuscript ALPHA');
+    expect(serialized).not.toContain('Outline ALPHA');
+    expect(serialized).not.toContain('Continue ALPHA');
+    expect(preview).not.toHaveProperty('messages');
+    expect(preview.included.every((item) => !('content' in item) && !('sourceId' in item))).toBe(true);
   });
 
   it('emits an isolated target and two stable-role messages with encoded story data', () => {
@@ -148,13 +170,13 @@ describe('context plan', () => {
       target?: { locator?: { book?: unknown; chapter?: unknown; section?: unknown } };
     };
     expect(parsedPacket.target?.locator).toEqual({
-      book: { id: 'book-a', title: book.title, index: 0 },
-      chapter: { id: 'book-a-chapter', title: 'Chapter', index: 0 },
-      section: { id: 'book-a-section', title: 'Section', index: 0 },
+      book: { title: book.title, index: 0 },
+      chapter: { title: 'Chapter', index: 0 },
+      section: { title: 'Section', index: 0 },
     });
     expect(plan.messages[1]?.blockIds).not.toContain('system:system:manuscript-contract');
-    expect(plan.prompt).toContain('system:');
-    expect(plan.prompt).toContain('user:');
+    expect(promptText(plan)).toContain('system:');
+    expect(promptText(plan)).toContain('user:');
   });
 
   it('keeps legacy summaries and canon facts out of normal continuation prompts', () => {
@@ -171,7 +193,7 @@ describe('context plan', () => {
 
     expect(plan.included.map((item) => item.sourceId)).not.toContain(summary.id);
     expect(plan.excluded.map((item) => item.sourceId)).not.toContain(summary.id);
-    expect(plan.prompt).not.toContain('Summary context ALPHA');
+    expect(promptText(plan)).not.toContain('Summary context ALPHA');
     expect(plan.included.find((item) => item.sourceId === 'book-a:outline')).toMatchObject({
       semanticRole: 'outline-future',
       future: true,
@@ -397,7 +419,7 @@ describe('context plan', () => {
     });
     expect(plan.included.find((item) => item.semanticRole === 'outline-future'
       && item.source?.sectionId === section.id)).toBeUndefined();
-    expect(plan.prompt).not.toContain('Future goal');
+    expect(promptText(plan)).not.toContain('Future goal');
   });
 
   it('builds regenerate-block context around only the selected assistant block', () => {
@@ -436,12 +458,12 @@ describe('context plan', () => {
     const prefixIndex = plan.included.findIndex((item) => item.title === 'TARGET prefix');
     const targetBlockIndex = plan.included.findIndex((item) => item.title === 'TARGET target');
     const suffixIndex = plan.included.findIndex((item) => item.title === 'TARGET suffix');
-    const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
-    const instructionIndex = plan.included.findIndex((item) => item.layer === 'instruction');
     expect(prefixIndex).toBeLessThan(targetBlockIndex);
     expect(targetBlockIndex).toBeLessThan(suffixIndex);
-    expect(suffixIndex).toBeLessThan(noteIndex);
-    expect(noteIndex).toBeLessThan(instructionIndex);
+    expect(plan.included.some((item) => item.layer === 'note')).toBe(false);
+    expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
+    expect(packet).not.toContain('Synthetic transient note.');
+    expect(packet).not.toContain('Rewrite only the target block.');
     expect(() => buildContextPlan(book, {
       sectionId: section.id,
       mode: 'author',
@@ -460,9 +482,26 @@ describe('context plan', () => {
 
   it('executes summary contract without mixing other story context and keeps rewrite unsupported', () => {
     const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    const earlier = {
+      id: 'book-a-earlier',
+      title: 'Earlier section',
+      content: 'Earlier manuscript changed after summary.',
+      memory: createSectionMemory({
+        synopsis: 'Stale synopsis.',
+        beats: [],
+        continuityFacts: [],
+        characterStateChanges: [],
+        foreshadowingCandidates: [],
+      }, 'Earlier manuscript before change.', 'model-confirmed'),
+    };
+    book.chapters[0]!.sections.unshift(earlier);
+    section.contextReferences = [{ sectionId: earlier.id, mode: 'summary', reason: 'manual' }];
     const summaryPlan = buildContextPlan(book, {
       sectionId: 'book-a-section',
-      mode: 'author',
+      mode: 'character',
+      selectedCharacterId: 'missing-character',
       instruction: 'Summarize this section.',
       generationKind: 'summarize-section',
     });
@@ -694,9 +733,9 @@ describe('context plan', () => {
     expect(plan.included[noteIndex]?.title).toBe('小节注释');
     expect(plan.included[noteIndex]?.sourceId).toBe('request:author-note');
     expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
-    expect(plan.prompt).toContain('请让灯光熄灭后');
-    expect(plan.prompt).not.toContain('Legacy persisted section note');
-    expect(plan.prompt).not.toContain('Other legacy section note');
+    expect(promptText(plan)).toContain('请让灯光熄灭后');
+    expect(promptText(plan)).not.toContain('Legacy persisted section note');
+    expect(promptText(plan)).not.toContain('Other legacy section note');
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
   });
 
@@ -736,9 +775,9 @@ describe('context plan', () => {
     expect(result.plan.included.map((item) => item.sourceId)).toContain('book-a-character');
     expect(result.plan.included.findIndex((item) => item.sourceId === 'book-a-character'))
       .toBeLessThan(result.plan.included.findIndex((item) => item.sourceId === 'mode:character'));
-    expect(result.plan.prompt).toContain('第一人称连续小说正文');
-    expect(result.plan.prompt).toContain('AI 控制环境');
-    expect(result.plan.prompt).toContain('角色身份：Observer');
+    expect(promptText(result.plan)).toContain('第一人称连续小说正文');
+    expect(promptText(result.plan)).toContain('AI 控制环境');
+    expect(promptText(result.plan)).toContain('角色身份：Observer');
     expect(result.draft.startsWith('我')).toBe(true);
     expect(result.draft).not.toContain('Character ALPHA');
     expect(result.draft).not.toMatch(/User:|Assistant:/);

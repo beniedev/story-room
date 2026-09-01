@@ -14,6 +14,7 @@ dist-local/
 local-exports/
 local-vaults/
 .frontend-design/
+public/icons/
 public/fonts/LXGWWenKaiLite-Regular.ttf
 coverage/
 .wrangler/

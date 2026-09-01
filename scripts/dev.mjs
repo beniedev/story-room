@@ -1,12 +1,32 @@
 import { spawn } from 'node:child_process';
+import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const hostFlag = process.argv.indexOf('--host');
-const host = hostFlag >= 0 ? process.argv[hostFlag + 1] : '127.0.0.1';
+const host = (hostFlag >= 0 ? process.argv[hostFlag + 1] : '127.0.0.1')?.trim();
+
+const loopbackHosts = new BlockList();
+loopbackHosts.addSubnet('127.0.0.0', 8, 'ipv4');
+loopbackHosts.addAddress('::1', 'ipv6');
+loopbackHosts.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
+
+const isLoopbackHost = (value) => {
+  const hostname = value.toLowerCase().replace(/^\[|\]$/g, '');
+  if (hostname === 'localhost') return true;
+  const version = isIP(hostname);
+  return version === 4
+    ? loopbackHosts.check(hostname, 'ipv4')
+    : version === 6 && loopbackHosts.check(hostname, 'ipv6');
+};
 
 if (!host || host.startsWith('--')) {
-  console.error('Use: npm run dev -- --host <private-address>');
+  console.error('Use: npm run dev -- --host 127.0.0.1');
+  process.exit(1);
+}
+
+if (!isLoopbackHost(host)) {
+  console.error('Story host only supports local loopback addresses.');
   process.exit(1);
 }
 
@@ -22,10 +42,6 @@ const env = {
   STORY_API_HOST: host,
   VITE_HOST: host,
 };
-
-if (host !== '127.0.0.1' && host !== 'localhost') {
-  console.warn('Development mode: do not expose this server to the public internet.');
-}
 
 const children = [
   spawn(process.execPath, ['--watch', path.join(root, 'server', 'main.ts')], { cwd: root, env, stdio: 'inherit' }),

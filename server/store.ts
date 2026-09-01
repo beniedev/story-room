@@ -172,9 +172,12 @@ const validateSection = (value: unknown) => {
   requiredString(value.content, 'Section 正文');
   if (value.note !== undefined) requiredString(value.note, 'Section 注释');
   if (value.blocks !== undefined) {
+    const blockIds = new Set<string>();
     for (const block of requiredArray(value.blocks, 'Section blocks')) {
       if (!isRecord(block)) throw new StoreInputError('Section block 数据无效。');
-      validId(requiredString(block.id, 'Section block ID'));
+      const blockId = validId(requiredString(block.id, 'Section block ID'));
+      if (blockIds.has(blockId)) throw new StoreInputError('同一 Section 的 block ID 不得重复。');
+      blockIds.add(blockId);
       if (block.kind !== 'user' && block.kind !== 'assistant') {
         throw new StoreInputError('Section block kind 无效。');
       }
@@ -234,6 +237,63 @@ const validateBook = (book: Book) => {
     validId(requiredString(branch.id, 'Branch ID'));
     requiredString(branch.title, 'Branch 标题');
     validId(requiredString(branch.fromSectionId, 'Branch 来源 Section ID'));
+  }
+
+  const assertUniqueIds = (items: Array<{ id: string }>, label: string) => {
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (ids.has(item.id)) throw new StoreInputError(`${label} ID 不得重复。`);
+      ids.add(item.id);
+    }
+    return ids;
+  };
+
+  const characterIds = assertUniqueIds(book.characters, '角色卡');
+  assertUniqueIds(book.worldRules, '世界观设定');
+  assertUniqueIds(book.canonFacts, 'Canon 事实');
+  assertUniqueIds(book.summaries, 'Summary');
+  assertUniqueIds(book.chapters, 'Chapter');
+  assertUniqueIds(book.branches, 'Branch');
+
+  const sectionOrdinals = new Map<string, number>();
+  let ordinal = 0;
+  for (const chapter of book.chapters) {
+    for (const section of chapter.sections) {
+      if (sectionOrdinals.has(section.id)) throw new StoreInputError('Section ID 必须在整本 Book 内唯一。');
+      sectionOrdinals.set(section.id, ordinal);
+      ordinal += 1;
+    }
+  }
+
+  const assertExistingSection = (sectionId: string, label: string) => {
+    if (!sectionOrdinals.has(sectionId)) throw new StoreInputError(`${label}必须指向当前 Book 内存在的 Section。`);
+  };
+
+  for (const source of [...book.characters, ...book.worldRules, ...book.canonFacts, ...book.summaries]) {
+    for (const sectionId of source.loadedSectionIds ?? []) {
+      assertExistingSection(sectionId, '资料加载范围');
+    }
+  }
+  for (const summary of book.summaries) {
+    for (const sectionId of summary.sourceSectionIds) {
+      assertExistingSection(sectionId, 'Summary 来源');
+    }
+  }
+  for (const chapter of book.chapters) {
+    for (const section of chapter.sections) {
+      const targetOrdinal = sectionOrdinals.get(section.id)!;
+      for (const reference of section.contextReferences ?? []) {
+        const sourceOrdinal = sectionOrdinals.get(reference.sectionId);
+        if (sourceOrdinal === undefined) throw new StoreInputError('Section 前文参考必须指向当前 Book 内存在的 Section。');
+        if (sourceOrdinal >= targetOrdinal) throw new StoreInputError('Section 前文参考必须严格早于目标 Section。');
+      }
+      if (section.plan?.povCharacterId && !characterIds.has(section.plan.povCharacterId)) {
+        throw new StoreInputError('Section 计划 POV 角色必须存在于当前 Book。');
+      }
+    }
+  }
+  for (const branch of book.branches) {
+    assertExistingSection(branch.fromSectionId, 'Branch 来源');
   }
 };
 
@@ -486,9 +546,17 @@ export class StoryStore {
     validId(bookId);
     await this.ensureSeeded();
     const root = this.bookRoot(bookId);
+    const manifestFile = path.join(root, 'book.json');
     let meta: BookFile;
     try {
-      meta = await readJson<BookFile>(path.join(root, 'book.json'));
+      // A Book directory can be changed outside this process. Check every
+      // directory on the path before reading the manifest so a link cannot
+      // redirect a load into an unrelated tree.
+      await readSafeDirectory(this.root);
+      await readSafeDirectory(path.join(this.root, 'books'));
+      await readSafeDirectory(root);
+      await ensureSafeFile(manifestFile);
+      meta = await readJson<BookFile>(manifestFile);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new BookNotFoundError(bookId);
       throw error;
@@ -507,30 +575,72 @@ export class StoryStore {
       if (!Array.isArray(chapter?.sections)) throw new StoreDataError();
       for (const section of chapter.sections) storedId(section?.id);
     }
+
+    // Validate directory entries as well as the specific files below. This
+    // makes a symlink anywhere in a managed source directory fail closed,
+    // including links that are not referenced by the manifest.
+    for (const directory of managedDirectories) {
+      await readSafeDirectory(path.join(root, directory));
+    }
+    const manuscriptRoot = path.join(root, 'manuscript');
+    await readSafeDirectory(manuscriptRoot);
+    for (const chapter of meta.chapters) {
+      await readSafeDirectory(path.join(manuscriptRoot, chapter.id));
+    }
+
     const characters = await Promise.all(meta.characters.map(({ id }) =>
-      readJson<CharacterCard>(path.join(root, 'characters', `${validId(id)}.json`))));
+      (async () => {
+        const file = path.join(root, 'characters', `${validId(id)}.json`);
+        await ensureSafeFile(file);
+        return readJson<CharacterCard>(file);
+      })()));
     const worldRules = await Promise.all(meta.worldRules.map(async (item) => ({
       ...item,
-      content: await readFile(path.join(root, 'world', `${validId(item.id)}.md`), 'utf8'),
+      content: await (async () => {
+        const file = path.join(root, 'world', `${validId(item.id)}.md`);
+        await ensureSafeFile(file);
+        return readFile(file, 'utf8');
+      })(),
     })));
     const canonFacts = await Promise.all(meta.canonFacts.map(({ id }) =>
-      readJson<CanonFact>(path.join(root, 'canon', `${validId(id)}.json`))));
+      (async () => {
+        const file = path.join(root, 'canon', `${validId(id)}.json`);
+        await ensureSafeFile(file);
+        return readJson<CanonFact>(file);
+      })()));
     const summaries = await Promise.all(meta.summaries.map(({ id }) =>
-      readJson<Summary>(path.join(root, 'summaries', `${validId(id)}.json`))));
+      (async () => {
+        const file = path.join(root, 'summaries', `${validId(id)}.json`);
+        await ensureSafeFile(file);
+        return readJson<Summary>(file);
+      })()));
     const chapters = await Promise.all(meta.chapters.map(async (chapter) => ({
       ...chapter,
       sections: await Promise.all(chapter.sections.map(async (section) => ({
         ...section,
-        content: await readFile(path.join(root, 'manuscript', chapter.id, `${validId(section.id)}.md`), 'utf8'),
+        content: await (async () => {
+          const file = path.join(root, 'manuscript', chapter.id, `${validId(section.id)}.md`);
+          await ensureSafeFile(file);
+          return readFile(file, 'utf8');
+        })(),
       }))),
     })));
 
-    const loaded = normalizeBook({ ...meta, characters, worldRules, canonFacts, summaries, chapters });
+    const loaded = { ...meta, characters, worldRules, canonFacts, summaries, chapters };
+    // Do not let normalizeBook silently discard broken references before the
+    // storage boundary validates them.
     validateBook(loaded);
-    return loaded;
+    const normalized = normalizeBook(loaded);
+    validateBook(normalized);
+    return normalized;
   }
 
   async saveBook(book: Book): Promise<Book> {
+    // Validate the caller's graph before normalization. normalizeBook is
+    // intentionally tolerant of deleted references for the UI, but storage
+    // must reject those references rather than persist a silently altered
+    // Book.
+    validateBook(book);
     const normalizedBook = normalizeBook(book);
     validateBook(normalizedBook);
     const operation = async () => {
@@ -617,6 +727,12 @@ export class StoryStore {
     return this.saveBook(book);
   }
 
+  // Kept as a narrow seam for storage fault-injection tests. The production
+  // path still uses the standard-library recursive removal below.
+  protected async removeBookTree(directory: string) {
+    await rm(directory, { recursive: true, force: true });
+  }
+
   async deleteBook(bookId: string): Promise<{ id: string }> {
     validId(bookId);
     await this.ensureSeeded();
@@ -640,7 +756,26 @@ export class StoryStore {
         await rename(quarantine, root);
         throw error;
       }
-      await rm(quarantine, { recursive: true, force: true });
+
+      try {
+        await this.removeBookTree(quarantine);
+      } catch (error) {
+        // Keep deletion transactional: if the quarantined tree cannot be
+        // removed, put both the tree and its library entry back. In
+        // particular, never leave a private Book stranded under a hidden
+        // `.deleting-*` path with no index entry or recovery owner.
+        try {
+          await rename(quarantine, root);
+        } catch {
+          throw new StoreDataError('删除 Book 失败，且无法恢复原数据。');
+        }
+        try {
+          await atomicWrite(this.libraryFile(), `${JSON.stringify(library, null, 2)}\n`);
+        } catch {
+          throw new StoreDataError('删除 Book 失败，书库索引恢复失败。');
+        }
+        throw error;
+      }
       return { id: bookId };
     };
     const result = this.writeQueue.then(operation, operation);

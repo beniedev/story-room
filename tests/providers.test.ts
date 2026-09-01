@@ -9,7 +9,11 @@ import {
   ProviderStore,
   ProviderTimeoutError,
 } from '../server/providers.ts';
-import type { ProviderProfile } from '../src/providerProfiles.ts';
+import {
+  MAX_PROVIDER_CONTEXT_TOKENS,
+  MAX_PROVIDER_OUTPUT_TOKENS,
+  type ProviderProfile,
+} from '../src/providerProfiles.ts';
 
 const mockedLookup = vi.hoisted(() => vi.fn());
 vi.mock('node:dns/promises', () => ({ lookup: mockedLookup }));
@@ -62,6 +66,28 @@ afterEach(async () => {
 });
 
 describe('local provider store', () => {
+  it('requires safe positive integer limits within the configured caps', async () => {
+    const store = await makeStore();
+    const invalidContextLimits = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, MAX_PROVIDER_CONTEXT_TOKENS + 1];
+    const invalidOutputLimits = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, MAX_PROVIDER_OUTPUT_TOKENS + 1];
+
+    for (const maxContext of invalidContextLimits) {
+      await expect(store.save(profileAt('https://provider.synthetic/v1', { maxContext })))
+        .rejects.toThrow('正整数');
+    }
+    for (const maxOutput of invalidOutputLimits) {
+      await expect(store.save(profileAt('https://provider.synthetic/v1', { maxOutput })))
+        .rejects.toThrow('正整数');
+    }
+
+    const saved = await store.save(profileAt('https://provider.synthetic/v1', {
+      maxContext: MAX_PROVIDER_CONTEXT_TOKENS,
+      maxOutput: MAX_PROVIDER_OUTPUT_TOKENS,
+    }), 'limit-test-key');
+    expect(saved.maxContext).toBe(MAX_PROVIDER_CONTEXT_TOKENS);
+    expect(saved.maxOutput).toBe(MAX_PROVIDER_OUTPUT_TOKENS);
+  });
+
   it.skipIf(process.platform === 'win32')('writes and replaces provider config with POSIX mode 0600', async () => {
     const store = await makeStore();
     const profile = profileAt('https://provider.synthetic/v1');

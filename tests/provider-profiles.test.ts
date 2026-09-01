@@ -30,4 +30,14 @@ describe('provider profile persistence', () => {
     const stored = JSON.stringify([{ ...defaultProviderProfiles[0], apiKey: 'must-not-persist' }]);
     expect(readProviderProfiles(stored)[0]).not.toHaveProperty('apiKey');
   });
+
+  it.each([
+    { maxContext: 1.5 },
+    { maxOutput: 0 },
+    { maxOutput: Number.MAX_SAFE_INTEGER },
+    { maxContext: '128000' },
+  ])('rejects unsafe persisted token limits: %o', (override) => {
+    const stored = JSON.stringify([{ ...defaultProviderProfiles[0], ...override }]);
+    expect(readProviderProfiles(stored)).toEqual(defaultProviderProfiles);
+  });
 });

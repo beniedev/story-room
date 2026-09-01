@@ -1,70 +1,30 @@
 import type {
   Book,
   BookIndexEntry,
-  ContextPlan,
+  ContextPlanPreview,
   GenerationRequest,
   GenerationResult,
 } from './types';
 import { deviceLibrary } from './deviceLibrary';
 import {
-  defaultProviderProfiles,
+  isValidProviderLimit,
+  MAX_PROVIDER_CONTEXT_TOKENS,
+  MAX_PROVIDER_OUTPUT_TOKENS,
+  PROVIDER_PROFILES_STORAGE_KEY,
+  readProviderProfiles,
   type ProviderProfile,
 } from './providerProfiles';
 
-export const HOST_ACCESS_TOKEN_STORAGE_KEY = 'story-native:host-access-token';
-export const HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY = 'story-native:host-access-token-enabled';
-
-export type HostAccessTokenSettings = {
-  enabled: boolean;
-  token: string;
-};
-
-export const readHostAccessTokenSettings = (): HostAccessTokenSettings => {
-  try {
-    const enabled = typeof localStorage !== 'undefined'
-      && localStorage.getItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY) === '1';
-    const token = enabled && typeof sessionStorage !== 'undefined'
-      ? sessionStorage.getItem(HOST_ACCESS_TOKEN_STORAGE_KEY)?.trim() ?? ''
-      : '';
-    return { enabled, token };
-  } catch {
-    return { enabled: false, token: '' };
-  }
-};
-
-export const saveHostAccessTokenSettings = (enabled: boolean, token: string): HostAccessTokenSettings => {
-  const normalized = enabled ? token.trim() : '';
-  try {
-    if (typeof localStorage !== 'undefined') {
-      if (enabled) localStorage.setItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY, '1');
-      else localStorage.removeItem(HOST_ACCESS_TOKEN_ENABLED_STORAGE_KEY);
-    }
-    if (typeof sessionStorage !== 'undefined') {
-      if (normalized) sessionStorage.setItem(HOST_ACCESS_TOKEN_STORAGE_KEY, normalized);
-      else sessionStorage.removeItem(HOST_ACCESS_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    throw new Error('当前浏览器无法保存访问密码。');
-  }
-  return { enabled, token: normalized };
-};
-
-const readHostAccessToken = () => {
-  return readHostAccessTokenSettings().token;
-};
-
-const requestOnce = async (url: string, init: RequestInit | undefined, accessToken: string) => {
+const requestOnce = async (url: string, init: RequestInit | undefined) => {
   const headers = new Headers(init?.headers);
   if (init?.body) headers.set('content-type', 'application/json');
-  if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
   return fetch(url, { ...init, headers });
 };
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
-  const accessToken = readHostAccessToken();
   let response: Response;
   try {
-    response = await requestOnce(url, init, accessToken);
+    response = await requestOnce(url, init);
   } catch (error) {
     if (init?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       throw error;
@@ -81,9 +41,7 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
       ? '本地书库返回了无法读取的数据。'
       : `本地书库请求失败（HTTP ${response.status}）。`);
   }
-  if (!response.ok) throw new Error(response.status === 401
-    ? '此书库设置了访问密码，请在设置中启用或检查密码。'
-    : body.error ?? (response.status === 502 || response.status === 503
+  if (!response.ok) throw new Error(body.error ?? (response.status === 502 || response.status === 503
       ? '本地书库服务暂时不可用，请确认故事书架仍在运行。'
       : `请求失败（HTTP ${response.status}）。`));
   return body;
@@ -104,7 +62,7 @@ const hostApi = {
   deleteBook: (bookId: string) => request<{ id: string }>(`/api/books/${bookId}`, {
     method: 'DELETE',
   }),
-  contextPlan: (body: GenerationRequest) => request<ContextPlan>('/api/context-plan', {
+  contextPlan: (body: GenerationRequest) => request<ContextPlanPreview>('/api/context-plan', {
     method: 'POST',
     body: JSON.stringify(body),
   }),
@@ -125,6 +83,10 @@ const hostApi = {
 };
 
 const testDeviceProvider = async (profile: ProviderProfile, apiKey?: string) => {
+  if (!isValidProviderLimit(profile.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
+    || !isValidProviderLimit(profile.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS)) {
+    throw new Error('上下文与输出上限必须是合理的正整数。');
+  }
   if (profile.kind === 'fake') return { ok: true as const, modelId: profile.modelId };
   if (!apiKey?.trim()) throw new Error('请填写 API Key。');
   const response = await fetch(`${profile.baseUrl.replace(/\/+$/, '')}/models`, {
@@ -142,8 +104,16 @@ const testDeviceProvider = async (profile: ProviderProfile, apiKey?: string) => 
 };
 
 const deviceProviderApi = {
-  listProviderProfiles: async () => defaultProviderProfiles.map((profile) => ({ ...profile })),
-  saveProviderProfile: async (profile: ProviderProfile) => profile,
+  listProviderProfiles: async () => readProviderProfiles(
+    typeof localStorage === 'undefined' ? null : localStorage.getItem(PROVIDER_PROFILES_STORAGE_KEY),
+  ),
+  saveProviderProfile: async (profile: ProviderProfile) => {
+    if (!isValidProviderLimit(profile.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
+      || !isValidProviderLimit(profile.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS)) {
+      throw new Error('上下文与输出上限必须是合理的正整数。');
+    }
+    return profile;
+  },
   testProviderProfile: testDeviceProvider,
 };
 
