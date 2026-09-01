@@ -3,28 +3,33 @@ import {
   ArrowLeft,
   BookMarked,
   BookOpenText,
+  BookPlus,
   Check,
   ChevronDown,
   ChevronRight,
   Circle,
   CircleCheckBig,
   Download,
+  Ellipsis,
   FileJson,
   FileText,
   FilePlus2,
   FolderPlus,
   Globe2,
+  ListTree,
   KeyRound,
   Layers3,
   ListChecks,
   Menu,
   MessageSquareText,
   Minus,
+  MousePointer2,
   Pencil,
   PlugZap,
   Plus,
   RefreshCw,
   ScrollText,
+  Send,
   Settings,
   Sparkles,
   Trash2,
@@ -57,9 +62,6 @@ import {
   isEligibleSectionMemory,
   normalizeBook,
   parseSectionMemoryDraft,
-  rollbackSectionMemory,
-  sectionMemoryFreshness,
-  serializeSectionMemoryDraft,
 } from './sectionMemory';
 import { countWords, estimateTokens } from './textMetrics';
 import type {
@@ -71,11 +73,10 @@ import type {
   GenerationRequest,
   PromptCacheBand,
   PromptLayer,
-  SectionMemoryDraft,
-  SectionMemoryProvenance,
-  SectionPlan,
   SectionBlock,
   SectionContextReferenceMode,
+  SectionMemoryDraft,
+  SectionMemoryProvenance,
   ThemeName,
   WorldRule,
 } from './types';
@@ -114,6 +115,66 @@ type PromptCompositionItem = {
   includedNames?: string[];
 };
 
+type PromptCompositionGroup = {
+  key: string;
+  title: string;
+  reason: string;
+  estimatedTokens: number;
+};
+
+type SectionDraft = {
+  instruction: string;
+  authorNote: string;
+};
+
+const sectionDraftKey = (bookId: string, sectionId: string) => `${bookId}:${sectionId}`;
+const emptySectionDraft = (): SectionDraft => ({ instruction: '', authorNote: '' });
+const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
+  || error instanceof Error && error.name === 'AbortError';
+const abortGenerationError = () => {
+  try {
+    return new DOMException('生成已取消。', 'AbortError');
+  } catch {
+    const error = new Error('生成已取消。');
+    error.name = 'AbortError';
+    return error;
+  }
+};
+
+const focusableSelector = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+const focusFirstDrawerElement = (drawer: HTMLElement | null) => {
+  const first = [...(drawer?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])]
+    .find((element) => element.getClientRects().length > 0 && !element.closest('[aria-hidden="true"]'));
+  first?.focus();
+};
+
+const trapDrawerFocus = (event: KeyboardEvent, drawer: HTMLElement) => {
+  if (event.key !== 'Tab') return;
+  const focusable = [...drawer.querySelectorAll<HTMLElement>(focusableSelector)]
+    .filter((element) => element.getClientRects().length > 0 && !element.closest('[aria-hidden="true"]'));
+  if (focusable.length === 0) return;
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  if (!drawer.contains(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+};
+
 export const combinePromptSources = (items: PromptCompositionItem[]) => {
   const combined: PromptCompositionItem[] = [];
   const grouped = new Map<'character' | 'world', PromptCompositionItem>();
@@ -147,9 +208,32 @@ export const combinePromptSources = (items: PromptCompositionItem[]) => {
 
 const promptTone = (index: number) => `var(--prompt-tone-${index % 6 + 1})`;
 
-const cacheBandLabel = (band: PromptCacheBand) => (
-  band === 'stable' ? '稳定前缀' : band === 'session' ? '模式层' : '每轮变化'
-);
+const promptCompositionGroup = (item: PromptCompositionItem): Omit<PromptCompositionGroup, 'estimatedTokens'> => {
+  if (item.layer === 'system') return { key: 'rules', title: '写作规则', reason: '守住写作边界' };
+  if (item.layer === 'summary' || item.title.startsWith('REFERENCE')) {
+    return { key: 'references', title: '前文梗概/全文', reason: '带入已完成前文' };
+  }
+  if (item.layer === 'manuscript') return { key: 'writing', title: '正在写', reason: '衔接并完成当前小节' };
+  if (item.layer === 'mode' || item.layer === 'note' || item.layer === 'instruction'
+    || item.title.startsWith('TARGET SECTION PLAN') || item.title === '剧情大纲') {
+    return { key: 'turn', title: '本节计划/本轮要求', reason: '帮助本轮推进当前小节' };
+  }
+  return { key: 'story', title: '故事设定', reason: '保持角色、世界和故事事实一致' };
+};
+
+export const groupPromptComposition = (items: PromptCompositionItem[]): PromptCompositionGroup[] => {
+  const groups = new Map<string, PromptCompositionGroup>();
+  items.forEach((item) => {
+    const next = promptCompositionGroup(item);
+    const existing = groups.get(next.key);
+    if (existing) {
+      existing.estimatedTokens += item.estimatedTokens;
+      return;
+    }
+    groups.set(next.key, { ...next, estimatedTokens: item.estimatedTokens });
+  });
+  return [...groups.values()];
+};
 
 const promptShareLabel = (share: number) => (
   share < 1 ? '<1%' : share < 10 ? `${share.toFixed(1)}%` : `${Math.round(share)}%`
@@ -275,22 +359,30 @@ function App() {
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
   const [dirty, setDirty] = useState(false);
+  const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
+  const [generationState, setGenerationState] = useState<'idle' | 'generating'>('idle');
   const [status, setStatus] = useState(api.runtime === 'device' ? '正在打开此设备的书库…' : '正在打开本机书库…');
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
   const exportTrigger = useRef<HTMLElement | null>(null);
-  const contextDialog = useRef<HTMLDialogElement>(null);
-  const contextTrigger = useRef<HTMLElement | null>(null);
-  const [contextOpen, setContextOpen] = useState(false);
+  const contextCompositionTrigger = useRef<HTMLElement | null>(null);
+  const [contextCompositionOpen, setContextCompositionOpen] = useState(false);
+  const contextToolsTrigger = useRef<HTMLElement | null>(null);
+  const [contextToolsOpen, setContextToolsOpen] = useState(false);
   const mainContent = useRef<HTMLElement>(null);
   const restoreShelfFocus = useRef(false);
   const restoreWriterFocus = useRef(false);
   const [bookSettingsRequest, setBookSettingsRequest] = useState(0);
+  const [newBookRequest, setNewBookRequest] = useState(0);
   const [returnToWriterAfterSettings, setReturnToWriterAfterSettings] = useState(false);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
+  const generationAbort = useRef<AbortController | null>(null);
+  const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
+  const navigationState = useRef({ dirty: false, busy: false, instruction: '', authorNote: '', sectionDrafts: {} as Record<string, SectionDraft> });
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
@@ -298,10 +390,10 @@ function App() {
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
-  const promptPreview = useMemo(() => {
-    if (view !== 'write' || !book || !section) return null;
+  const contextPreview = useMemo(() => {
+    if (view !== 'write' || !book || !section) return { plan: null, error: '' };
     try {
-      return composeContextPlan(book, {
+      return { plan: composeContextPlan(book, {
         sectionId: section.id,
         mode,
         selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
@@ -310,11 +402,18 @@ function App() {
       }, activeProviderProfile ? {
         maxContext: activeProviderProfile.maxContext,
         maxOutput: activeProviderProfile.maxOutput,
-      } : undefined);
-    } catch {
-      return null;
+      } : undefined), error: '' };
+    } catch (error) {
+      return {
+        plan: null,
+        error: error instanceof Error
+          ? `暂时无法预览当前上下文：${error.message} 请检查当前小节和连接方案后重试。`
+          : '暂时无法预览当前上下文。请检查当前小节和连接方案后重试。',
+      };
     }
   }, [activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, view]);
+  const promptPreview = contextPreview.plan;
+  const promptPreviewError = contextPreview.error;
   useEffect(() => {
     clearHostBookCaches();
   }, []);
@@ -345,6 +444,25 @@ function App() {
   }, [activeProviderProfileId, providerProfiles]);
 
   useEffect(() => {
+    sectionDraftsRef.current = sectionDrafts;
+    navigationState.current = { dirty, busy, instruction, authorNote, sectionDrafts };
+  }, [authorNote, busy, dirty, instruction, sectionDrafts]);
+
+  useEffect(() => {
+    const protectUnsavedWork = (event: BeforeUnloadEvent) => {
+      const current = navigationState.current;
+      const hasDraft = Object.values(current.sectionDrafts).some((draft) => (
+        draft.instruction.trim() || draft.authorNote.trim()
+      ));
+      if (!current.dirty && !current.busy && !current.instruction.trim() && !current.authorNote.trim() && !hasDraft) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', protectUnsavedWork);
+    return () => window.removeEventListener('beforeunload', protectUnsavedWork);
+  }, []);
+
+  useEffect(() => {
     document.title = view === 'write' && book && section
       ? `${section.title} · ${book.title} · Story-native`
       : '故事书架 · Story-native';
@@ -362,6 +480,53 @@ function App() {
     mainContent.current?.querySelector<HTMLElement>('.writer-book-settings-button')?.focus();
   }, [view]);
 
+  const rememberCurrentSectionDraft = () => {
+    if (!book || !sectionId) return;
+    const key = sectionDraftKey(book.id, sectionId);
+    const draft = { instruction, authorNote };
+    const next = { ...sectionDraftsRef.current };
+    if (!draft.instruction.trim() && !draft.authorNote.trim()) delete next[key];
+    else next[key] = draft;
+    sectionDraftsRef.current = next;
+    navigationState.current = { ...navigationState.current, instruction, authorNote, sectionDrafts: next };
+    setSectionDrafts(next);
+  };
+
+  const updateSectionDraft = (field: keyof SectionDraft, value: string) => {
+    if (field === 'instruction') setInstruction(value);
+    else setAuthorNote(value);
+    if (!book || !sectionId) return;
+    const key = sectionDraftKey(book.id, sectionId);
+    const draft = { ...emptySectionDraft(), ...sectionDraftsRef.current[key], [field]: value };
+    const next = { ...sectionDraftsRef.current };
+    if (!draft.instruction.trim() && !draft.authorNote.trim()) delete next[key];
+    else next[key] = draft;
+    sectionDraftsRef.current = next;
+    navigationState.current = {
+      ...navigationState.current,
+      instruction: field === 'instruction' ? value : navigationState.current.instruction,
+      authorNote: field === 'authorNote' ? value : navigationState.current.authorNote,
+      sectionDrafts: next,
+    };
+    setSectionDrafts(next);
+  };
+
+  const restoreSectionDraft = (bookId: string, nextSectionId: string) => {
+    const draft = sectionDraftsRef.current[sectionDraftKey(bookId, nextSectionId)] ?? emptySectionDraft();
+    setInstruction(draft.instruction);
+    setAuthorNote(draft.authorNote);
+  };
+
+  const clearSectionDraft = (bookId: string, nextSectionId: string, sentInstruction: string, sentAuthorNote: string) => {
+    const key = sectionDraftKey(bookId, nextSectionId);
+    const current = sectionDraftsRef.current[key];
+    if (!current || current.instruction !== sentInstruction || current.authorNote !== sentAuthorNote) return;
+    const next = { ...sectionDraftsRef.current };
+    delete next[key];
+    sectionDraftsRef.current = next;
+    setSectionDrafts(next);
+  };
+
   useEffect(() => {
     void (async () => {
       try {
@@ -375,7 +540,7 @@ function App() {
           : profiles[0]?.id ?? '');
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
-        setStatus(api.runtime === 'device' ? '此设备的书库已打开。' : '本机书库已打开。');
+        setStatus('');
       } catch (error) {
         setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
@@ -421,6 +586,8 @@ function App() {
   }, [book, dirty]);
 
   const openBook = async (bookId: string) => {
+    if (book && book.id !== bookId && dirty) await saveCurrent();
+    rememberCurrentSectionDraft();
     const stored = normalizeBook(await api.loadBook(bookId));
     const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
     const loaded = normalizeBook(newerBook(stored, cached));
@@ -429,8 +596,7 @@ function App() {
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
-    setInstruction('');
-    setAuthorNote('');
+    restoreSectionDraft(loaded.id, '');
     setDirty(Boolean(cached && loaded.updatedAt !== stored.updatedAt));
     setView('shelf');
   };
@@ -449,11 +615,13 @@ function App() {
     return task;
   };
 
-  const saveCurrent = async () => {
-    if (!book) throw new Error('请先打开一本书。');
-    const candidate = normalizeBook(book);
+  const saveCurrent = async (candidateOverride?: Book) => {
+    const currentBook = candidateOverride ?? book;
+    if (!currentBook) throw new Error('请先打开一本书。');
+    const candidate = normalizeBook(currentBook);
     const revision = saveRevision.current;
-    if (api.runtime === 'device') cacheBook(book);
+    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在写入本机故事目录…');
+    if (api.runtime === 'device') cacheBook(candidate);
     const saved = normalizeBook(await queueBookSave(candidate));
     if (saveRevision.current === revision) {
       if (api.runtime === 'device') cacheBook(saved);
@@ -466,6 +634,11 @@ function App() {
       ? '已自动保存到此设备。'
       : '已自动保存到本机故事目录。');
     return saved;
+  };
+
+  const ensureCurrentBookSaved = async () => {
+    if (!book || !dirty) return book;
+    return saveCurrent();
   };
 
   const closeExport = () => {
@@ -537,10 +710,45 @@ function App() {
     try {
       await action();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '操作失败。');
+      setStatus(isAbortError(error)
+        ? '已取消生成；迟到结果未写入正文。'
+        : error instanceof Error ? error.message : '操作失败。');
     } finally {
       setBusy(false);
     }
+  };
+
+  const runGeneration = async (request: GenerationRequest, label: string) => {
+    if (generationAbort.current) throw new Error('已有生成正在进行，请先完成或取消当前生成。');
+    const controller = new AbortController();
+    const target = {
+      bookId: request.bookId,
+      sectionId: request.sectionId,
+      targetBlockId: request.targetBlockId,
+    };
+    generationAbort.current = controller;
+    generationTarget.current = target;
+    setGenerationState('generating');
+    setStatus(label);
+    try {
+      const result = await api.generate(request, controller.signal);
+      if (controller.signal.aborted
+        || generationAbort.current !== controller
+        || generationTarget.current !== target) throw abortGenerationError();
+      return result;
+    } finally {
+      if (generationAbort.current === controller) {
+        generationAbort.current = null;
+        generationTarget.current = null;
+        setGenerationState('idle');
+      }
+    }
+  };
+
+  const cancelGeneration = () => {
+    if (!generationAbort.current) return;
+    generationAbort.current.abort();
+    setStatus('正在取消生成…');
   };
 
   const hasCharacterSelection = () => mode !== 'character'
@@ -548,7 +756,7 @@ function App() {
 
   const generateContinuation = () => withBusy(async () => {
     if (!hasCharacterSelection()) {
-      setStatus('角色模式需要先选择当前 Book 的角色。');
+      setStatus('角色模式需要先选择本书角色。');
       return;
     }
     const targetSectionId = sectionId;
@@ -568,7 +776,7 @@ function App() {
       generationKind: 'continue-section',
     } satisfies GenerationRequest;
     assertGenerationBudget(saved, generation);
-    const result = await api.generate(generation);
+    const result = await runGeneration(generation, '正在生成当前小节…');
     const additions: SectionBlock[] = [
       ...(inputSnapshot.trim()
         ? [{ id: makeId('block'), kind: 'user' as const, content: inputSnapshot.trim() }]
@@ -589,6 +797,7 @@ function App() {
     }));
     setInstruction((current) => current === inputSnapshot ? '' : current);
     setAuthorNote((current) => current === noteSnapshot ? '' : current);
+    clearSectionDraft(saved.id, targetSectionId, inputSnapshot, noteSnapshot);
     setStatus('续写已加入当前小节。');
   });
 
@@ -616,7 +825,7 @@ function App() {
         targetBlockId: blockId,
       });
       assertGenerationBudget(saved, generation);
-      const result = await api.generate(generation);
+      const result = await runGeneration(generation, '正在重新生成所选正文片段…');
       changeBook((current) => ({
         ...current,
         chapters: current.chapters.map((chapter) => ({
@@ -636,6 +845,8 @@ function App() {
 
   const createBook = (title: string) => {
     void withBusy(async () => {
+      await ensureCurrentBookSaved();
+      rememberCurrentSectionDraft();
       const created = await api.createBook(title);
       const normalizedCreated = normalizeBook(created);
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
@@ -644,8 +855,7 @@ function App() {
       saveRevision.current += 1;
       setSectionId('');
       setSelectedCharacterId('');
-      setInstruction('');
-      setAuthorNote('');
+      restoreSectionDraft(normalizedCreated.id, '');
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
@@ -661,6 +871,7 @@ function App() {
     const nextBook = library.find((entry) => entry.id !== deletedBook.id);
     const wasDirty = dirty;
     void withBusy(async () => {
+      await ensureCurrentBookSaved();
       saveRevision.current += 1;
       setDirty(false);
       try {
@@ -797,67 +1008,76 @@ function App() {
     updateContextReferences(references);
   };
 
-  const updateSectionPlan = (nextPlan: SectionPlan | undefined) => {
-    if (!section) return;
-    const targetSectionId = section.id;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === targetSectionId
-          ? nextPlan ? { ...item, plan: nextPlan } : (() => {
-              const { plan: _removed, ...withoutPlan } = item;
-              return withoutPlan;
-            })()
-          : item),
-      })),
-    }));
+  const generateSectionMemory = async (sourceSectionId: string) => {
+    setBusy(true);
+    try {
+      if (!book || !section) throw new Error('请先选择一个小节。');
+      const source = referenceLocation(book, sourceSectionId);
+      if (!source) throw new Error('找不到要生成梗概的小节。');
+      const targetOrdinal = book.chapters.flatMap((chapter) => chapter.sections)
+        .findIndex((item) => item.id === section.id);
+      if (targetOrdinal < 0 || source.ordinal >= targetOrdinal) throw new Error('只能为当前小节之前的内容生成梗概。');
+      if (!source.section.content.trim()) throw new Error('这一节还没有正文，无法生成梗概。');
+      const saved = await saveCurrent();
+      const generation = {
+        bookId: saved.id,
+        sectionId: sourceSectionId,
+        providerProfileId: activeProviderProfile?.id,
+        mode: 'author',
+        instruction: '',
+        generationKind: 'summarize-section',
+      } satisfies GenerationRequest;
+      assertGenerationBudget(saved, generation);
+      const result = await runGeneration(generation, '正在生成前文梗概…');
+      const draft = parseSectionMemoryDraft(result.draft);
+      setStatus(`已生成「${source.section.title}」的梗概草稿，请确认保存。`);
+      return draft;
+    } catch (error) {
+      setStatus(isAbortError(error)
+        ? '已取消生成；迟到结果未写入正文。'
+        : error instanceof Error ? error.message : '梗概生成失败。');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const updateSectionMemory = (draft: SectionMemoryDraft, provenance: SectionMemoryProvenance) => {
-    if (!section) return;
+  const saveSectionMemoryAndLoad = async (
+    sourceSectionId: string,
+    draft: SectionMemoryDraft,
+    provenance: SectionMemoryProvenance,
+  ) => {
+    if (!book || !section) throw new Error('请先选择一个小节。');
     const targetSectionId = section.id;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
+    let sourceTitle = '';
+    const source = referenceLocation(book, sourceSectionId);
+    const targetOrdinal = book.chapters.flatMap((chapter) => chapter.sections)
+      .findIndex((item) => item.id === targetSectionId);
+    if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) {
+      throw new Error('只能保存当前小节之前内容的梗概。');
+    }
+    sourceTitle = source.section.title;
+    const committedSource = commitSectionMemoryDraft(source.section, draft, provenance);
+    const candidate = normalizeBook({
+      ...book,
+      updatedAt: new Date().toISOString(),
+      chapters: book.chapters.map((chapter) => ({
         ...chapter,
-        sections: chapter.sections.map((item) => item.id === targetSectionId
-          ? commitSectionMemoryDraft(item, draft, provenance)
-          : item),
+        sections: chapter.sections.map((item) => {
+          if (item.id === sourceSectionId) return committedSource;
+          if (item.id !== targetSectionId) return item;
+          const references = (item.contextReferences ?? [])
+            .filter((reference) => reference.sectionId !== sourceSectionId);
+          references.push({ sectionId: sourceSectionId, mode: 'summary', reason: 'manual' });
+          return { ...item, contextReferences: references };
+        }),
       })),
-    }));
-  };
-
-  const rollbackCurrentSectionMemory = () => {
-    if (!section?.previousMemory) return;
-    const targetSectionId = section.id;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === targetSectionId
-          ? rollbackSectionMemory(item)
-          : item),
-      })),
-    }));
-  };
-
-  const generateSectionMemory = async () => {
-    if (!section) throw new Error('请先选择一个 Section。');
-    const targetSectionId = section.id;
-    const saved = await saveCurrent();
-    const generation = {
-      bookId: saved.id,
-      sectionId: targetSectionId,
-      providerProfileId: activeProviderProfile?.id,
-      mode: 'author',
-      instruction: '',
-      generationKind: 'summarize-section',
-    } satisfies GenerationRequest;
-    assertGenerationBudget(saved, generation);
-    const result = await api.generate(generation);
-    parseSectionMemoryDraft(result.draft);
-    return result.draft;
+    });
+    saveRevision.current += 1;
+    setBook(candidate);
+    setDirty(true);
+    await saveCurrent(candidate);
+    setStatus(`已保存并加载「${sourceTitle}」的梗概。`);
   };
 
   const deleteSelection = (selection: DirectorySelection) => {
@@ -901,6 +1121,10 @@ function App() {
 
   const navigateFromHeader = () => {
     if (view === 'shelf') return;
+    if (busy) {
+      setStatus(generationState === 'generating' ? '生成进行中，请先取消或等待完成。' : '正在保存当前书目，请稍候。');
+      return;
+    }
     restoreShelfFocus.current = true;
     setView('shelf');
   };
@@ -912,13 +1136,55 @@ function App() {
     settingsDialog.current?.showModal();
   };
 
-  const openContext = () => {
-    const dialog = contextDialog.current;
-    if (!dialog || dialog.open) return;
-    if (document.activeElement instanceof HTMLElement) contextTrigger.current = document.activeElement;
-    dialog.showModal();
-    setContextOpen(true);
+  const closeContextComposition = () => {
+    setContextCompositionOpen(false);
+    const trigger = contextCompositionTrigger.current;
+    contextCompositionTrigger.current?.focus();
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
   };
+
+  const closeContextTools = () => {
+    setContextToolsOpen(false);
+    const trigger = contextToolsTrigger.current;
+    contextToolsTrigger.current?.focus();
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+  };
+
+  const openContextComposition = () => {
+    if (contextCompositionOpen) {
+      closeContextComposition();
+      return;
+    }
+    if (document.activeElement instanceof HTMLElement) contextCompositionTrigger.current = document.activeElement;
+    setContextToolsOpen(false);
+    setContextCompositionOpen(true);
+  };
+
+  const openContextTools = () => {
+    if (contextToolsOpen) {
+      closeContextTools();
+      return;
+    }
+    if (document.activeElement instanceof HTMLElement) contextToolsTrigger.current = document.activeElement;
+    setContextCompositionOpen(false);
+    setContextToolsOpen(true);
+  };
+
+  useEffect(() => {
+    if (!contextCompositionOpen && !contextToolsOpen) return undefined;
+    const closeOpenContextDrawer = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      if (contextCompositionOpen) closeContextComposition();
+      if (contextToolsOpen) closeContextTools();
+    };
+    document.addEventListener('keydown', closeOpenContextDrawer);
+    return () => document.removeEventListener('keydown', closeOpenContextDrawer);
+  }, [contextCompositionOpen, contextToolsOpen]);
 
   return (
     <div className="app-shell">
@@ -929,6 +1195,17 @@ function App() {
           <strong>故事书架</strong>
         </div>
         <div className="header-actions">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setNewBookRequest((current) => current + 1)}
+            disabled={!book}
+            aria-haspopup="dialog"
+            aria-label="新建书目"
+            title="新建书目"
+          >
+            <BookPlus aria-hidden="true" />
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -962,8 +1239,12 @@ function App() {
             instruction={instruction}
             authorNote={authorNote}
             busy={busy}
+            status={status}
+            generationState={generationState}
+            contextPlanError={promptPreviewError}
             contextPlan={promptPreview}
-            contextOpen={contextOpen}
+            contextCompositionOpen={contextCompositionOpen}
+            contextToolsOpen={contextToolsOpen}
             providerName={activeProviderProfile?.name ?? '未选择方案'}
             modelId={activeProviderProfile?.modelId ?? '未选择模型'}
             onBack={navigateFromHeader}
@@ -972,13 +1253,14 @@ function App() {
               setView('shelf');
               setBookSettingsRequest((current) => current + 1);
             }}
-            onExport={openExport}
             onOpenSettings={openSettings}
-            onOpenContext={openContext}
+            onOpenContextComposition={openContextComposition}
+            onOpenContextTools={openContextTools}
+            onCancelGeneration={cancelGeneration}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
-            onInstructionChange={setInstruction}
-            onAuthorNoteChange={setAuthorNote}
+            onInstructionChange={(value) => updateSectionDraft('instruction', value)}
+            onAuthorNoteChange={(value) => updateSectionDraft('authorNote', value)}
             onSectionBlocksChange={updateSectionBlocks}
             onRegenerateBlock={regenerateBlock}
             onSectionTitleChange={(title) => {
@@ -991,6 +1273,8 @@ function App() {
             book={book}
             library={library}
             selectedSectionId={sectionId}
+            openNewBookRequest={newBookRequest}
+            onNewBookOpened={() => setNewBookRequest(0)}
             openBookSettingsRequest={bookSettingsRequest}
             onBookSettingsOpened={() => setBookSettingsRequest(0)}
             onBookSettingsClose={() => {
@@ -1001,9 +1285,10 @@ function App() {
             }}
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => {
+              if (busy) return;
+              rememberCurrentSectionDraft();
               if (id !== sectionId) {
-                setInstruction('');
-                setAuthorNote('');
+                restoreSectionDraft(book.id, id);
               }
               setSectionId(id);
               setView('write');
@@ -1047,23 +1332,18 @@ function App() {
         onClose={() => settingsTrigger.current?.focus()}
       />
 
-      {book && section && promptPreview && (
-        <ContextDrawer
-          dialogRef={contextDialog}
+      {book && section && (
+        <ContextToolsDrawer
+          open={contextToolsOpen}
           book={book}
           section={section}
-          plan={promptPreview}
-          activeProviderProfile={activeProviderProfile}
           onContextReferenceChange={updateContextReference}
           onContextReferencesChange={updateContextReferences}
-          onSectionPlanChange={updateSectionPlan}
           onGenerateMemory={generateSectionMemory}
-          onMemoryChange={updateSectionMemory}
-          onMemoryRollback={rollbackCurrentSectionMemory}
-          onClose={() => {
-            setContextOpen(false);
-            window.requestAnimationFrame(() => contextTrigger.current?.focus());
-          }}
+          onSaveMemoryAndLoad={saveSectionMemoryAndLoad}
+          busy={busy}
+          onCancelGeneration={cancelGeneration}
+          onClose={closeContextTools}
         />
       )}
 
@@ -1078,45 +1358,150 @@ function App() {
   );
 }
 
-function ContextDrawer({
-  dialogRef,
-  book,
-  section,
+function ContextCompositionDrawer({
+  open,
   plan,
-  activeProviderProfile,
-  onContextReferenceChange,
-  onContextReferencesChange,
-  onSectionPlanChange,
-  onGenerateMemory,
-  onMemoryChange,
-  onMemoryRollback,
+  error,
   onClose,
 }: {
-  dialogRef: React.RefObject<HTMLDialogElement | null>;
-  book: Book;
-  section: Book['chapters'][number]['sections'][number];
-  plan: ContextPlan;
-  activeProviderProfile?: ProviderProfile;
-  onContextReferenceChange: (sourceSectionId: string, mode: SectionContextReferenceMode | 'none') => void;
-  onContextReferencesChange: (references: Book['chapters'][number]['sections'][number]['contextReferences']) => void;
-  onSectionPlanChange: (plan: SectionPlan | undefined) => void;
-  onGenerateMemory: () => Promise<string>;
-  onMemoryChange: (draft: SectionMemoryDraft, provenance: SectionMemoryProvenance) => void;
-  onMemoryRollback: () => void;
+  open: boolean;
+  plan: ContextPlan | null;
+  error: string;
   onClose: () => void;
 }) {
-  const [memoryDraft, setMemoryDraft] = useState<SectionMemoryDraft | undefined>();
-  const [memoryDraftSource, setMemoryDraftSource] = useState<'model' | 'manual' | undefined>();
-  const [memoryDraftEdited, setMemoryDraftEdited] = useState(false);
-  const [memoryBusy, setMemoryBusy] = useState(false);
-  const [memoryError, setMemoryError] = useState('');
-  const [lastAppliedPreset, setLastAppliedPreset] = useState('');
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    setMemoryDraft(undefined);
-    setMemoryDraftSource(undefined);
-    setMemoryDraftEdited(false);
-    setMemoryError('');
-  }, [section.id, section.memory?.updatedAt, section.previousMemory?.updatedAt]);
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => focusFirstDrawerElement(drawerRef.current), 200);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (drawerRef.current) trapDrawerFocus(event, drawerRef.current);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open]);
+  const compositionItems = plan ? groupPromptComposition(combinePromptSources(plan.included.map((item) => ({
+    id: item.id,
+    layer: item.layer,
+    title: item.title,
+    reason: item.reason,
+    cacheBand: item.cacheBand,
+    estimatedTokens: item.estimatedTokens,
+  })))) : [];
+  const totalPromptTokens = compositionItems.reduce((total, item) => total + item.estimatedTokens, 0);
+
+  return (
+    <section
+      id="context-composition-drawer"
+      ref={drawerRef}
+      className="context-composition-drawer"
+      data-open={open}
+      aria-hidden={!open}
+      inert={!open}
+      aria-labelledby="context-composition-drawer-title"
+    >
+      <div className="context-composition-scroll">
+        <header className="drawer-heading">
+          <div>
+            <h2 id="context-composition-drawer-title">本轮组合</h2>
+          </div>
+          <button type="button" className="icon-button" ref={closeButtonRef} onClick={onClose} aria-label="关闭本轮组合" title="关闭">
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="prompt-composition-content">
+          {error ? <p className="context-preview-error" role="alert">{error}</p> : plan && <div className="prompt-composition-chart">
+            <div className="prompt-composition-map">
+              <div className="prompt-proportion-bar" aria-hidden="true">
+                {compositionItems.map((item, index) => {
+                  const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                  return <span className="prompt-proportion-segment" key={item.key} style={{ '--prompt-color': promptTone(index), flexGrow: Math.max(item.estimatedTokens, 0.01) } as CSSProperties} />;
+                })}
+              </div>
+              <ol className="prompt-composition-list" aria-label="本轮带入内容顺序">
+                {compositionItems.map((item, index) => {
+                  const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
+                  return <li key={item.key} style={{ '--prompt-color': promptTone(index) } as CSSProperties}>
+                    <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="prompt-composition-copy"><span className="prompt-composition-title-row"><strong>{item.title}</strong><span className="prompt-composition-meta"><strong>{promptShareLabel(share)}</strong><small>约 {item.estimatedTokens.toLocaleString()} tokens</small></span></span><small>{item.reason}</small></span>
+                  </li>;
+                })}
+              </ol>
+            </div>
+          </div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ContextToolsDrawer({
+  open,
+  book,
+  section,
+  onContextReferenceChange,
+  onContextReferencesChange,
+  onGenerateMemory,
+  onSaveMemoryAndLoad,
+  busy,
+  onCancelGeneration,
+  onClose,
+}: {
+  open: boolean;
+  book: Book;
+  section: Book['chapters'][number]['sections'][number];
+  onContextReferenceChange: (sourceSectionId: string, mode: SectionContextReferenceMode | 'none') => void;
+  onContextReferencesChange: (references: Book['chapters'][number]['sections'][number]['contextReferences']) => void;
+  onGenerateMemory: (sourceSectionId: string) => Promise<SectionMemoryDraft>;
+  onSaveMemoryAndLoad: (
+    sourceSectionId: string,
+    draft: SectionMemoryDraft,
+    provenance: SectionMemoryProvenance,
+  ) => Promise<void>;
+  busy: boolean;
+  onCancelGeneration: () => void;
+  onClose: () => void;
+}) {
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const summaryConfirmDialog = useRef<HTMLDialogElement>(null);
+  const summaryActionTrigger = useRef<HTMLElement | null>(null);
+  const summaryActionAccepted = useRef(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [summaryDrafts, setSummaryDrafts] = useState<Record<string, string>>({});
+  const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, SectionMemoryDraft>>({});
+  const [summaryBusyId, setSummaryBusyId] = useState('');
+  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
+  const [pendingSummarySectionId, setPendingSummarySectionId] = useState('');
+  const [pendingSummaryAction, setPendingSummaryAction] = useState<'generate' | 'save' | ''>('');
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => focusFirstDrawerElement(drawerRef.current), 200);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (drawerRef.current) trapDrawerFocus(event, drawerRef.current);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open]);
+  useEffect(() => {
+    setExpandedSections(new Set());
+    setSummaryDrafts({});
+    setGeneratedDrafts({});
+    setSummaryBusyId('');
+    setSummaryErrors({});
+    summaryConfirmDialog.current?.close();
+    setPendingSummarySectionId('');
+    setPendingSummaryAction('');
+  }, [section.id]);
 
   const currentReferences = new Map((section.contextReferences ?? [])
     .map((reference) => [reference.sectionId, reference.mode] as const));
@@ -1138,459 +1523,301 @@ function ContextDrawer({
     ordinal: book.chapters.slice(0, chapterIndex)
       .reduce((total, previousChapter) => total + previousChapter.sections.length, 0) + sectionIndex,
   }))).filter((item) => item.ordinal < targetOrdinal);
-  const referenceStatus = (item: typeof referenceSections[number]) => {
-    const freshness = sectionMemoryFreshness(item.section.memory, item.section.content);
-    const provenance = item.section.memory?.provenance;
-    return `${freshness}${provenance ? ` · ${provenance}` : ''}`;
-  };
-  const referenceStatusLabel = (item: typeof referenceSections[number]) => {
-    const status = referenceStatus(item);
-    return status === 'missing' ? 'Memory：missing' : `Memory：${status}`;
-  };
-  const referenceEligible = (item: typeof referenceSections[number]) => isEligibleSectionMemory(
-    item.section.memory,
-    item.section.content,
-  );
-  const sameChapterReferences = referenceSections.filter((item) => (
-    item.chapter.id === targetLocation?.chapter.id
-  ));
-  const linearPreviousReference = referenceSections[referenceSections.length - 1];
-  const sameChapterPreviousReference = sameChapterReferences[sameChapterReferences.length - 1];
-  const allSameChapterReferencesEligible = sameChapterReferences.length > 0
-    && sameChapterReferences.every(referenceEligible);
-  const compositionItems = combinePromptSources(plan.included.map((item) => ({
-    id: item.id,
-    layer: item.layer,
-    title: item.title,
-    reason: item.reason,
-    cacheBand: item.cacheBand,
-    estimatedTokens: item.estimatedTokens,
-  })));
-  const stablePrefixCount = compositionItems.filter((item) => item.cacheBand === 'stable').length;
-  const stablePrefixTokens = plan.included
-    .filter((item) => item.cacheBand === 'stable')
-    .reduce((total, item) => total + item.estimatedTokens, 0);
-  const totalPromptTokens = plan.estimatedTokens;
-  const promptWeights = compositionItems.map((item) => (
-    totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens : 1 / Math.max(1, compositionItems.length)
-  ));
-  let promptWeightCursor = 0;
-  const promptSegmentCenters = promptWeights.map((weight) => {
-    const center = (promptWeightCursor + weight / 2) * 100;
-    promptWeightCursor += weight;
-    return center;
-  });
-  const sourceLabel = (item: ContextPlan['included'][number]) => {
-    const source = item.source;
-    if (!source) return '未标注来源';
-    const parts = [
-      source.chapterIndex === undefined ? '' : `第${source.chapterIndex + 1}章`,
-      source.sectionIndex === undefined ? '' : `第${source.sectionIndex + 1}节`,
-      source.blockId ? `block ${source.blockId}` : '',
-      source.sourceId ? `id ${source.sourceId}` : '',
-    ].filter(Boolean);
-    return parts.join(' · ') || `Book ${source.bookId}`;
-  };
-  const emptyMemoryDraft = (): SectionMemoryDraft => ({
-    synopsis: '',
-    beats: [],
-    continuityFacts: [],
-    characterStateChanges: [],
-    foreshadowingCandidates: [],
-  });
-  const resetMemoryDraft = () => {
-    setMemoryDraft(undefined);
-    setMemoryDraftSource(undefined);
-    setMemoryDraftEdited(false);
-    setMemoryError('');
-  };
-  const closeDrawer = () => {
-    resetMemoryDraft();
-    dialogRef.current?.close();
-  };
-  const startManualMemoryDraft = () => {
-    setMemoryDraft(draftFromSectionMemory(section.memory) ?? emptyMemoryDraft());
-    setMemoryDraftSource('manual');
-    setMemoryDraftEdited(false);
-    setMemoryError('');
-  };
-  const updateMemoryDraft = (patch: Partial<SectionMemoryDraft>) => {
-    setMemoryDraft((current) => current ? { ...current, ...patch } : current);
-    setMemoryDraftEdited(true);
-  };
-  const generateMemoryDraft = async () => {
-    setMemoryBusy(true);
-    setMemoryError('');
-    try {
-      const parsed = parseSectionMemoryDraft(await onGenerateMemory());
-      setMemoryDraft(parsed);
-      setMemoryDraftSource('model');
-      setMemoryDraftEdited(false);
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : '本节记忆生成失败。');
-    } finally {
-      setMemoryBusy(false);
-    }
-  };
-  const confirmMemoryDraft = () => {
-    if (!memoryDraft) return;
-    try {
-      serializeSectionMemoryDraft(memoryDraft);
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : '记忆内容不符合格式限制。');
+  const referenceChapters = book.chapters.map((chapter) => ({
+    chapter,
+    sections: referenceSections.filter((item) => item.chapter.id === chapter.id),
+  })).filter((item) => item.sections.length > 0);
+  const selectedReferenceCount = currentReferences.size;
+  const allSelected = referenceSections.length > 0
+    && referenceSections.every((item) => currentReferences.has(item.section.id));
+  const someSelected = selectedReferenceCount > 0 && !allSelected;
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected]);
+
+  const toggleAll = () => {
+    if (allSelected) {
+      onContextReferencesChange(undefined);
       return;
     }
-    const provenance: SectionMemoryProvenance = memoryDraftSource === 'model'
-      ? memoryDraftEdited ? 'model-edited' : 'model-confirmed'
-      : 'manual';
-    onMemoryChange(memoryDraft, provenance);
-    resetMemoryDraft();
-  };
-  const rollbackMemory = () => {
-    resetMemoryDraft();
-    onMemoryRollback();
-  };
-  const applyReferencePreset = (
-    references: NonNullable<Book['chapters'][number]['sections'][number]['contextReferences']>,
-    label: string,
-  ) => {
-    onContextReferencesChange(references);
-    setLastAppliedPreset(label);
-  };
-  const clearReferences = () => applyReferencePreset([], '已清空前文参考');
-  const applyPreviousBothReference = () => {
-    if (!linearPreviousReference || !referenceEligible(linearPreviousReference)) return;
-    applyReferencePreset([{
-      sectionId: linearPreviousReference.section.id,
-      mode: 'both',
-      reason: 'previous-section',
-    }], '已加载前一节梗概+全文');
-  };
-  const applyRecommendedReferences = () => {
-    const references = [] as NonNullable<Book['chapters'][number]['sections'][number]['contextReferences']>;
-    if (sameChapterPreviousReference) {
-      references.push({
-        sectionId: sameChapterPreviousReference.section.id,
-        mode: referenceEligible(sameChapterPreviousReference) ? 'both' : 'full',
-        reason: 'previous-section',
-      });
-    }
-    sameChapterReferences
-      .filter((item) => item.section.id !== sameChapterPreviousReference?.section.id && referenceEligible(item))
-      .forEach((item) => references.push({
-        sectionId: item.section.id,
-        mode: 'summary',
-        reason: 'chapter-preset',
-      }));
-    applyReferencePreset(references, '已应用当前建议');
-  };
-  const applyChapterSummaryReferences = () => applyReferencePreset(
-    sameChapterReferences.map((item) => ({
+    onContextReferencesChange(referenceSections.map((item) => ({
       sectionId: item.section.id,
-      mode: 'summary' as const,
-      reason: 'chapter-preset' as const,
-    })),
-    '已应用本章此前小节梗概',
+      mode: currentReferences.get(item.section.id) ?? 'full',
+      reason: 'manual' as const,
+    })));
+  };
+  const toggleSection = (sourceSectionId: string) => {
+    setExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(sourceSectionId)) next.delete(sourceSectionId);
+      else next.add(sourceSectionId);
+      return next;
+    });
+  };
+  const summaryValue = (item: typeof referenceSections[number]) => (
+    Object.prototype.hasOwnProperty.call(summaryDrafts, item.section.id)
+      ? summaryDrafts[item.section.id]!
+      : item.section.memory?.synopsis ?? ''
   );
+  const updateSummary = (sourceSectionId: string, value: string) => {
+    setSummaryDrafts((current) => ({ ...current, [sourceSectionId]: value }));
+    setSummaryErrors((current) => ({ ...current, [sourceSectionId]: '' }));
+  };
+  const generateSummary = async (item: typeof referenceSections[number]) => {
+    setSummaryBusyId(item.section.id);
+    setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
+    try {
+      const draft = await onGenerateMemory(item.section.id);
+      setGeneratedDrafts((current) => ({ ...current, [item.section.id]: draft }));
+      setSummaryDrafts((current) => ({ ...current, [item.section.id]: draft.synopsis }));
+    } catch (error) {
+      setSummaryErrors((current) => ({
+        ...current,
+        [item.section.id]: error instanceof Error ? error.message : '梗概生成失败。',
+      }));
+    } finally {
+      setSummaryBusyId('');
+      window.setTimeout(() => document.getElementById(`context-summary-textarea-${item.section.id}`)?.focus(), 0);
+    }
+  };
+  const requestSummaryAction = (
+    item: typeof referenceSections[number],
+    action: 'generate' | 'save',
+  ) => {
+    summaryActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPendingSummarySectionId(item.section.id);
+    setPendingSummaryAction(action);
+    summaryConfirmDialog.current?.showModal();
+  };
+  const confirmSummaryAction = () => {
+    const item = referenceSections.find((candidate) => candidate.section.id === pendingSummarySectionId);
+    if (!item) return;
+    const action = pendingSummaryAction;
+    summaryActionAccepted.current = true;
+    summaryConfirmDialog.current?.close();
+    if (action === 'generate') {
+      void generateSummary(item);
+      return;
+    }
+    void saveSummaryAndLoad(item);
+    window.setTimeout(() => document.getElementById(`context-summary-textarea-${item.section.id}`)?.focus(), 0);
+  };
+  const pendingSummarySection = referenceSections.find((item) => item.section.id === pendingSummarySectionId);
+  const saveSummaryAndLoad = async (item: typeof referenceSections[number]) => {
+    const synopsis = summaryValue(item).trim();
+    if (!synopsis) {
+      setSummaryErrors((current) => ({ ...current, [item.section.id]: '请先填写或生成梗概。' }));
+      return;
+    }
+    const generated = generatedDrafts[item.section.id];
+    const existing = draftFromSectionMemory(item.section.memory);
+    const draft: SectionMemoryDraft = {
+      ...(generated ?? existing ?? {
+        synopsis: '',
+        beats: [],
+        continuityFacts: [],
+        characterStateChanges: [],
+        foreshadowingCandidates: [],
+      }),
+      synopsis,
+    };
+    const provenance: SectionMemoryProvenance = generated
+      ? generated.synopsis.trim() === synopsis ? 'model-confirmed' : 'model-edited'
+      : item.section.memory?.provenance.startsWith('model-') ? 'model-edited' : 'manual';
+    try {
+      await onSaveMemoryAndLoad(item.section.id, draft, provenance);
+      setSummaryDrafts((current) => ({ ...current, [item.section.id]: synopsis }));
+      setGeneratedDrafts((current) => {
+        const next = { ...current };
+        delete next[item.section.id];
+        return next;
+      });
+      setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
+    } catch (error) {
+      setSummaryErrors((current) => ({
+        ...current,
+        [item.section.id]: error instanceof Error ? error.message : '梗概保存失败，请重试。',
+      }));
+    }
+  };
 
   return (
-    <dialog
-      id="context-drawer"
-      className="context-drawer"
-      ref={dialogRef}
-      onClick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
-      onClose={onClose}
-      onCancel={(event) => { event.preventDefault(); closeDrawer(); }}
-      aria-labelledby="context-drawer-title"
+    <aside
+      id="context-tools-drawer"
+      ref={drawerRef}
+      className="context-tools-drawer"
+      data-open={open}
+      aria-hidden={!open}
+      inert={!open}
+      aria-labelledby="context-tools-drawer-title"
     >
-      <div className="context-drawer-scroll">
+      <div className="context-tools-drawer-scroll">
         <header className="drawer-heading">
-          <div>
-            <p className="eyebrow">当前输入预览</p>
-            <h2 id="context-drawer-title">本次生成输入</h2>
-          </div>
-          <button type="button" className="icon-button" autoFocus onClick={closeDrawer} aria-label="关闭本次输入预览" title="关闭">
+          <h2 id="context-tools-drawer-title">前文选择</h2>
+          <button type="button" className="icon-button" ref={closeButtonRef} onClick={onClose} aria-label="关闭前文选择" title="关闭">
             <X aria-hidden="true" />
           </button>
         </header>
 
-        <section className="context-target-card" aria-labelledby="context-target-heading">
-          <h3 id="context-target-heading">TARGET</h3>
-          <p><strong>Book</strong> · {book.title} <small>（{book.id}）</small></p>
-          <p><strong>Chapter</strong> · 第{plan.target.chapterIndex + 1}章 · {targetLocation?.chapter.title ?? '未知'} <small>（{plan.target.chapterId}）</small></p>
-          <p><strong>Section</strong> · 第{plan.target.sectionIndex + 1}节 · {section.title} <small>（{plan.target.sectionId}）</small></p>
-        </section>
-
-        <section className="context-plan-editor" aria-labelledby="context-plan-heading">
-          <div className="context-section-heading">
-            <h3 id="context-plan-heading">本节计划</h3>
-            <small>修改后自动保存</small>
-          </div>
-          <label htmlFor="context-plan-goal">本节目标</label>
-          <textarea
-            id="context-plan-goal"
-            rows={2}
-            value={section.plan?.goal ?? ''}
-            onChange={(event) => onSectionPlanChange({
-              goal: event.target.value,
-              intendedBeats: section.plan?.intendedBeats ?? [],
-              ...(section.plan?.povCharacterId ? { povCharacterId: section.plan.povCharacterId } : {}),
-            })}
-            placeholder="这一节希望完成什么？"
-          />
-          <label htmlFor="context-plan-beats">预期节拍（每行一项）</label>
-          <textarea
-            id="context-plan-beats"
-            rows={3}
-            value={(section.plan?.intendedBeats ?? []).join('\n')}
-            onChange={(event) => onSectionPlanChange({
-              goal: section.plan?.goal ?? '',
-              intendedBeats: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-              ...(section.plan?.povCharacterId ? { povCharacterId: section.plan.povCharacterId } : {}),
-            })}
-            placeholder="每行写一个预期变化……"
-          />
-          <label htmlFor="context-plan-pov">POV 角色</label>
-          <select
-            id="context-plan-pov"
-            value={section.plan?.povCharacterId ?? ''}
-            onChange={(event) => {
-              const povCharacterId = event.target.value;
-              onSectionPlanChange({
-                goal: section.plan?.goal ?? '',
-                intendedBeats: section.plan?.intendedBeats ?? [],
-                ...(povCharacterId ? { povCharacterId } : {}),
-              });
-            }}
-          >
-            <option value="">不指定 POV 角色</option>
-            {book.characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}
-          </select>
-        </section>
-
-        <section className="context-memory-section" aria-labelledby="context-memory-heading">
-          <div className="context-section-heading">
-            <h3 id="context-memory-heading">本节记忆</h3>
-            <small>正文变化后需重新确认</small>
-          </div>
-          <p className="context-memory-status" role="status">
-            当前状态：{sectionMemoryFreshness(section.memory, section.content)}
-            {section.memory ? ` · ${section.memory.provenance}` : ''}
-          </p>
-          {section.memory ? (
-            <div className="context-memory-current">
-              <strong>当前摘要</strong>
-              <p>{section.memory.synopsis}</p>
-              <small>记忆是有损索引；如与正文冲突，以正文为准。</small>
-            </div>
-          ) : <p className="helper-copy">还没有本节记忆。可先生成草稿或手动创建。</p>}
-          <div className="context-memory-actions">
-            <button type="button" onClick={() => void generateMemoryDraft()} disabled={memoryBusy}>
-              {memoryBusy ? '正在生成本节记忆…' : '更新本节记忆'}
-            </button>
-            <button type="button" onClick={startManualMemoryDraft} disabled={memoryBusy}>
-              {section.memory ? '编辑当前记忆' : '手动创建记忆'}
-            </button>
-            {section.previousMemory && <button type="button" onClick={rollbackMemory} disabled={memoryBusy}>回滚上一版记忆</button>}
-          </div>
-          {memoryError && <p className="context-memory-error" role="alert">{memoryError}</p>}
-          {memoryDraft && (
-            <fieldset className="context-memory-draft">
-              <legend>{memoryDraftSource === 'model' ? '待确认的模型草稿' : '手动编辑记忆'}</legend>
-              <label htmlFor="memory-draft-synopsis">摘要</label>
-              <textarea
-                id="memory-draft-synopsis"
-                rows={3}
-                value={memoryDraft.synopsis}
-                onChange={(event) => updateMemoryDraft({ synopsis: event.target.value })}
-              />
-              <label htmlFor="memory-draft-beats">关键节拍（每行一项）</label>
-              <textarea
-                id="memory-draft-beats"
-                rows={3}
-                value={memoryDraft.beats.join('\n')}
-                onChange={(event) => updateMemoryDraft({ beats: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-              />
-              <label htmlFor="memory-draft-continuity">连续性事实（每行一项）</label>
-              <textarea
-                id="memory-draft-continuity"
-                rows={3}
-                value={memoryDraft.continuityFacts.join('\n')}
-                onChange={(event) => updateMemoryDraft({ continuityFacts: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-              />
-              <label htmlFor="memory-draft-character-state">角色状态变化（每行一项）</label>
-              <textarea
-                id="memory-draft-character-state"
-                rows={3}
-                value={memoryDraft.characterStateChanges.join('\n')}
-                onChange={(event) => updateMemoryDraft({ characterStateChanges: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-              />
-              <label htmlFor="memory-draft-foreshadowing">候选伏笔（不会自动成为 Canon，每行一项）</label>
-              <textarea
-                id="memory-draft-foreshadowing"
-                rows={3}
-                value={memoryDraft.foreshadowingCandidates.join('\n')}
-                onChange={(event) => updateMemoryDraft({ foreshadowingCandidates: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-              />
-              <p className="helper-copy">生成的草稿只留在这里；确认后才会写入当前 Book。</p>
-              <div className="context-memory-actions">
-                <button type="button" className="primary-action" onClick={confirmMemoryDraft}>确认并保存记忆</button>
-                <button type="button" onClick={resetMemoryDraft}>取消</button>
+        <section className="context-reference-section" aria-label="加载前文">
+          {referenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
+            <div className="source-scope-drawer context-reference-scope" data-open>
+              <div className="source-load-tab">
+                <label className="source-load-toggle" title="选择全部前文">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allSelected}
+                    aria-label="选择全部前文"
+                    onChange={toggleAll}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="context-reference-scope-title">
+                  <strong>加载前文</strong>
+                  <small>已选 {selectedReferenceCount}/{referenceSections.length} 小节</small>
+                </div>
+                <button
+                  type="button"
+                  className="source-scope-all"
+                  aria-pressed={allSelected}
+                  onClick={toggleAll}
+                  disabled={busy}
+                >
+                  <BookOpenText aria-hidden="true" />
+                  <span>全部</span>
+                </button>
               </div>
-            </fieldset>
+              <div className="source-scope-content">
+                <div className="source-scope-chapters" aria-label="可加载的前文">
+                  {referenceChapters.map((chapterItem) => (
+                    <fieldset key={chapterItem.chapter.id}>
+                      <legend>{chapterItem.chapter.title}</legend>
+                      {chapterItem.sections.map((item) => {
+                        const mode = currentReferences.get(item.section.id);
+                        const selected = Boolean(mode);
+                        const expanded = expandedSections.has(item.section.id);
+                        const panelId = `context-summary-${item.section.id}`;
+                        const value = summaryValue(item);
+                        const summaryBusy = summaryBusyId === item.section.id;
+                        return (
+                          <Fragment key={item.section.id}>
+                            <div className="context-reference-row">
+                              <label className="context-reference-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={() => onContextReferenceChange(item.section.id, selected ? 'none' : 'full')}
+                                  disabled={busy}
+                                />
+                                <span className="sr-only">加载{item.section.title}全文</span>
+                              </label>
+                              <button
+                                type="button"
+                                className="context-reference-disclosure"
+                                aria-expanded={expanded}
+                                aria-controls={panelId}
+                                aria-label={expanded ? `收起${item.section.title}梗概` : `展开${item.section.title}梗概`}
+                                onClick={() => toggleSection(item.section.id)}
+                              >
+                                <span>{item.section.title}</span>
+                                <ChevronRight aria-hidden="true" />
+                              </button>
+                            </div>
+                            {expanded && (
+                              <div className="context-summary-editor" id={panelId}>
+                                <label>
+                                  <span className="sr-only">{item.section.title}梗概</span>
+                                  <textarea
+                                    id={`context-summary-textarea-${item.section.id}`}
+                                    value={value}
+                                    onChange={(event) => updateSummary(item.section.id, event.target.value)}
+                                    aria-invalid={Boolean(summaryErrors[item.section.id]) || undefined}
+                                    aria-describedby={summaryErrors[item.section.id] ? `context-summary-error-${item.section.id}` : undefined}
+                                    placeholder="填写这一节的梗概…"
+                                    spellCheck
+                                  />
+                                </label>
+                                <div className="context-summary-actions">
+                                  <button
+                                    type="button"
+                                    className="icon-button context-summary-generate"
+                                    disabled={(busy && !summaryBusy) || !item.section.content.trim()}
+                                    onClick={() => summaryBusy ? onCancelGeneration() : requestSummaryAction(item, 'generate')}
+                                    aria-busy={summaryBusy || undefined}
+                                    aria-label={summaryBusy ? '取消生成该节梗概' : '生成该节梗概'}
+                                    title={summaryBusy ? '取消生成该节梗概' : '生成该节梗概'}
+                                  >
+                                    <Sparkles aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary-action icon-button context-summary-save"
+                                    disabled={busy || summaryBusy || !value.trim()}
+                                    onClick={() => requestSummaryAction(item, 'save')}
+                                    aria-label="保存并加载梗概"
+                                    title={value.trim() ? '保存并加载梗概' : '请先填写或生成梗概'}
+                                  >
+                                    <Check aria-hidden="true" />
+                                  </button>
+                                </div>
+                                {summaryErrors[item.section.id] && (
+                                  <p className="context-summary-error" id={`context-summary-error-${item.section.id}`} role="alert">{summaryErrors[item.section.id]}</p>
+                                )}
+                              </div>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </fieldset>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
         </section>
-
-        <section className="context-budget" aria-labelledby="context-budget-heading">
-          <div className="context-section-heading">
-            <h3 id="context-budget-heading">输入预算</h3>
-            <small>{activeProviderProfile?.name ?? '当前 Provider'} · 估算值</small>
-          </div>
-          <dl className="context-budget-grid">
-            <div><dt>模型总 Context</dt><dd>{plan.budget.maxContext.toLocaleString()}</dd></div>
-            <div><dt>输出预留</dt><dd>{plan.budget.reservedOutput.toLocaleString()}</dd></div>
-            <div><dt>可用输入</dt><dd>{plan.budget.availableInput.toLocaleString()}</dd></div>
-            <div><dt>已估算输入</dt><dd>{plan.budget.estimatedInput.toLocaleString()}</dd></div>
-            <div><dt>剩余输入</dt><dd data-over-limit={plan.budget.overflow || undefined}>{plan.budget.remainingInput.toLocaleString()}</dd></div>
-          </dl>
-          <p className="context-budget-note">分母为 availableInput；协议开销 {plan.budget.protocolOverhead.toLocaleString()} + 安全余量 {plan.budget.safetyMargin.toLocaleString()} 已预留。{plan.budget.overflow ? `当前约超出 ${plan.budget.overflowTokens.toLocaleString()} tokens，生成会拒绝。` : '仅为近似估算。'}</p>
-          <p className="context-budget-note">稳定前缀（stable）是 Book 级固定规则；模式层（session）是本次会话设置；每轮变化（dynamic）是本次正文、注释和输入。</p>
-        </section>
-
-        <section className="context-reference-section" aria-labelledby="context-reference-heading">
-          <div className="context-section-heading">
-            <h3 id="context-reference-heading">前文参考</h3>
-            <small>仅列 TARGET 之前的 Section · 选择会自动保存</small>
-          </div>
-          <p id="context-reference-shortcut-help" className="context-reference-preset-help">
-            整本书线性前一节梗概+全文仅在已有新鲜、已确认记忆时可用；本章此前全部梗概需要每个适用小节都有新鲜、已确认记忆。应用后会立即保存当前选择。
-          </p>
-          <div className="context-reference-presets" aria-label="前文参考快捷项">
-            <button type="button" onClick={applyPreviousBothReference} disabled={!linearPreviousReference || !referenceEligible(linearPreviousReference)} aria-describedby="context-reference-shortcut-help" title={linearPreviousReference && referenceEligible(linearPreviousReference) ? '加载整本书线性前一节的新鲜梗概与全文' : '需要整本书线性前一节有新鲜、已确认的记忆'}>前一节：梗概 + 全文</button>
-            <button type="button" onClick={clearReferences} aria-describedby="context-reference-shortcut-help">清空前文参考</button>
-            <button
-              type="button"
-              onClick={applyRecommendedReferences}
-              disabled={!sameChapterPreviousReference}
-              aria-describedby="context-reference-shortcut-help"
-              title={sameChapterPreviousReference ? '只根据同章此前小节生成建议；没有新鲜记忆时前一节只使用全文' : '当前没有同章更早的 Section'}
-            >
-              应用建议
-            </button>
-            <button
-              type="button"
-              onClick={applyChapterSummaryReferences}
-              disabled={!allSameChapterReferencesEligible}
-              aria-describedby="context-reference-shortcut-help"
-              title={allSameChapterReferencesEligible ? '仅加载本章较早且已有新鲜记忆的小节梗概' : '需要本章此前所有适用小节都有新鲜、已确认的记忆'}
-            >本章此前小节：全部梗概</button>
-          </div>
-          {lastAppliedPreset && <p className="context-reference-preset-status" role="status">{lastAppliedPreset}；当前选择已保存。</p>}
-          {referenceSections.length === 0 ? <p className="helper-copy">当前没有可选的前文 Section。</p> : (
-            <ul className="context-reference-list">
-              {referenceSections.map((item) => {
-                const selectedMode = currentReferences.get(item.section.id) ?? 'none';
-                const eligible = referenceEligible(item);
-                return (
-                  <li className="context-reference-row" key={item.section.id}>
-                    <div>
-                      <strong>第{item.chapterIndex + 1}章 / 第{item.sectionIndex + 1}节 · {item.section.title}</strong>
-                      <small>{countWords(item.section.content).toLocaleString()} 字 · 约 {estimateTokens(item.section.content).toLocaleString()} tokens · {referenceStatusLabel(item)} · {item.section.id}</small>
-                    </div>
-                    <label>
-                      <span className="sr-only">{item.section.title}加载方式</span>
-                      <select
-                        value={selectedMode}
-                        onChange={(event) => {
-                          setLastAppliedPreset('');
-                          onContextReferenceChange(item.section.id, event.target.value as SectionContextReferenceMode | 'none');
-                        }}
-                        aria-label={`${item.section.title}加载方式`}
-                      >
-                        <option value="none">不加载</option>
-                        {/* option value="summary" disabled when memory is not eligible */}
-                        <option value="summary" disabled={!eligible}>{eligible ? '梗概' : '梗概（需先生成并确认记忆）'}</option>
-                        <option value="full">全文</option>
-                        {/* option value="both" disabled when memory is not eligible */}
-                        <option value="both" disabled={!eligible}>{eligible ? '两者' : '两者（需先生成并确认记忆）'}</option>
-                      </select>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        <section className="context-included-section" aria-labelledby="context-included-heading">
-          <div className="context-section-heading">
-            <h3 id="context-included-heading">已装入内容</h3>
-            <small>{plan.included.length} 项 · 实际发送顺序</small>
-          </div>
-          <ol className="context-included-list">
-            {plan.included.map((item, index) => (
-              <li key={item.id}>
-                <div className="context-included-title-row">
-                  <strong><span className="context-included-index">{String(index + 1).padStart(2, '0')}</span>{item.title}</strong>
-                  <small>约 {item.estimatedTokens.toLocaleString()} tokens</small>
-                </div>
-                <small>{item.messageRole} / {item.semanticRole} · {cacheBandLabel(item.cacheBand)} · {sourceLabel(item)}</small>
-                <small>{item.reason}{item.manualSelection ? ' · manual' : ''}{item.freshness ? ` · freshness:${item.freshness}` : ''}{item.truncated ? ` · 已截断：${item.truncationReason ?? '预算限制'}` : ''}</small>
-              </li>
-            ))}
-          </ol>
-          {plan.excluded.length > 0 && <details className="context-excluded-details">
-            <summary>未发送内容（{plan.excluded.length} 项）</summary>
-            <ul>
-              {plan.excluded.map((item) => <li key={item.id}><strong>{item.title}</strong><small>{item.reason}</small></li>)}
-            </ul>
-          </details>}
-        </section>
-
-        <details className="context-exact-messages">
-          <summary>查看实际发送内容（默认折叠）</summary>
-          <p className="helper-copy">这是 Provider 输入预览，不是隐藏推理；此处不包含 API Key 或 Authorization。</p>
-          <div className="context-message-list">
-            {plan.messages.map((message, index) => (
-              <article key={`${message.role}-${index}`}>
-                <strong>{message.role}</strong>
-                <pre>{message.content}</pre>
-              </article>
-            ))}
-          </div>
-        </details>
-
-        <details className="context-composition-details">
-          <summary><Layers3 aria-hidden="true" /><span><strong>组合图</strong><small>{compositionItems.length} 组 · 稳定前缀约 {stablePrefixTokens.toLocaleString()} tokens</small></span><ChevronDown aria-hidden="true" /></summary>
-          <div className="prompt-composition-content">
-            <p className="prompt-composition-note">竖条按估算 tokens 比例显示，右侧按实际发送顺序排列。</p>
-            <div className="prompt-composition-chart" style={{ '--prompt-item-count': compositionItems.length } as CSSProperties}>
-              <div className="prompt-composition-map">
-                <div className="prompt-proportion-bar" aria-hidden="true">
-                  {compositionItems.map((item, index) => {
-                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
-                    return <span className="prompt-proportion-segment" data-cache-band={item.cacheBand} data-small={share < 6} key={item.id} style={{ '--prompt-color': promptTone(index), flexGrow: Math.max(item.estimatedTokens, 0.01) } as CSSProperties}><span>{String(index + 1).padStart(2, '0')}</span></span>;
-                  })}
-                </div>
-                <svg className="prompt-connector-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                  {compositionItems.map((item, index) => <line key={item.id} x1="8" y1={promptSegmentCenters[index]} x2="25" y2={(index + 0.5) / compositionItems.length * 100} style={{ stroke: promptTone(index) }} />)}
-                </svg>
-                <ol className="prompt-composition-list" aria-label="当前 Prompt 区块顺序">
-                  {compositionItems.map((item, index) => {
-                    const share = totalPromptTokens > 0 ? item.estimatedTokens / totalPromptTokens * 100 : 0;
-                    return <li key={item.id} data-cache-band={item.cacheBand} style={{ '--prompt-color': promptTone(index) } as CSSProperties}>
-                      <span className="prompt-composition-index">{String(index + 1).padStart(2, '0')}</span>
-                      <span className="prompt-composition-copy"><span className="prompt-composition-title-row"><strong>{item.title}</strong><span className="prompt-composition-meta"><strong>{promptShareLabel(share)}</strong><small>约 {item.estimatedTokens.toLocaleString()} tokens</small></span></span><small>{cacheBandLabel(item.cacheBand)} · {item.reason}</small>{item.includedNames?.length ? <small className="prompt-included-names">包含：{item.includedNames.join('、')}</small> : null}{index === stablePrefixCount - 1 && <small className="cache-prefix-boundary">稳定前缀到这里</small>}</span>
-                    </li>;
-                  })}
-                </ol>
-              </div>
-              <p className="prompt-map-caption">段高 = 当前 tokens 占比</p>
-            </div>
-          </div>
-        </details>
       </div>
-    </dialog>
+
+      <dialog
+        className="confirm-dialog"
+        ref={summaryConfirmDialog}
+        onClose={() => {
+          setPendingSummarySectionId('');
+          setPendingSummaryAction('');
+          if (!summaryActionAccepted.current) {
+            window.requestAnimationFrame(() => summaryActionTrigger.current?.focus());
+          }
+          summaryActionAccepted.current = false;
+        }}
+        onCancel={(event) => { event.preventDefault(); summaryConfirmDialog.current?.close(); }}
+        aria-labelledby="summary-confirm-dialog-title"
+        aria-describedby="summary-confirm-dialog-description"
+      >
+        <header className="dialog-heading">
+          <h2 id="summary-confirm-dialog-title">
+            {pendingSummaryAction === 'save' ? '保存并加载梗概' : '生成该节梗概'}
+          </h2>
+          <button type="button" className="icon-button" onClick={() => summaryConfirmDialog.current?.close()} aria-label="关闭确认" title="关闭">
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="confirm-dialog-body">
+          <p id="summary-confirm-dialog-description">
+            {pendingSummaryAction === 'save'
+              ? `会保存「${pendingSummarySection?.section.title ?? ''}」编辑框里的梗概，并作为前文加载到当前小节。`
+              : `会用 AI 生成的内容替换「${pendingSummarySection?.section.title ?? ''}」编辑框里的梗概；确认保存前不会写入书目。`}
+          </p>
+          <div className="dialog-actions">
+            <button type="button" className="quiet-action" onClick={() => summaryConfirmDialog.current?.close()}>取消</button>
+            <button type="button" className="primary-action button-with-icon" onClick={confirmSummaryAction}>
+              {pendingSummaryAction === 'save'
+                ? <><Check aria-hidden="true" />确认保存并加载</>
+                : <><Sparkles aria-hidden="true" />确认生成</>}
+            </button>
+          </div>
+        </div>
+      </dialog>
+    </aside>
   );
 }
 
@@ -1667,15 +1894,20 @@ interface WriterProps {
   instruction: string;
   authorNote: string;
   busy: boolean;
+  status: string;
+  generationState: 'idle' | 'generating';
   contextPlan: ContextPlan | null;
-  contextOpen: boolean;
+  contextPlanError: string;
+  contextCompositionOpen: boolean;
+  contextToolsOpen: boolean;
   providerName: string;
   modelId: string;
   onBack: () => void;
   onOpenBookSettings: () => void;
-  onExport: () => void;
   onOpenSettings: () => void;
-  onOpenContext: () => void;
+  onOpenContextComposition: () => void;
+  onOpenContextTools: () => void;
+  onCancelGeneration: () => void;
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
@@ -1694,16 +1926,20 @@ function Writer(props: WriterProps) {
   const [selectedBlockId, setSelectedBlockId] = useState('');
   const [editingBlockId, setEditingBlockId] = useState('');
   const titleDialog = useRef<HTMLDialogElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const titleTrigger = useRef<HTMLElement | null>(null);
   const actionMenu = useRef<HTMLDetailsElement>(null);
   const deleteBlockDialog = useRef<HTMLDialogElement>(null);
   const blockActionTrigger = useRef<HTMLElement | null>(null);
   const readerScrollPosition = useRef(0);
+  const manuscriptWrapRef = useRef<HTMLElement>(null);
+  const instructionDockRef = useRef<HTMLFormElement>(null);
   const instructionInput = useRef<HTMLTextAreaElement>(null);
   const resizePressTimer = useRef<number | null>(null);
   const resizeGesture = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
   const resizeGestureActive = useRef(false);
   const [instructionInputHeight, setInstructionInputHeight] = useState<number | null>(null);
+  const [instructionDockHeight, setInstructionDockHeight] = useState(0);
   const [isResizingInstruction, setIsResizingInstruction] = useState(false);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
@@ -1722,6 +1958,17 @@ function Writer(props: WriterProps) {
   useEffect(() => () => {
     if (resizePressTimer.current !== null) window.clearTimeout(resizePressTimer.current);
   }, []);
+
+  useEffect(() => {
+    const dock = instructionDockRef.current;
+    if (!dock) return undefined;
+    const updateDockHeight = () => setInstructionDockHeight(dock.getBoundingClientRect().height);
+    updateDockHeight();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(updateDockHeight);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [instructionInputHeight, props.authorNote, props.mode]);
 
   const clampInstructionHeight = (height: number) => Math.min(
     Math.max(44, height),
@@ -1747,6 +1994,21 @@ function Writer(props: WriterProps) {
     }
     setSectionTitle(props.section?.title ?? '');
     titleDialog.current?.showModal();
+    const focusTitleInput = () => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    };
+    focusTitleInput();
+    window.requestAnimationFrame(focusTitleInput);
+  };
+
+  const restoreTitleTriggerFocus = () => {
+    const trigger = titleTrigger.current;
+    const focusTrigger = () => {
+      if (trigger?.isConnected) trigger.focus();
+    };
+    focusTrigger();
+    window.requestAnimationFrame(focusTrigger);
   };
 
   const closeActionMenu = (restoreFocus = false) => {
@@ -1757,17 +2019,21 @@ function Writer(props: WriterProps) {
 
   const openBlockEditor = () => {
     if (!selectedBlock) return;
-    readerScrollPosition.current = window.scrollY;
+    readerScrollPosition.current = manuscriptWrapRef.current?.scrollTop ?? 0;
+    blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setEditingBlockId(selectedBlock.id);
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0 }));
   };
 
   const closeBlockEditor = () => {
     setEditingBlockId('');
     window.requestAnimationFrame(() => {
-      window.scrollTo({ top: readerScrollPosition.current });
+      if (manuscriptWrapRef.current) manuscriptWrapRef.current.scrollTop = readerScrollPosition.current;
       window.requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>('.manuscript-block[aria-pressed="true"]')?.focus({ preventScroll: true });
+        if (blockActionTrigger.current?.isConnected) {
+          blockActionTrigger.current.focus({ preventScroll: true });
+          return;
+        }
+        document.querySelector<HTMLElement>(`.manuscript-block-group[data-selected="true"] .manuscript-block-actions button`)?.focus({ preventScroll: true });
       });
     });
   };
@@ -1801,6 +2067,11 @@ function Writer(props: WriterProps) {
     ));
   };
 
+  const selectManuscriptBlock = (blockId: string) => {
+    actionMenu.current?.removeAttribute('open');
+    setSelectedBlockId((current) => current === blockId ? '' : blockId);
+  };
+
   if (editingBlock) {
     const editorLabel = editingBlock.kind === 'user' ? '用户输入' : 'AI 输出';
     return (
@@ -1827,7 +2098,7 @@ function Writer(props: WriterProps) {
             title="完成"
           ><Check aria-hidden="true" /></button>
         </header>
-        <main className="block-editor-body">
+        <div className="block-editor-body">
           <label className="sr-only" htmlFor="block-editor-textarea">{editorLabel}内容</label>
           <textarea
             id="block-editor-textarea"
@@ -1840,35 +2111,33 @@ function Writer(props: WriterProps) {
               : item))}
             spellCheck
           />
-        </main>
+        </div>
       </article>
     );
   }
 
   return (
-    <div className="writer-page">
+    <div className="writer-page" style={instructionDockHeight > 0 ? { '--instruction-dock-height': `${instructionDockHeight}px` } as CSSProperties : undefined}>
       <header className="writer-heading">
         <div className="writer-context-row">
           <button
             type="button"
             className="icon-button writer-back-button"
             onClick={props.onBack}
+            disabled={props.busy}
             aria-label="返回故事书架"
             title="返回故事书架"
           ><ArrowLeft aria-hidden="true" /></button>
-          <span className="writer-manuscript-count">
-            字数 <strong>{manuscriptWordCount.toLocaleString('zh-CN')}</strong>
-            <span aria-hidden="true"> | </span>
-            token <strong>{compactTokenCount(manuscriptTokenCount)}</strong>
-          </span>
           <button
             type="button"
             className="writer-context-trigger"
-            onClick={props.onOpenContext}
-            aria-haspopup="dialog"
-            aria-expanded={props.contextOpen}
-            aria-controls="context-drawer"
-            aria-label={`查看当前 Context：已估算 ${contextTokens} tokens，可用输入 ${availableInput} tokens`}
+            onClick={props.onOpenContextComposition}
+            disabled={props.busy}
+            aria-expanded={props.contextCompositionOpen}
+            aria-controls="context-composition-drawer"
+            aria-label={props.contextPlanError
+              ? `查看当前上下文：${props.contextPlanError}`
+              : `查看当前上下文：已估算 ${contextTokens} tokens，可用输入 ${availableInput} tokens`}
           >
             <progress
               className="writer-context-progress"
@@ -1877,42 +2146,63 @@ function Writer(props: WriterProps) {
               aria-hidden="true"
             />
             <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
-              {compactTokenCount(contextTokens)} / {compactTokenCount(availableInput)} · {contextPercent}%
+              {props.contextPlanError ? '无法预览' : `${compactTokenCount(contextTokens)} / ${compactTokenCount(availableInput)} · ${contextPercent}%`}
             </span>
             <small className="writer-provider-line">
               <span>{props.providerName}</span><span aria-hidden="true">|</span><span>{props.modelId}</span>
             </small>
+            <span className="writer-manuscript-count">
+              字数 <strong>{manuscriptWordCount.toLocaleString('zh-CN')}</strong>
+              <span aria-hidden="true"> | </span>
+              token <strong>{compactTokenCount(manuscriptTokenCount)}</strong>
+            </span>
           </button>
         </div>
 
+        {(props.contextPlan || props.contextPlanError) && (
+          <ContextCompositionDrawer
+            open={props.contextCompositionOpen}
+            plan={props.contextPlan}
+            error={props.contextPlanError}
+            onClose={props.onOpenContextComposition}
+          />
+        )}
+
         <div className="writer-tool-row" role="group" aria-label="写作工具">
-          <button
-            type="button"
-            className="book-settings-button button-with-icon writer-book-settings-button"
-            onClick={props.onOpenBookSettings}
-            aria-label="打开本书设定"
-            title="本书设定"
-          ><BookMarked aria-hidden="true" /><span>设定</span></button>
+          <div className="writer-tool-leading">
+            <button
+              type="button"
+              className="book-settings-button button-with-icon writer-book-settings-button"
+              onClick={props.onOpenBookSettings}
+              disabled={props.busy}
+              aria-label="打开本书设定"
+              title="本书设定"
+            ><BookMarked aria-hidden="true" /><span>设定</span></button>
+            <button
+              type="button"
+              className="icon-button writer-context-tools-button"
+              onClick={props.onOpenContextTools}
+              disabled={props.busy}
+              aria-expanded={props.contextToolsOpen}
+              aria-controls="context-tools-drawer"
+              aria-label="选择前文"
+              title="选择前文"
+            ><ListTree aria-hidden="true" /></button>
+          </div>
           <div className="writer-tool-actions">
             <button
               type="button"
               className="icon-button"
               onClick={openTitleDialog}
-              disabled={!props.section}
+              disabled={!props.section || props.busy}
               aria-label="修改小节名称"
               title="修改小节名称"
             ><Pencil aria-hidden="true" /></button>
             <button
               type="button"
               className="icon-button"
-              onClick={props.onExport}
-              aria-label="导出当前书目"
-              title="导出当前书目"
-            ><Download aria-hidden="true" /></button>
-            <button
-              type="button"
-              className="icon-button"
               onClick={props.onOpenSettings}
+              disabled={props.busy}
               aria-label="打开设置"
               title="设置"
             ><Settings aria-hidden="true" /></button>
@@ -1923,29 +2213,40 @@ function Writer(props: WriterProps) {
           <strong>{props.chapterTitle}</strong>
           {props.section && <span> · {props.section.title}</span>}
         </p>
+      <div className="writer-status-row">
+        <p className="writer-status" role="status" aria-live="polite" aria-atomic="true">{props.status}</p>
+        {props.generationState === 'generating' && (
+          <button type="button" className="quiet-action writer-cancel-button" onClick={props.onCancelGeneration}>
+            取消生成
+          </button>
+        )}
+      </div>
       </header>
 
-      <section className="manuscript-wrap" aria-labelledby="manuscript-label">
+      <section className="manuscript-wrap" ref={manuscriptWrapRef} aria-labelledby="manuscript-label">
         <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
         <div className="manuscript" aria-label="连续小说正文">
           {blocks.map((block) => (
             <div className="manuscript-block-group" data-selected={selectedBlockId === block.id || undefined} key={block.id}>
-              <button
-                type="button"
+              <div
                 className="manuscript-block"
                 data-kind={block.kind}
-                aria-pressed={selectedBlockId === block.id}
-                aria-label={`${block.kind === 'user' ? '用户输入' : 'AI 输出'}：${block.content}`}
-                onClick={() => {
-                  actionMenu.current?.removeAttribute('open');
-                  setSelectedBlockId((current) => current === block.id ? '' : block.id);
-                }}
+                onClick={() => selectManuscriptBlock(block.id)}
               >
-                <span className="sr-only">{block.kind === 'user' ? '用户输入：' : 'AI 输出：'}</span>
                 <span className="manuscript-block-copy">{renderBlockContent(block)}</span>
+              </div>
+              <button
+                type="button"
+                className="manuscript-block-select icon-button"
+                aria-pressed={selectedBlockId === block.id}
+                aria-label={`${selectedBlockId === block.id ? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段`}
+                title={`${selectedBlockId === block.id ? '取消选择' : '选择'}片段`}
+                onClick={() => selectManuscriptBlock(block.id)}
+              >
+                <MousePointer2 aria-hidden="true" />
               </button>
               {selectedBlockId === block.id && (
-                <div className="manuscript-block-actions" role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
+                <div className="manuscript-block-actions" data-block-id={block.id} role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
                   {block.kind === 'assistant' && <button
                     type="button"
                     className="icon-button"
@@ -1979,7 +2280,7 @@ function Writer(props: WriterProps) {
         </div>
       </section>
 
-      <form className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
+      <form ref={instructionDockRef} className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
         <details
           ref={actionMenu}
           className="writer-action-menu"
@@ -1989,7 +2290,7 @@ function Writer(props: WriterProps) {
             closeActionMenu(true);
           }}
         >
-          <summary className="icon-button writer-menu-trigger" title="写作操作" onClick={() => setSelectedBlockId('')}>
+          <summary className="icon-button writer-menu-trigger" title="写作操作" aria-disabled={props.busy || undefined} onClick={(event) => { if (props.busy) { event.preventDefault(); return; } setSelectedBlockId(''); }}>
             <Menu aria-hidden="true" />
             <span className="sr-only">打开写作操作</span>
           </summary>
@@ -1998,12 +2299,14 @@ function Writer(props: WriterProps) {
               <button
                 type="button"
                 className="writer-menu-action"
+                disabled={props.busy}
                 aria-pressed={props.mode === 'author'}
                 onClick={() => props.onModeChange('author')}
               ><BookOpenText aria-hidden="true" />作者模式 · 写作接龙</button>
               <button
                 type="button"
                 className="writer-menu-action"
+                disabled={props.busy}
                 aria-pressed={props.mode === 'character'}
                 onClick={() => props.onModeChange('character')}
               ><UsersRound aria-hidden="true" />角色模式 · 第一视角</button>
@@ -2014,6 +2317,7 @@ function Writer(props: WriterProps) {
                 <select
                   id="character-select"
                   value={props.selectedCharacterId}
+                  disabled={props.busy}
                   onChange={(event) => props.onCharacterChange(event.target.value)}
                   required
                   aria-invalid={characterModeNeedsSelection ? 'true' : undefined}
@@ -2024,7 +2328,7 @@ function Writer(props: WriterProps) {
                 </select>
                 <p id="character-mode-hint" className="mode-hint">
                   {characterModeNeedsSelection
-                    ? '请选择当前 Book 的角色。'
+                    ? '请选择本书角色后再发送。'
                     : `以 ${selectedCharacter?.name ?? '所选角色'} 的第一人称连续正文生成。你控制该角色，AI 处理世界和其他角色。`}
                 </p>
               </div>
@@ -2036,6 +2340,7 @@ function Writer(props: WriterProps) {
                   id="author-note-input"
                   rows={4}
                   value={props.authorNote}
+                  disabled={props.busy}
                   onChange={(event) => props.onAuthorNoteChange(event.target.value)}
                   placeholder="例如：跳过路程，直接写抵达后的重逢……"
                   spellCheck
@@ -2105,13 +2410,20 @@ function Writer(props: WriterProps) {
             placeholder={props.mode === 'author' ? '写下一段正文，让 AI 从这里接着写……' : '以当前角色输入行动、台词或选择……'}
           />
         </div>
+        {characterModeNeedsSelection && (
+          <p className="writer-send-hint" id="character-mode-send-hint" role="alert">
+            角色模式需要先选择本书角色，选择后才能发送。
+          </p>
+        )}
         <button
-          type="submit"
-          className="primary-action icon-button writer-send-button"
-          disabled={props.busy || characterModeNeedsSelection}
-          aria-label={props.busy ? '正在续写' : '发送并续写'}
-          title={props.busy ? '正在续写…' : '发送并续写'}
-        ><Sparkles aria-hidden="true" /></button>
+            type="submit"
+            className="primary-action icon-button writer-send-button"
+            disabled={props.busy || characterModeNeedsSelection}
+            aria-busy={props.busy || undefined}
+            aria-label={props.busy ? '正在续写' : '发送并续写'}
+            title={props.busy ? '正在续写…' : '发送并续写'}
+            aria-describedby={characterModeNeedsSelection ? 'character-mode-send-hint' : undefined}
+        ><Send aria-hidden="true" /></button>
       </form>
 
       <dialog
@@ -2147,7 +2459,7 @@ function Writer(props: WriterProps) {
       <dialog
         className="name-dialog"
         ref={titleDialog}
-        onClose={() => titleTrigger.current?.focus()}
+        onClose={restoreTitleTriggerFocus}
         onCancel={(event) => { event.preventDefault(); titleDialog.current?.close(); }}
         aria-labelledby="section-title-dialog-heading"
       >
@@ -2164,7 +2476,7 @@ function Writer(props: WriterProps) {
           </header>
           <div className="name-dialog-body">
             <label htmlFor="section-title-input">小节名称</label>
-            <input id="section-title-input" autoFocus required autoComplete="off" value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} />
+            <input id="section-title-input" ref={titleInputRef} required autoComplete="off" value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} />
             <div className="dialog-actions">
               <button type="button" className="quiet-action" onClick={() => titleDialog.current?.close()}>取消</button>
               <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
@@ -2365,6 +2677,8 @@ interface BookshelfProps {
   book: Book;
   library: BookIndexEntry[];
   selectedSectionId: string;
+  openNewBookRequest: number;
+  onNewBookOpened: () => void;
   openBookSettingsRequest: number;
   onBookSettingsOpened: () => void;
   onBookSettingsClose: () => void;
@@ -2411,6 +2725,7 @@ function Bookshelf(props: BookshelfProps) {
   );
   const [bookSettingsView, setBookSettingsView] = useState<BookSettingsView>({ kind: 'root' });
   const nameDialogRef = useRef<HTMLDialogElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
   const nameDialogTrigger = useRef<HTMLElement | null>(null);
   const deleteDialogTrigger = useRef<HTMLElement | null>(null);
@@ -2419,11 +2734,21 @@ function Bookshelf(props: BookshelfProps) {
   const bookSettingsPageTrigger = useRef<HTMLElement | null>(null);
   const bookSettingsScrollTop = useRef(0);
   const bookSettingsBackButton = useRef<HTMLButtonElement>(null);
+  const bookLibraryDrawer = useRef<HTMLDetailsElement>(null);
+  const bookSelectorTrigger = useRef<HTMLElement>(null);
+  const bookActionsMenu = useRef<HTMLDetailsElement>(null);
+  const bookActionsTrigger = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (nameDialog && nameDialogRef.current && !nameDialogRef.current.open) {
-      nameDialogRef.current.showModal();
-    }
+    if (!nameDialog || !nameDialogRef.current || nameDialogRef.current.open) return undefined;
+    nameDialogRef.current.showModal();
+    const focusNameInput = () => {
+      nameInputRef.current?.focus();
+      if (nameDialog.kind === 'rename-book' || nameDialog.kind === 'rename-chapter') nameInputRef.current?.select();
+    };
+    focusNameInput();
+    const frame = window.requestAnimationFrame(focusNameInput);
+    return () => window.cancelAnimationFrame(frame);
   }, [nameDialog]);
 
   useEffect(() => {
@@ -2455,13 +2780,61 @@ function Bookshelf(props: BookshelfProps) {
     deleteDialogTrigger.current = rememberTrigger();
     setDeleteDialog(dialog);
   };
+  const openCurrentBookNameDialog = (dialog: NameDialogState) => {
+    nameDialogTrigger.current = bookActionsTrigger.current;
+    bookActionsMenu.current?.removeAttribute('open');
+    setNameDialog(dialog);
+  };
+  const openCurrentBookDeleteDialog = () => {
+    deleteDialogTrigger.current = bookActionsTrigger.current;
+    bookActionsMenu.current?.removeAttribute('open');
+    setDeleteDialog({ kind: 'book', id: props.book.id, title: props.book.title });
+  };
+
+  useEffect(() => {
+    if (!props.openNewBookRequest) return;
+    openNameDialog({ kind: 'new-book', value: '' });
+    props.onNewBookOpened();
+  }, [props.openNewBookRequest]);
+
+  useEffect(() => {
+    const closeBookMenus = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (bookLibraryDrawer.current?.open && !bookLibraryDrawer.current.contains(event.target)) {
+        bookLibraryDrawer.current.removeAttribute('open');
+      }
+      if (bookActionsMenu.current?.open && !bookActionsMenu.current.contains(event.target)) {
+        bookActionsMenu.current.removeAttribute('open');
+      }
+    };
+    const closeBookMenuWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (bookActionsMenu.current?.open) {
+        bookActionsMenu.current.removeAttribute('open');
+        bookActionsTrigger.current?.focus();
+        return;
+      }
+      if (bookLibraryDrawer.current?.open) {
+        bookLibraryDrawer.current.removeAttribute('open');
+        bookSelectorTrigger.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', closeBookMenus);
+    document.addEventListener('keydown', closeBookMenuWithKeyboard);
+    return () => {
+      document.removeEventListener('pointerdown', closeBookMenus);
+      document.removeEventListener('keydown', closeBookMenuWithKeyboard);
+    };
+  }, []);
   const restoreDialogFocus = (trigger: React.RefObject<HTMLElement | null>) => {
     const target = trigger.current;
-    window.requestAnimationFrame(() => {
+    const focusTarget = () => {
       if (target?.isConnected) target.focus();
       else if (bookSettingsDialog.current?.open) bookSettingsDialog.current.querySelector<HTMLElement>('summary')?.focus();
       else document.querySelector<HTMLElement>('.directory-toolbar button, .book-selector-card')?.focus();
-    });
+    };
+    focusTarget();
+    window.requestAnimationFrame(focusTarget);
   };
 
   const nameDialogCopy = (() => {
@@ -2597,64 +2970,75 @@ function Bookshelf(props: BookshelfProps) {
         : bookSettingsView.kind === 'world'
           ? settingsWorldRule?.title ?? '世界观设定'
           : '本书设定';
-  const bookSettingsEyebrow = bookSettingsView.kind === 'root'
-    ? '全局指引 · 角色 · 世界'
-    : `本书设定 · ${props.book.title}`;
-
   return (
     <div className="shelf-page">
       <section className="shelf-content">
         <aside className="book-rail" aria-label="书目选择">
-          <details className="book-library-drawer">
-            <summary className="book-selector-card">
-              <BookOpenText aria-hidden="true" />
-              <span><small>书</small><strong>{props.book.title}</strong></span>
-              <ChevronDown className="book-selector-chevron" aria-hidden="true" />
-            </summary>
-            <div className="book-library-panel">
-              <div className="book-actions-row">
+          <div className="book-library-controls">
+            <details
+              ref={bookLibraryDrawer}
+              className="book-library-drawer"
+              onToggle={(event) => {
+                if (event.currentTarget.open) bookActionsMenu.current?.removeAttribute('open');
+              }}
+            >
+              <summary ref={bookSelectorTrigger} className="book-selector-card">
+                <BookOpenText aria-hidden="true" />
+                <strong>{props.book.title}</strong>
+                <ChevronDown className="book-selector-chevron" aria-hidden="true" />
+              </summary>
+              <div className="book-library-panel">
+                <p className="book-list-label">切换书目</p>
+                <div className="book-list" aria-label="全部书目">
+                  {props.library.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      aria-current={entry.id === props.book.id ? 'true' : undefined}
+                      onClick={() => {
+                        bookLibraryDrawer.current?.removeAttribute('open');
+                        if (entry.id !== props.book.id) props.onOpenBook(entry.id);
+                      }}
+                    >
+                      <BookOpenText aria-hidden="true" />
+                      <span>{entry.title}</span>
+                      {entry.id === props.book.id && <Check aria-hidden="true" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </details>
+            <details
+              ref={bookActionsMenu}
+              className="book-actions-menu"
+              onToggle={(event) => {
+                if (event.currentTarget.open) bookLibraryDrawer.current?.removeAttribute('open');
+              }}
+            >
+              <summary
+                ref={bookActionsTrigger}
+                className="icon-button book-actions-trigger"
+                aria-label={`管理当前书目：${props.book.title}`}
+                title="管理当前书目"
+              ><Ellipsis aria-hidden="true" /></summary>
+              <div className="book-actions-menu-panel" aria-label="当前书目操作">
                 <button
                   type="button"
-                  className="icon-button"
+                  className="book-menu-action"
                   aria-haspopup="dialog"
-                  aria-label="新建书目"
-                  title="新建书目"
-                  onClick={() => openNameDialog({ kind: 'new-book', value: '' })}
-                ><Plus aria-hidden="true" /></button>
+                  onClick={() => openCurrentBookNameDialog({ kind: 'rename-book', value: props.book.title })}
+                ><Pencil aria-hidden="true" /><span>修改书名</span></button>
                 <button
                   type="button"
-                  className="icon-button"
+                  className="book-menu-action danger-icon"
                   aria-haspopup="dialog"
-                  aria-label={`修改书名${props.book.title}`}
-                  title="修改书名"
-                  onClick={() => openNameDialog({ kind: 'rename-book', value: props.book.title })}
-                ><Pencil aria-hidden="true" /></button>
-                <button
-                  type="button"
-                  className="icon-button danger-icon"
-                  aria-haspopup="dialog"
-                  aria-label={`删除书目${props.book.title}`}
-                  title={props.library.length <= 1 ? '书库至少保留一本书' : '删除书目'}
                   disabled={props.library.length <= 1}
-                  onClick={() => openDeleteDialog({ kind: 'book', id: props.book.id, title: props.book.title })}
-                ><Trash2 aria-hidden="true" /></button>
+                  title={props.library.length <= 1 ? '书库至少保留一本书' : undefined}
+                  onClick={openCurrentBookDeleteDialog}
+                ><Trash2 aria-hidden="true" /><span>删除书目</span></button>
               </div>
-              <div className="book-list" aria-label="全部书目">
-                {props.library.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    aria-current={entry.id === props.book.id ? 'true' : undefined}
-                    onClick={() => props.onOpenBook(entry.id)}
-                  >
-                    <BookOpenText aria-hidden="true" />
-                    <span>{entry.title}</span>
-                    {entry.id === props.book.id && <Check aria-hidden="true" />}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </details>
+            </details>
+          </div>
         </aside>
         <h1 className="sr-only">故事书架</h1>
         <section className={`directory-panel${selectionMode ? ' selection-mode' : ''}`} aria-label="章节目录">
@@ -2736,7 +3120,7 @@ function Bookshelf(props: BookshelfProps) {
                         className="icon-button"
                         aria-haspopup="dialog"
                         onClick={() => openNameDialog({ kind: 'rename-chapter', value: chapter.title, chapterId: chapter.id })}
-                        aria-label={`修改章节名称${chapter.title}`}
+                        aria-label={`修改章节名称：${chapter.title}`}
                         title="修改章节名称"
                       ><Pencil aria-hidden="true" /></button>
                     </div>}
@@ -2793,7 +3177,7 @@ function Bookshelf(props: BookshelfProps) {
             <label htmlFor="name-dialog-input">{nameDialogCopy.label}</label>
             <input
               id="name-dialog-input"
-              autoFocus
+              ref={nameInputRef}
               required
               name="item-name"
               autoComplete="off"
@@ -2841,9 +3225,9 @@ function Bookshelf(props: BookshelfProps) {
         onCancel={(event) => { event.preventDefault(); closeBookSettings(); }}
         aria-labelledby="book-settings-title"
       >
-        <header className="drawer-heading">
-          <div className="drawer-title-row">
-            {bookSettingsView.kind !== 'root' && (
+        <header className={`drawer-heading${bookSettingsView.kind !== 'root' ? ' compact-book-settings-heading' : ''}`}>
+          {bookSettingsView.kind !== 'root' ? (
+            <>
               <button
                 ref={bookSettingsBackButton}
                 type="button"
@@ -2852,12 +3236,16 @@ function Bookshelf(props: BookshelfProps) {
                 aria-label="返回本书设定"
                 title="返回本书设定"
               ><ArrowLeft aria-hidden="true" /></button>
-            )}
-            <div>
-              <p className="eyebrow">{bookSettingsEyebrow}</p>
-              <h2 id="book-settings-title">{bookSettingsTitle}</h2>
+              <h2 id="book-settings-title" className="sr-only">{bookSettingsTitle}</h2>
+            </>
+          ) : (
+            <div className="drawer-title-row">
+              <div>
+                <p className="eyebrow">全局指引 · 角色 · 世界</p>
+                <h2 id="book-settings-title">本书设定</h2>
+              </div>
             </div>
-          </div>
+          )}
           <button type="button" className="icon-button" autoFocus={bookSettingsView.kind === 'root'} onClick={closeBookSettings} aria-label="关闭本书设定" title="关闭本书设定"><X aria-hidden="true" /></button>
         </header>
         <div className="book-settings-content">
@@ -2921,8 +3309,8 @@ function Bookshelf(props: BookshelfProps) {
                           ? setSelectedSourceIds((current) => toggleSourceSelection(current, character.id))
                           : openBookSettingsPage({ kind: 'character', id: character.id })}
                         aria-label={sourceSelectionMode === 'character'
-                          ? `${selectedSourceIds.has(character.id) ? '取消选择' : '选择'}角色卡${character.name}`
-                          : `打开角色卡${character.name}`}
+                          ? `${selectedSourceIds.has(character.id) ? '取消选择' : '选择'}角色卡：${character.name}`
+                          : `打开角色卡：${character.name}`}
                         key={character.id}
                       >
                         {sourceSelectionMode === 'character' && (
@@ -2977,8 +3365,8 @@ function Bookshelf(props: BookshelfProps) {
                           ? setSelectedSourceIds((current) => toggleSourceSelection(current, rule.id))
                           : openBookSettingsPage({ kind: 'world', id: rule.id })}
                         aria-label={sourceSelectionMode === 'world'
-                          ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观设定${rule.title}`
-                          : `打开世界观设定${rule.title}`}
+                          ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观设定：${rule.title}`
+                          : `打开世界观设定：${rule.title}`}
                         key={rule.id}
                       >
                         {sourceSelectionMode === 'world' && (
@@ -3081,16 +3469,23 @@ function SettingsDrawer({
   });
   const [editingId, setEditingId] = useState(currentProfile?.id ?? '');
   const [profileDraft, setProfileDraft] = useState<ProviderProfile>(() => currentProfile ? { ...currentProfile } : blankProfile());
+  const [profileBaseline, setProfileBaseline] = useState<{ profile: ProviderProfile; key: string }>(() => ({
+    profile: currentProfile ? { ...currentProfile } : blankProfile(),
+    key: '',
+  }));
   const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
-  const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
+  const discardChangesDialog = useRef<HTMLDialogElement>(null);
+  const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
   useEffect(() => {
     if (!currentProfile || editingId) return;
     setEditingId(currentProfile.id);
     setProfileDraft({ ...currentProfile });
+    setProfileBaseline({ profile: { ...currentProfile }, key: sessionKeys[currentProfile.id] ?? '' });
   }, [currentProfile, editingId]);
-  const closeDrawer = () => dialogRef.current?.close();
+  const performCloseDrawer = () => dialogRef.current?.close();
   const clearConnectionResult = () => {
     setConnectionStatus('');
     setConnectionState('idle');
@@ -3100,6 +3495,7 @@ function SettingsDrawer({
     setEditingId(profile.id);
     setProfileDraft({ ...profile });
     setApiKeyDraft(sessionKeys[profile.id] ?? '');
+    setProfileBaseline({ profile: { ...profile }, key: sessionKeys[profile.id] ?? '' });
     setConnectionStatus('');
     setConnectionState('idle');
   };
@@ -3107,11 +3503,44 @@ function SettingsDrawer({
     setEditingId('');
     setProfileDraft(blankProfile());
     setApiKeyDraft('');
+    setProfileBaseline({ profile: blankProfile(), key: '' });
     setConnectionStatus('');
     setConnectionState('idle');
   };
+  const restoreProfileBaseline = () => {
+    setEditingId(profileBaseline.profile.id);
+    setProfileDraft({ ...profileBaseline.profile });
+    setApiKeyDraft(profileBaseline.key);
+    setConnectionStatus('');
+    setConnectionState('idle');
+  };
+  const providerDraftChanged = () => {
+    return JSON.stringify({ ...profileDraft, id: editingId }) !== JSON.stringify({ ...profileBaseline.profile, id: editingId })
+      || apiKeyDraft !== profileBaseline.key;
+  };
+  const applySettingsAction = (action: 'close' | 'new' | ProviderProfile) => {
+    setPendingSettingsAction(null);
+    if (action === 'close') {
+      performCloseDrawer();
+      return;
+    }
+    if (action === 'new') {
+      startNewProfile();
+      return;
+    }
+    selectProfile(action);
+  };
+  const requestSettingsAction = (action: 'close' | 'new' | ProviderProfile) => {
+    if (!providerDraftChanged()) {
+      applySettingsAction(action);
+      return;
+    }
+    setPendingSettingsAction(action);
+    discardChangesDialog.current?.showModal();
+  };
   const submitProfile = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (connectionState === 'saving' || connectionState === 'testing') return;
     const id = editingId || makeId('provider');
     const profile: ProviderProfile = {
       ...profileDraft,
@@ -3122,10 +3551,13 @@ function SettingsDrawer({
       maxContext: Math.max(1, Number(profileDraft.maxContext)),
       maxOutput: Math.max(1, Number(profileDraft.maxOutput)),
     };
+    setConnectionState('saving');
+    setConnectionStatus('正在保存连接方案…');
     try {
       const saved = await onSaveProviderProfile(profile, apiKeyDraft || undefined);
       setEditingId(saved.id);
       setProfileDraft(saved);
+      setProfileBaseline({ profile: { ...saved }, key: providerRuntime === 'device' ? apiKeyDraft : '' });
       if (providerRuntime === 'device') {
         setSessionKeys((current) => ({ ...current, [saved.id]: apiKeyDraft }));
       } else {
@@ -3134,13 +3566,14 @@ function SettingsDrawer({
       setConnectionStatus(providerRuntime === 'host'
         ? '连接方案已保存到本机私有配置。'
         : '连接方案已保存。API Key 只在当前页面临时保留。');
-      setConnectionState('idle');
+      setConnectionState('success');
     } catch (error) {
       setConnectionState('error');
       setConnectionStatus(error instanceof Error ? error.message : '连接方案保存失败。');
     }
   };
   const testProfileConnection = async () => {
+    if (connectionState === 'saving' || connectionState === 'testing') return;
     const baseUrl = profileDraft.baseUrl.trim().replace(/\/+$/, '');
     const modelId = profileDraft.modelId.trim();
     if (!baseUrl || !modelId) {
@@ -3175,9 +3608,9 @@ function SettingsDrawer({
     <dialog
       className="settings-drawer"
       ref={dialogRef}
-      onClick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) requestSettingsAction('close'); }}
       onClose={onClose}
-      onCancel={(event) => { event.preventDefault(); closeDrawer(); }}
+      onCancel={(event) => { event.preventDefault(); requestSettingsAction('close'); }}
       aria-labelledby="settings-title"
     >
       <header className="drawer-heading">
@@ -3185,7 +3618,7 @@ function SettingsDrawer({
           <p className="eyebrow">界面偏好</p>
           <h2 id="settings-title">设置</h2>
         </div>
-        <button type="button" className="icon-button" autoFocus onClick={closeDrawer} aria-label="关闭设置" title="关闭设置"><X aria-hidden="true" /></button>
+        <button type="button" className="icon-button" autoFocus onClick={() => requestSettingsAction('close')} aria-label="关闭设置" title="关闭设置"><X aria-hidden="true" /></button>
       </header>
       <section className="settings-section" aria-labelledby="theme-heading">
         <h3 id="theme-heading">皮肤</h3>
@@ -3252,16 +3685,17 @@ function SettingsDrawer({
                 <select
                   id="provider-profile-select"
                   value={editingId}
+                  disabled={connectionState === 'saving' || connectionState === 'testing'}
                   onChange={(event) => {
                     const profile = providerProfiles.find((item) => item.id === event.target.value);
-                    if (profile) selectProfile(profile);
-                    else startNewProfile();
+                    if (profile) requestSettingsAction(profile);
+                    else requestSettingsAction('new');
                   }}
                 >
                   <option value="">新连接方案</option>
                   {providerProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.modelId}</option>)}
                 </select>
-                <button type="button" className="icon-button" onClick={startNewProfile} aria-label="新建连接方案" title="新建连接方案"><Plus aria-hidden="true" /></button>
+                <button type="button" className="icon-button" onClick={() => requestSettingsAction('new')} disabled={connectionState === 'saving' || connectionState === 'testing'} aria-label="新建连接方案" title="新建连接方案"><Plus aria-hidden="true" /></button>
               </div>
             </div>
             <form className="provider-profile-form" onSubmit={submitProfile}>
@@ -3290,10 +3724,13 @@ function SettingsDrawer({
                   type="button"
                   className="quiet-action button-with-icon provider-test-button"
                   onClick={() => void testProfileConnection()}
-                  disabled={connectionState === 'testing'}
+                  disabled={connectionState === 'testing' || connectionState === 'saving'}
+                  aria-busy={connectionState === 'testing' || undefined}
                   aria-label="测试连接"
                 ><PlugZap aria-hidden="true" />{connectionState === 'testing' ? '测试中' : '测试'}</button>
-                <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存连接方案</button>
+                <button type="submit" className="primary-action button-with-icon" disabled={connectionState === 'saving' || connectionState === 'testing'} aria-busy={connectionState === 'saving' || undefined}>
+                  <Check aria-hidden="true" />{connectionState === 'saving' ? '保存中…' : '保存连接方案'}
+                </button>
               </div>
               <p className="provider-save-status" data-state={connectionState} role="status" aria-live="polite">
                 {connectionStatus && <><span className="provider-status-dot" aria-hidden="true" />{connectionStatus}</>}
@@ -3308,6 +3745,36 @@ function SettingsDrawer({
           ? '正文和资料只保存在当前浏览器设备，不上传书稿。请按需导出备份，并自行选择同步方式。'
           : '正文和资料保存在本机 host 的故事目录；请自行选择文件同步方式。'}</p>
       </section>
+      <dialog
+        className="confirm-dialog"
+        ref={discardChangesDialog}
+        onCancel={(event) => { event.preventDefault(); discardChangesDialog.current?.close(); }}
+        aria-labelledby="discard-provider-dialog-title"
+        aria-describedby="discard-provider-dialog-description"
+      >
+        <header className="dialog-heading">
+          <h2 id="discard-provider-dialog-title">放弃未保存修改？</h2>
+          <button type="button" className="icon-button" onClick={() => discardChangesDialog.current?.close()} aria-label="取消放弃修改" title="取消"><X aria-hidden="true" /></button>
+        </header>
+        <div className="confirm-dialog-body">
+          <p id="discard-provider-dialog-description">当前连接方案有未保存的修改；放弃后才会继续下一步。</p>
+          <div className="dialog-actions">
+            <button type="button" className="quiet-action" onClick={() => discardChangesDialog.current?.close()}>继续编辑</button>
+            <button
+              type="button"
+              className="danger-action"
+              onClick={() => {
+                const action = pendingSettingsAction;
+                discardChangesDialog.current?.close();
+                if (action) {
+                  restoreProfileBaseline();
+                  applySettingsAction(action);
+                }
+              }}
+            >放弃并继续</button>
+          </div>
+        </div>
+      </dialog>
     </dialog>
   );
 }

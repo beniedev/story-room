@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -35,6 +35,11 @@ describe('local server entry', () => {
 
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
+  });
+
+  it('preserves the browser Host through the local Vite proxy for same-origin checks', async () => {
+    const config = await readFile(new URL('../vite.config.ts', import.meta.url), 'utf8');
+    expect(config).toContain('changeOrigin: false');
   });
 
   it('serves the local build and API from one port', async () => {

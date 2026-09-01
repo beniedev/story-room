@@ -152,10 +152,13 @@ export const deviceLibrary = {
   contextPlan: async (request: GenerationRequest): Promise<ContextPlan> => (
     buildContextPlan(loadBook(request.bookId), request)
   ),
-  generate: async (request: GenerationRequest): Promise<GenerationResult> => ({
-    plan: buildContextPlan(loadBook(request.bookId), request),
-    draft: request.generationKind === 'summarize-section'
-      ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
-      : fakeDraft(request.mode),
-  }),
+  generate: async (request: GenerationRequest, signal?: AbortSignal): Promise<GenerationResult> => {
+    if (signal?.aborted) throw new DOMException('生成已取消。', 'AbortError');
+    return {
+      plan: buildContextPlan(loadBook(request.bookId), request),
+      draft: request.generationKind === 'summarize-section'
+        ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
+        : fakeDraft(request.mode),
+    };
+  },
 };

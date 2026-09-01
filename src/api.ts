@@ -58,7 +58,10 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
         response = await requestOnce(url, init, accessToken);
       }
     }
-  } catch {
+  } catch (error) {
+    if (init?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      throw error;
+    }
     throw new Error('无法连接本地书库服务，请确认故事书架仍在运行。');
   }
 
@@ -97,9 +100,10 @@ const hostApi = {
     method: 'POST',
     body: JSON.stringify(body),
   }),
-  generate: (body: GenerationRequest) => request<GenerationResult>('/api/generate', {
+  generate: (body: GenerationRequest, signal?: AbortSignal) => request<GenerationResult>('/api/generate', {
     method: 'POST',
     body: JSON.stringify(body),
+    signal,
   }),
   listProviderProfiles: () => request<ProviderProfile[]>('/api/providers'),
   saveProviderProfile: (profile: ProviderProfile, apiKey?: string) => request<ProviderProfile>('/api/providers', {

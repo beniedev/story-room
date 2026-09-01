@@ -13,6 +13,7 @@ dist-local/
 *.pfx
 local-exports/
 local-vaults/
+.frontend-design/
 public/fonts/LXGWWenKaiLite-Regular.ttf
 coverage/
 .wrangler/

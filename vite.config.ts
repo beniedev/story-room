@@ -33,7 +33,10 @@ export default defineConfig(async ({ mode }) => {
       port: 4310,
       strictPort: true,
       proxy: siteBuild ? undefined : {
-        '/api': `http://${apiHost}:${apiPort}`,
+        '/api': {
+          target: `http://${apiHost}:${apiPort}`,
+          changeOrigin: false,
+        },
       },
     },
   };
