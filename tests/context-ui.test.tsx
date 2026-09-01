@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ContextCompositionDrawer } from '../src/components/ContextCompositionDrawer';
 import { ContextToolsDrawer } from '../src/components/ContextToolsDrawer';
+import { SourceLoadScopePage } from '../src/components/Bookshelf';
 import type {
   Book,
   ContextPlan,
@@ -126,7 +127,7 @@ const makeToolProps = (book: Book, section = book.chapters[0]!.sections[4]!) => 
   onContextReferenceChange: vi.fn<(sourceSectionId: string, selected: boolean) => void>(),
   onContextReferencesChange: vi.fn<(references: Book['chapters'][number]['sections'][number]['contextReferences']) => void>(),
   onGenerateMemory: vi.fn(async () => memoryDraft),
-  onSaveMemoryAndLoad: vi.fn(async () => undefined),
+  onSaveMemoriesAndLoad: vi.fn(async () => undefined),
   busy: false,
   onCancelGeneration: vi.fn(),
   onClose: vi.fn(),
@@ -166,6 +167,7 @@ const flushAnimation = async () => {
 };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.innerHTML = '';
 });
 
@@ -218,6 +220,8 @@ describe('context drawers real interactions', () => {
     expect(container.querySelector('select')).toBeNull();
     expect(container.textContent).not.toContain('清空全部');
     expect(container.querySelectorAll('.context-reference-checkbox')).toHaveLength(4);
+    const globalSave = container.querySelector<HTMLButtonElement>('.source-load-tab > .context-summary-save');
+    expect(globalSave?.disabled).toBe(true);
 
     const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
     const row = disclosure?.closest('.context-reference-row');
@@ -229,7 +233,17 @@ describe('context drawers real interactions', () => {
 
     await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
+    expect(globalSave?.disabled).toBe(false);
     expect(disclosure?.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => globalSave?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const saveConfirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => saveConfirm?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(props.onSaveMemoriesAndLoad).toHaveBeenCalledWith([{
+      sourceSectionId: 'source-ready',
+      draft: memoryDraft,
+      provenance: 'manual',
+    }]);
     await unmount(root);
   });
 
@@ -238,7 +252,7 @@ describe('context drawers real interactions', () => {
     const props = makeToolProps(book);
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
     const selectAll = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('全部'));
+      .find((button) => button.textContent?.includes('全选'));
     const blankDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开空白节梗概"]');
     const blankCheckbox = blankDisclosure?.closest('.context-reference-row')
       ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
@@ -252,9 +266,13 @@ describe('context drawers real interactions', () => {
     await unmount(root);
   });
 
-  it('keeps generated synopsis as a draft until confirmation, then saves the complete draft', async () => {
+  it('keeps Provider feedback visible, dismisses it on click, then globally saves all edited drafts', async () => {
     const book = makeBook();
     const props = makeToolProps(book);
+    let resolveGeneration!: (draft: SectionMemoryDraft) => void;
+    props.onGenerateMemory = vi.fn(() => new Promise<SectionMemoryDraft>((resolve) => {
+      resolveGeneration = resolve;
+    }));
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
     const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
     await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -265,18 +283,191 @@ describe('context drawers real interactions', () => {
       .find((button) => button.textContent?.includes('确认生成'));
     expect(confirm).toBeTruthy();
     await act(async () => confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    await flushAnimation();
-    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
-    expect(container.querySelector('.context-memory-array-row')).toBeNull();
-    expect(props.onSaveMemoryAndLoad).not.toHaveBeenCalled();
+    const outer = container.querySelector<HTMLDialogElement>('#context-tools-drawer');
+    const inner = container.querySelector<HTMLDialogElement>('.confirm-dialog');
+    expect(inner?.open).toBe(true);
+    expect(inner?.textContent).toContain('正在生成梗概…');
 
-    const save = container.querySelector<HTMLButtonElement>('.context-summary-save');
+    await act(async () => {
+      resolveGeneration(memoryDraft);
+      await Promise.resolve();
+    });
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
+    const success = container.querySelector<HTMLElement>('.dialog-operation-status[data-phase="success"]');
+    expect(success?.textContent).toContain('已生成梗概');
+    expect(success?.tagName).toBe('DIV');
+    expect(container.querySelector('.context-memory-array-row')).toBeNull();
+    expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
+    await act(async () => document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })));
+    expect(inner?.open).toBe(false);
+    expect(outer?.open).toBe(true);
+
+    const readyDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => readyDisclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const readyTextarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !readyTextarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(readyTextarea, '作者改写梗概');
+      readyTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const save = container.querySelector<HTMLButtonElement>('.source-load-tab > .context-summary-save');
     await act(async () => save?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     const saveConfirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent?.includes('确认保存并加载'));
     await act(async () => saveConfirm?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await flushAnimation();
-    expect(props.onSaveMemoryAndLoad).toHaveBeenCalledWith('source-no-memory', memoryDraft, 'model-confirmed');
+    expect(props.onSaveMemoriesAndLoad).toHaveBeenCalledWith([
+      {
+        sourceSectionId: 'source-ready',
+        draft: { ...memoryDraft, synopsis: '作者改写梗概' },
+        provenance: 'manual',
+      },
+      {
+        sourceSectionId: 'source-no-memory',
+        draft: memoryDraft,
+        provenance: 'model-confirmed',
+      },
+    ]);
+    expect(inner?.open).toBe(true);
+    expect(inner?.textContent).toContain('梗概保存并加载成功');
+    await unmount(root);
+  });
+
+  it('automatically dismisses generated-summary success after five seconds', async () => {
+    const timeout = vi.spyOn(window, 'setTimeout');
+    const book = makeBook();
+    const props = makeToolProps(book);
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const generate = container.querySelector<HTMLButtonElement>('.context-summary-generate');
+    await act(async () => generate?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认生成'));
+    await act(async () => {
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    const inner = container.querySelector<HTMLDialogElement>('.confirm-dialog');
+    expect(inner?.textContent).toContain('已生成梗概');
+    const autoDismiss = timeout.mock.calls.find(([, delay]) => delay === 5_000)?.[0];
+    expect(autoDismiss).toBeTypeOf('function');
+    await act(async () => {
+      if (typeof autoDismiss === 'function') autoDismiss();
+    });
+    expect(inner?.open).toBe(false);
+    expect(container.querySelector<HTMLDialogElement>('#context-tools-drawer')?.open).toBe(true);
+    await unmount(root);
+  });
+
+  it('keeps generation failures in the confirmation dialog until the user returns', async () => {
+    const book = makeBook();
+    const props = makeToolProps(book);
+    props.onGenerateMemory = vi.fn(async () => { throw new Error('Provider 暂时不可用'); });
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const generate = container.querySelector<HTMLButtonElement>('.context-summary-generate');
+    await act(async () => generate?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认生成'));
+    await act(async () => {
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const dialog = container.querySelector<HTMLDialogElement>('.confirm-dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.textContent).toContain('生成梗概失败');
+    expect(dialog?.textContent).toContain('Provider 暂时不可用');
+    expect(dialog?.querySelector('[role="alert"]')).toBeTruthy();
+    await unmount(root);
+  });
+
+  it('keeps character and world loading scopes temporary until the rightmost confirmation succeeds', async () => {
+    const book = makeBook();
+    const onConfirm = vi.fn(async () => undefined);
+    const { container, root } = await render(
+      <SourceLoadScopePage
+        sourceId="character-ui"
+        title="加载角色卡"
+        bookTitle={book.title}
+        enabled
+        chapters={book.chapters}
+        loadedSectionIds={['source-ready']}
+        onConfirm={onConfirm}
+      />,
+    );
+    await flushAnimation();
+    const master = container.querySelector<HTMLInputElement>('.source-load-toggle input');
+    const selectAll = container.querySelector<HTMLButtonElement>('.source-scope-all');
+    expect(master?.checked).toBe(false);
+    expect(master?.indeterminate).toBe(true);
+    expect(selectAll?.textContent).toBe('全选');
+
+    await act(async () => selectAll?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('.source-load-toggle input')?.checked).toBe(true);
+    const cancelAll = container.querySelector<HTMLButtonElement>('.source-scope-all');
+    expect(cancelAll?.textContent).toBe('取消全选');
+    await act(async () => cancelAll?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.querySelector<HTMLInputElement>('.source-load-toggle input')?.checked).toBe(false);
+    expect(container.querySelector<HTMLInputElement>('.source-load-toggle input')?.indeterminate).toBe(false);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.source-scope-all')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const confirmTrigger = container.querySelector<HTMLButtonElement>('[aria-label="确认载入角色卡"]');
+    await act(async () => confirmTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const dialog = container.querySelector<HTMLDialogElement>('.confirm-dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.textContent).toContain('取消或返回不会更改已保存范围');
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认载入'));
+    await act(async () => {
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onConfirm).toHaveBeenCalledWith({ includeInPrompt: true, loadedSectionIds: undefined });
+    expect(dialog?.textContent).toContain('角色卡加载范围保存成功');
+    await unmount(root);
+  });
+
+  it('keeps a failed source loading confirmation open with the draft selection intact', async () => {
+    const book = makeBook();
+    const onConfirm = vi.fn(async () => { throw new Error('书目暂时无法保存'); });
+    const { container, root } = await render(
+      <SourceLoadScopePage
+        sourceId="world-ui"
+        title="加载世界观设定"
+        bookTitle={book.title}
+        enabled={false}
+        chapters={book.chapters}
+        loadedSectionIds={[]}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.source-scope-all')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="确认载入世界观设定"]')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认载入'));
+    await act(async () => {
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const dialog = container.querySelector<HTMLDialogElement>('.confirm-dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.textContent).toContain('世界观设定加载范围保存失败');
+    expect(dialog?.textContent).toContain('书目暂时无法保存');
+    expect(container.querySelector<HTMLInputElement>('.source-load-toggle input')?.checked).toBe(true);
     await unmount(root);
   });
 

@@ -1,4 +1,5 @@
 import { createExampleBooks } from './fixtures';
+import { makeId } from './components/shared/id';
 import { buildContextPlan, toContextPlanPreview } from './contextPlan';
 import {
   normalizeBook,
@@ -112,7 +113,7 @@ const saveBook = (book: Book): Book => {
 };
 
 const createBook = (title: string): Book => saveBook({
-  id: `book-${crypto.randomUUID()}`,
+  id: makeId('book'),
   title: title.trim() || '未命名书目',
   plotOutline: '',
   writingBrief: '',
@@ -121,9 +122,9 @@ const createBook = (title: string): Book => saveBook({
   canonFacts: [],
   summaries: [],
   chapters: [{
-    id: `chapter-${crypto.randomUUID()}`,
+    id: makeId('chapter'),
     title: '第一章',
-    sections: [{ id: `section-${crypto.randomUUID()}`, title: '新小节', content: '' }],
+    sections: [{ id: makeId('section'), title: '新小节', content: '' }],
   }],
   branches: [],
   updatedAt: new Date().toISOString(),

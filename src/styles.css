@@ -1188,7 +1188,8 @@ h4 {
 }
 
 .guide-editor-page,
-.source-editor-page {
+.source-editor-page,
+.source-scope-page {
   display: grid;
   gap: 1rem;
   width: min(100%, var(--workspace-wide-max));
@@ -1199,7 +1200,8 @@ h4 {
 .guide-editor-heading,
 .guide-editor-field,
 .source-editor-heading,
-.source-editor-fields {
+.source-editor-fields,
+.source-scope-page > .source-scope-drawer {
   width: min(100%, var(--workspace-max));
   margin-inline: auto;
 }
@@ -1215,7 +1217,21 @@ h4 {
 }
 
 .source-editor-heading h1 {
+  margin: 0;
+}
+
+.source-editor-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   margin-block-end: 0.5rem;
+}
+
+.source-scope-open {
+  flex: 0 0 44px;
+  background: var(--surface);
+  color: var(--accent-strong);
 }
 
 .source-editor-heading > p:last-child,
@@ -1407,6 +1423,10 @@ h4 {
   gap: 0.45rem;
 }
 
+.source-scope-page .source-load-tab {
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+}
+
 .book-library-drawer,
 .book-actions-menu {
   position: relative;
@@ -1544,6 +1564,7 @@ h4 {
   min-height: 64px;
   background: var(--surface);
   color: var(--accent-strong);
+  cursor: pointer;
 }
 
 .book-actions-trigger:hover,
@@ -1572,6 +1593,7 @@ h4 {
   align-items: center;
   gap: 0.55rem;
   width: 100%;
+  cursor: pointer;
   text-align: start;
 }
 
@@ -1614,16 +1636,17 @@ h4 {
 }
 
 .book-settings-button {
+  width: 44px;
   min-height: 44px;
-  min-width: 6.25rem;
-  padding-inline: 1rem;
-  background: var(--accent-strong);
-  color: var(--primary-text);
+  min-width: 44px;
+  padding: 0;
+  background: var(--surface);
+  color: var(--accent-strong);
 }
 
 .book-settings-button:hover {
-  background: var(--accent);
-  color: var(--primary-text);
+  background: var(--surface-active);
+  color: var(--accent-strong);
 }
 
 .directory-actions {
@@ -1699,6 +1722,35 @@ h4 {
   height: 1.2rem;
 }
 
+.directory-selection-checkbox {
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  color: var(--primary-text);
+}
+
+.directory-selection-checkbox[data-state="checked"],
+.directory-selection-checkbox[data-state="mixed"] {
+  background: var(--accent);
+}
+
+.directory-selection-checkbox[data-state="checked"] svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 3;
+}
+
+.directory-selection-checkbox[data-state="mixed"]::after {
+  width: 0.65rem;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
 .chapter-actions {
   position: absolute;
   inset-block-start: 0.35rem;
@@ -1754,6 +1806,11 @@ h4 {
 
 .selection-mode .chapter-card summary {
   padding-inline-end: 0.8rem;
+}
+
+.selection-mode .chapter-index {
+  border-radius: 0;
+  background: transparent;
 }
 
 .chapter-card[data-selected="true"] > details > summary,
@@ -2030,6 +2087,12 @@ h4 {
   transition-duration: 180ms;
   transition-timing-function: ease-out;
   transition-behavior: allow-discrete;
+}
+
+.writer-book-settings-button {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
 }
 
 .context-composition-drawer,
@@ -2313,6 +2376,14 @@ h4 {
   font-weight: 500;
 }
 
+.context-reference-scope > .source-load-tab {
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+}
+
+.context-reference-scope > .source-load-tab .context-summary-save {
+  margin-inline-end: 0.4rem;
+}
+
 .context-reference-row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
@@ -2396,8 +2467,63 @@ h4 {
 }
 
 .context-summary-generate {
+  grid-row: 2;
   background: var(--surface);
   color: var(--accent-strong);
+}
+
+.summary-generation-body {
+  min-height: 9rem;
+}
+
+.dialog-operation-status {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 8rem;
+  padding: 1rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.dialog-operation-status > svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--accent-strong);
+}
+
+.dialog-operation-status[data-phase="success"] {
+  color: var(--accent-strong);
+}
+
+.dialog-operation-status[data-phase="error"],
+.dialog-operation-status[data-phase="error"] > svg {
+  color: var(--danger);
+}
+
+.dialog-operation-status > p {
+  max-width: 32rem;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.dialog-operation-status > .quiet-action {
+  margin-block-start: 0.35rem;
+}
+
+.dialog-operation-body {
+  min-height: 9rem;
+}
+
+@keyframes dialog-operation-spin {
+  to { rotate: 360deg; }
+}
+
+.dialog-operation-spinner {
+  animation: dialog-operation-spin 900ms linear infinite;
 }
 
 .context-summary-error {
@@ -2474,7 +2600,8 @@ h4 {
 }
 
 .book-settings-content > .guide-editor-page,
-.book-settings-content > .source-editor-page {
+.book-settings-content > .source-editor-page,
+.book-settings-content > .source-scope-page {
   width: 100%;
   padding: 0 0 calc(1rem + env(safe-area-inset-bottom));
 }
@@ -2482,7 +2609,8 @@ h4 {
 .book-settings-content .guide-editor-heading,
 .book-settings-content .guide-editor-field,
 .book-settings-content .source-editor-heading,
-.book-settings-content .source-editor-fields {
+.book-settings-content .source-editor-fields,
+.book-settings-content .source-scope-page > .source-scope-drawer {
   width: 100%;
 }
 
@@ -3217,6 +3345,10 @@ h4 {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .dialog-operation-spinner {
+    animation: none;
   }
 }
 

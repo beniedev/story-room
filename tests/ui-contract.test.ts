@@ -59,8 +59,9 @@ describe('writing UI contract', () => {
     expect(writer).toContain('className="writer-context-progress"');
     expect(writer).toContain('className="writer-tool-row"');
     expect(writer).toContain('role="group" aria-label="写作工具"');
-    expect(writer).toContain('className="book-settings-button button-with-icon writer-book-settings-button"');
-    expect(writer).toContain('<BookMarked aria-hidden="true" /><span>设定</span>');
+    expect(writer).toContain('className="book-settings-button icon-button writer-book-settings-button"');
+    expect(writer).toContain('<BookMarked aria-hidden="true" /></button>');
+    expect(writer).not.toContain('<BookMarked aria-hidden="true" /><span>设定</span>');
     expect(writer).toContain('className="writer-tool-actions"');
     expect(writer).toContain('className="writer-section-title"');
     expect(writer).toContain('className="writer-action-menu"');
@@ -100,13 +101,13 @@ describe('writing UI contract', () => {
       '.writer-section-title',
       '.manuscript',
       '.block-editor-body',
-      '.source-editor-fields',
     ]) {
       const start = styles.indexOf(`${selector} {`);
       const rule = styles.slice(start, styles.indexOf('\n}', start) + 2);
       expect(start).toBeGreaterThanOrEqual(0);
       expect(rule).toContain('var(--workspace-max)');
     }
+    expect(styles).toMatch(/\.source-editor-fields,[\s\S]{0,120}\.source-scope-page > \.source-scope-drawer\s*\{[\s\S]{0,160}var\(--workspace-max\)/);
     expect(styles).toMatch(/\.shelf-page\s*\{[\s\S]{0,220}var\(--workspace-wide-max\)/);
     expect(styles).toMatch(/\.writer-page\s*\{[\s\S]{0,260}grid-template-rows:\s*auto minmax\(0, 1fr\)[\s\S]{0,180}overflow:\s*hidden/);
     expect(styles).toMatch(/\.manuscript-wrap\s*\{[\s\S]{0,260}width:\s*min\(100%, var\(--workspace-max\)\)[\s\S]{0,180}overflow-y:\s*auto/);
@@ -115,18 +116,17 @@ describe('writing UI contract', () => {
     expect(styles).not.toContain('width: min(100%, 72ch)');
   });
 
-  it('keeps the home settings entry as a wide icon-and-label control', async () => {
+  it('matches the home settings entry to the shallow icon-only writing control', async () => {
     const source = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const toolbarStart = source.indexOf('className="directory-toolbar"');
     const chapterListStart = source.indexOf('<ol className="chapter-list"', toolbarStart);
     const toolbar = source.slice(toolbarStart, chapterListStart);
 
-    expect(toolbar).toContain('book-settings-button');
-    expect(toolbar).toContain('button-with-icon');
-    expect(toolbar).toContain('<span>设定</span>');
-    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,300}padding-inline:/);
-    expect(styles).not.toMatch(/\.icon-button\.book-settings-button\s*\{[\s\S]{0,120}padding:\s*0/);
+    expect(toolbar).toContain('className="book-settings-button icon-button"');
+    expect(toolbar).toContain('<BookMarked aria-hidden="true" /></button>');
+    expect(toolbar).not.toContain('<span>设定</span>');
+    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,220}width:\s*44px[\s\S]{0,160}padding:\s*0[\s\S]{0,160}background:\s*var\(--surface\)/);
   });
 
   it('separates book switching from book creation and current-book management', async () => {
@@ -150,12 +150,14 @@ describe('writing UI contract', () => {
     expect(panel).not.toContain('新建书目');
     expect(source).toContain("if (entry.id !== props.book.id) props.onOpenBook(entry.id);");
     expect(source).toContain('book-settings-button');
-    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,260}background:\s*var\(--accent-strong\)[\s\S]{0,120}color:\s*var\(--primary-text\)/);
+    expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,300}background:\s*var\(--surface\)[\s\S]{0,120}color:\s*var\(--accent-strong\)/);
     expect(styles).toMatch(/\.book-library-panel\s*\{[\s\S]{0,220}position:\s*absolute[\s\S]{0,220}width:\s*100%/);
     expect(styles).toMatch(/\.book-selector-card\s*\{[\s\S]{0,320}background:\s*var\(--surface\)/);
     expect(styles).toContain('.book-library-drawer[open] > .book-selector-card');
     expect(styles).toMatch(/\.book-list button\[aria-current\]\s*\{[\s\S]{0,100}background:\s*var\(--surface\)/);
     expect(styles).toMatch(/\.book-actions-menu-panel\s*\{[\s\S]{0,260}position:\s*absolute[\s\S]{0,220}width:\s*12rem/);
+    expect(styles).toMatch(/\.book-actions-trigger\s*\{[\s\S]{0,260}cursor:\s*pointer/);
+    expect(styles).toMatch(/\.book-menu-action\s*\{[\s\S]{0,260}cursor:\s*pointer/);
   });
 
   it('passes the active provider metadata to the writer and emphasizes the context count', async () => {
@@ -298,6 +300,7 @@ describe('writing UI contract', () => {
   it('uses the compact checkbox and inline synopsis interaction for previous sections', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+    const operation = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(tools).toContain('前文选择');
     expect(tools).toContain('source-scope-drawer context-reference-scope');
@@ -317,7 +320,8 @@ describe('writing UI contract', () => {
     expect(tools).toContain("requestSummaryAction(item, 'generate')");
     expect(tools).toContain('aria-label={summaryBusy');
     expect(tools).toContain('className="primary-action icon-button context-summary-save"');
-    expect(tools).toContain("requestSummaryAction(item, 'save')");
+    expect(tools).toContain('onClick={requestSummarySave}');
+    expect(tools).toContain('onSaveMemoriesAndLoad(entries)');
     expect(tools).toContain('aria-label="保存并加载梗概"');
     expect(tools).not.toContain('window.confirm');
     expect(tools).toContain('className="confirm-dialog"');
@@ -325,6 +329,11 @@ describe('writing UI contract', () => {
     expect(tools).toContain('确认生成');
     expect(tools).toContain('确认保存并加载');
     expect(tools).toContain("pendingSummaryAction === 'save'");
+    expect(tools).toContain('正在生成梗概…');
+    expect(tools).toContain('已生成梗概');
+    expect(operation).toContain('5_000');
+    expect(operation).toContain("document.addEventListener('pointerdown', dismiss, true)");
+    expect(tools).toContain('<DialogOperationStatus');
     expect(tools).toContain('onContextReferenceChange(item.section.id, !selected)');
     expect(tools).not.toContain('context-budget');
     expect(tools).not.toContain('context-plan');
@@ -341,6 +350,12 @@ describe('writing UI contract', () => {
     expect(styles).toContain('grid-template-columns: minmax(0, 1fr) 3.5rem');
     expect(styles).toContain('.context-summary-actions .icon-button');
     expect(styles).toContain('grid-template-rows: 3.5rem 3.5rem');
+    expect(styles).toContain('grid-row: 2');
+    expect(styles).toContain('.dialog-operation-spinner');
+    expect(tools).toContain("<span>{allSelected ? '取消全选' : '全选'}</span>");
+    expect(tools).not.toContain('<BookOpenText aria-hidden="true" />');
+    expect(tools).toContain('selectAllRef.current.indeterminate = someSelected');
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
   it('keeps previous-content selection backward-only and behind the normalized save path', async () => {
@@ -533,6 +548,7 @@ describe('writing UI contract', () => {
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const memory = await readFile(new URL('../src/components/SectionMemoryEditor.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+    const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const source = `${app}\n${shelf}\n${writer}\n${memory}\n${tools}`;
     expect(source).toContain("openNameDialog({ kind: 'new-book'");
     expect(source).toContain("openNameDialog({ kind: 'new-section'");
@@ -544,11 +560,15 @@ describe('writing UI contract', () => {
     expect(source).not.toContain("setDraftInstruction('')");
     expect(source).toContain('toggleChapterSelection');
     expect(source).toContain('toggleSectionSelection');
+    expect(shelf).toContain('className="directory-selection-checkbox"');
+    expect(shelf).toContain("? 'checked'");
+    expect(shelf).toContain("? 'mixed'");
+    expect(styles).toContain('.directory-selection-checkbox[data-state="mixed"]::after');
     expect(source).toContain("kind: 'selection'");
     expect(source).toContain('删除所选内容');
     expect(source).toContain('返回本书设定');
     expect(source).toContain('bookSettingsView');
-    expect(source).toContain('returnBookSettingsRoot');
+    expect(source).toContain('returnBookSettingsParent');
     expect(source).toContain('compact-book-settings-heading');
     expect(source).toContain('<h2 id="book-settings-title" className="sr-only">{bookSettingsTitle}</h2>');
     expect(source).toContain("openBookSettingsPage({ kind: 'character'");
@@ -587,6 +607,28 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('StoryGraph');
   });
 
+  it('keeps confirmation dialogs open until the real operation succeeds or fails', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const shelf = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+    const feedback = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
+
+    expect(app).toContain('const commitBookChange = async');
+    expect(app).toContain('await queueBookSave(candidate)');
+    expect(shelf).toContain('await props.onAddSection');
+    expect(shelf).toContain("setNameOperation({ phase: 'pending'");
+    expect(shelf).toContain("setDeleteOperation({ phase: 'pending', title: '正在删除…' })");
+    expect(shelf).toContain("setConfirmOperation({ phase: 'pending', title: `正在保存${sourceLabel}加载范围…` })");
+    expect(shelf).toContain('await onConfirm(selectionPatch())');
+    expect(writer).toContain('props.onDeleteSectionBlock(selectedBlock.id)');
+    expect(writer).toContain("setTitleOperation({ phase: 'pending', title: '正在保存修改…' })");
+    expect(tools).toContain("title: '正在保存并加载梗概…'");
+    expect(tools).toContain("title: '梗概保存并加载失败'");
+    expect(feedback).toContain("role={state.phase === 'error' ? 'alert' : 'status'}");
+    expect(feedback).toContain("document.addEventListener('pointerdown', dismiss, true)");
+  });
+
   it('keeps settings compact while supporting reusable provider profiles', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const provider = await readFile(new URL('../src/components/ProviderSettings.tsx', import.meta.url), 'utf8');
@@ -602,7 +644,8 @@ describe('writing UI contract', () => {
     expect(source).toContain('<option value="gray">灰度</option>');
     expect(source).toContain('<option value="purple">紫雅</option>');
     expect(source).toContain('id="provider-profile-select"');
-    expect(source).toContain('<span>设定</span>');
+    expect(writer).not.toContain('<span>设定</span>');
+    expect(writer).toContain('className="book-settings-button icon-button writer-book-settings-button"');
     expect(source).toContain('模型连接');
     expect(source).toContain('API Key');
     expect(source).toContain('模型 ID');
@@ -634,7 +677,8 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('window.prompt');
     expect(source).toContain('event.target === event.currentTarget');
     expect(source).toContain('const restoreProfileBaseline = () => {');
-    expect(source).toMatch(/if \(action\) \{[\s\S]{0,180}restoreProfileBaseline\(\);[\s\S]{0,100}applySettingsAction\(action\);/);
+    expect(source).toContain("setDiscardOperation({ phase: 'success', title: '已放弃修改' })");
+    expect(source).toMatch(/const finishDiscardAction = \(\) => \{[\s\S]{0,180}applySettingsAction\(action\);/);
     expect(styles).toContain('.instruction-dock textarea:focus');
     expect(styles).toContain('background: var(--surface)');
     expect(source).not.toContain('className="settings-list-row');
@@ -655,7 +699,7 @@ describe('writing UI contract', () => {
   it('uses the updated character and world-setting vocabulary and exposes section loading scope', async () => {
     const source = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    const scopeEditorStart = source.indexOf('function SourceLoadScope');
+    const scopeEditorStart = source.indexOf('function SourceLoadScopePage');
     const characterEditorStart = source.indexOf('function CharacterEditor');
     const worldEditorStart = source.indexOf('function WorldRuleEditor');
     const missingEditorStart = source.indexOf('function MissingSettingsItem');
@@ -668,32 +712,37 @@ describe('writing UI contract', () => {
     expect(characterEditor).not.toContain('角色职责');
     expect(characterEditor).not.toContain('角色资料');
     expect(characterEditor).toContain('加载角色卡');
-    expect(characterEditor).toContain('<SourceLoadScope');
+    expect(characterEditor).toContain('className="icon-button source-scope-open"');
+    expect(characterEditor).toContain('<ListTree aria-hidden="true" />');
 
     expect(worldEditor).toContain('世界观设定');
     expect(worldEditor).toContain('设定名称');
     expect(worldEditor).toContain('设定内容');
     expect(worldEditor).not.toContain('世界观条例');
     expect(worldEditor).toContain('加载世界观设定');
-    expect(worldEditor).toContain('<SourceLoadScope');
+    expect(worldEditor).toContain('className="icon-button source-scope-open"');
+    expect(worldEditor).toContain('<ListTree aria-hidden="true" />');
     expect(scopeEditor).toContain('className="source-load-tab"');
-    expect(scopeEditor.indexOf('className="source-load-toggle"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-disclosure"'));
-    expect(scopeEditor.indexOf('className="source-scope-disclosure"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-all"'));
-    expect(scopeEditor).toContain('checked={enabled}');
-    expect(scopeEditor).toContain('aria-pressed={loadsEverywhere}');
-    expect(scopeEditor).toContain('<BookOpenText aria-hidden="true" />');
-    expect(scopeEditor).toContain('onScopeChange(loadsEverywhere ? [] : undefined)');
-    expect(scopeEditor).toContain('`${selectedIds.size}/${sectionIds.length} 小节`');
+    expect(scopeEditor.indexOf('className="source-load-toggle"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-all"'));
+    expect(scopeEditor.indexOf('className="source-scope-all"')).toBeLessThan(scopeEditor.indexOf('source-scope-confirm'));
+    expect(scopeEditor).toContain('checked={allSelected}');
+    expect(scopeEditor).toContain('selectAllRef.current.indeterminate = someSelected');
+    expect(scopeEditor).toContain('aria-pressed={allSelected}');
+    expect(scopeEditor).not.toContain('<BookOpenText aria-hidden="true" />');
+    expect(scopeEditor).toContain("<span>{allSelected ? '取消全选' : '全选'}</span>");
     expect(scopeEditor).toContain('loadedSectionIds ?? sectionIds');
-    expect(scopeEditor).toContain('open &&');
-    expect(scopeEditor).not.toContain('!loadsEverywhere &&');
+    expect(scopeEditor).toContain('includeInPrompt: orderedIds.length > 0');
+    expect(scopeEditor).toContain('await onConfirm(selectionPatch())');
+    expect(scopeEditor).toContain('确认载入{sourceLabel}');
+    expect(scopeEditor).toContain('<DialogOperationStatus state={confirmOperation}');
     expect(styles).toMatch(/\.source-load-tab\s*\{[\s\S]{0,180}grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
     expect(styles).toMatch(/\.source-scope-all\[aria-pressed="true"\]\s*\{[\s\S]{0,160}background:\s*var\(--surface-active\)/);
     expect(source).toContain('loadedSectionIds');
-    expect(source).toContain('function SourceLoadScope');
-    expect(source).toContain('className="source-scope-drawer"');
+    expect(source).toContain('function SourceLoadScopePage');
+    expect(source).toContain('className="source-scope-drawer context-reference-scope"');
     expect(source).toContain('加载范围');
-    expect(source).toContain('全部小节');
+    expect(source).toContain("kind: 'character-scope'");
+    expect(source).toContain("kind: 'world-scope'");
     expect(source).not.toContain('onSetActiveCharacter');
     expect(source).not.toContain('设为扮演角色');
   });

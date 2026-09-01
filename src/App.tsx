@@ -55,6 +55,12 @@ import { Bookshelf } from './components/Bookshelf';
 import { ProviderSettings } from './components/ProviderSettings';
 import { makeId } from './components/shared/id';
 import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
+import {
+  DialogOperationStatus,
+  idleDialogOperation,
+  useDismissSuccessfulDialog,
+  type DialogOperationState,
+} from './components/shared/DialogOperationStatus';
 import type {
   Book,
   BookIndexEntry,
@@ -476,6 +482,31 @@ function App() {
     return saved;
   };
 
+  const commitBookChange = async (recipe: (current: Book) => Book) => {
+    if (!book) throw new Error('请先打开一本书。');
+    const candidate = normalizeBook({
+      ...recipe(book),
+      updatedAt: new Date().toISOString(),
+    });
+    const revision = ++saveRevision.current;
+    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
+    try {
+      const saved = normalizeBook(await queueBookSave(candidate));
+      if (saveRevision.current === revision) {
+        if (api.runtime === 'device') cacheBook(saved);
+        setBook(saved);
+        setDirty(false);
+      }
+      setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
+        ...items.filter((item) => item.id !== saved.id)]);
+      setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
+      return saved;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '保存失败。');
+      throw error;
+    }
+  };
+
   const ensureCurrentBookSaved = async () => {
     if (!book || !dirty) return book;
     return saveCurrent();
@@ -675,8 +706,9 @@ function App() {
     });
   };
 
-  const createBook = (title: string) => {
-    void withBusy(async () => {
+  const createBook = async (title: string) => {
+    setBusy(true);
+    try {
       await ensureCurrentBookSaved();
       rememberCurrentSectionDraft();
       const created = await api.createBook(title);
@@ -691,36 +723,55 @@ function App() {
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
-    });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '新建书目失败。');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const deleteCurrentBook = () => {
+  const deleteCurrentBook = async () => {
     if (!book || library.length <= 1) {
-      setStatus('书库至少需要保留一本书。');
-      return;
+      const error = new Error('书库至少需要保留一本书。');
+      setStatus(error.message);
+      throw error;
     }
     const deletedBook = book;
     const nextBook = library.find((entry) => entry.id !== deletedBook.id);
     const wasDirty = dirty;
-    void withBusy(async () => {
+    setBusy(true);
+    try {
       await ensureCurrentBookSaved();
+      const storedNextBook = nextBook ? normalizeBook(await api.loadBook(nextBook.id)) : null;
+      const cachedNextBook = nextBook && api.runtime === 'device' ? readCachedBook(nextBook.id) : null;
+      const loadedNextBook = storedNextBook ? normalizeBook(newerBook(storedNextBook, cachedNextBook)) : null;
       saveRevision.current += 1;
       setDirty(false);
-      try {
-        await saveQueue.current.catch(() => undefined);
-        await api.deleteBook(deletedBook.id);
-        removeCachedBook(deletedBook.id);
-        setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
-        if (nextBook) await openBook(nextBook.id);
-        setStatus(`已删除《${deletedBook.title}》。`);
-      } catch (error) {
-        setDirty(wasDirty);
-        throw error;
+      await saveQueue.current.catch(() => undefined);
+      await api.deleteBook(deletedBook.id);
+      removeCachedBook(deletedBook.id);
+      setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
+      if (loadedNextBook) {
+        if (api.runtime === 'device') cacheBook(loadedNextBook);
+        setBook(loadedNextBook);
+        setSectionId('');
+        setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
+        restoreSectionDraft(loadedNextBook.id, '');
+        setDirty(Boolean(cachedNextBook && loadedNextBook.updatedAt !== storedNextBook?.updatedAt));
+        setView('shelf');
       }
-    });
+      setStatus(`已删除《${deletedBook.title}》。`);
+    } catch (error) {
+      setDirty(wasDirty);
+      setStatus(error instanceof Error ? error.message : '删除书目失败。');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const addCharacter = (name: string) => changeBook((current) => {
+  const addCharacter = (name: string) => commitBookChange((current) => {
     const id = makeId('character');
     return {
       ...current,
@@ -735,7 +786,7 @@ function App() {
     };
   });
 
-  const addWorldRule = (title: string) => changeBook((current) => ({
+  const addWorldRule = (title: string) => commitBookChange((current) => ({
     ...current,
     worldRules: [...current.worldRules, {
       id: makeId('world'),
@@ -745,7 +796,7 @@ function App() {
     }],
   }));
 
-  const addChapter = (title: string) => changeBook((current) => {
+  const addChapter = (title: string) => commitBookChange((current) => {
     const chapterId = makeId('chapter');
     const sectionId = makeId('section');
     return {
@@ -758,7 +809,7 @@ function App() {
     };
   });
 
-  const addSection = (chapterId: string, title: string) => changeBook((current) => {
+  const addSection = (chapterId: string, title: string) => commitBookChange((current) => {
     const targetChapter = current.chapters.find((chapter) => chapter.id === chapterId);
     if (!targetChapter) return current;
     const next = {
@@ -774,14 +825,14 @@ function App() {
     };
   });
 
-  const renameChapter = (chapterId: string, title: string) => changeBook((current) => ({
+  const renameChapter = (chapterId: string, title: string) => commitBookChange((current) => ({
     ...current,
     chapters: current.chapters.map((chapter) => chapter.id === chapterId
       ? { ...chapter, title: title.trim() }
       : chapter),
   }));
 
-  const renameSection = (chapterId: string, targetSectionId: string, title: string) => changeBook((current) => ({
+  const renameSection = (chapterId: string, targetSectionId: string, title: string) => commitBookChange((current) => ({
     ...current,
     chapters: current.chapters.map((chapter) => chapter.id === chapterId
       ? {
@@ -818,6 +869,22 @@ function App() {
           }
           const unique = new Map(references.map((reference) => [reference.sectionId, reference] as const));
           return { ...item, contextReferences: [...unique.values()] };
+        }),
+      })),
+    }));
+  };
+
+  const deleteSectionBlock = async (blockId: string) => {
+    if (!section) throw new Error('找不到当前小节。');
+    const targetSectionId = section.id;
+    await commitBookChange((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => {
+          if (item.id !== targetSectionId) return item;
+          const blocks = sectionBlocks(item).filter((block) => block.id !== blockId);
+          return { ...item, blocks, content: blocksAsContent(blocks) };
         }),
       })),
     }));
@@ -871,33 +938,39 @@ function App() {
     }
   };
 
-  const saveSectionMemoryAndLoad = async (
-    sourceSectionId: string,
-    draft: SectionMemoryDraft,
-    provenance: SectionMemoryProvenance,
-  ) => {
+  const saveSectionMemoriesAndLoad = async (entries: Array<{
+    sourceSectionId: string;
+    draft: SectionMemoryDraft;
+    provenance: SectionMemoryProvenance;
+  }>) => {
     if (!book || !section) throw new Error('请先选择一个小节。');
     const targetSectionId = section.id;
-    let sourceTitle = '';
-    const source = referenceLocation(book, sourceSectionId);
     const targetOrdinal = book.chapters.flatMap((chapter) => chapter.sections)
       .findIndex((item) => item.id === targetSectionId);
-    if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) {
-      throw new Error('只能保存当前小节之前内容的梗概。');
+    const committedSources = new Map<string, Book['chapters'][number]['sections'][number]>();
+    const sourceTitles: string[] = [];
+    for (const { sourceSectionId, draft, provenance } of entries) {
+      const source = referenceLocation(book, sourceSectionId);
+      if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) {
+        throw new Error('只能保存当前小节之前内容的梗概。');
+      }
+      sourceTitles.push(source.section.title);
+      committedSources.set(sourceSectionId, commitSectionMemoryDraft(source.section, draft, provenance));
     }
-    sourceTitle = source.section.title;
-    const committedSource = commitSectionMemoryDraft(source.section, draft, provenance);
     const candidate = normalizeBook({
       ...book,
       updatedAt: new Date().toISOString(),
       chapters: book.chapters.map((chapter) => ({
         ...chapter,
         sections: chapter.sections.map((item) => {
-          if (item.id === sourceSectionId) return committedSource;
+          const committedSource = committedSources.get(item.id);
+          if (committedSource) return committedSource;
           if (item.id !== targetSectionId) return item;
           const references = (item.contextReferences ?? [])
-            .filter((reference) => reference.sectionId !== sourceSectionId);
-          references.push({ sectionId: sourceSectionId, mode: 'summary', reason: 'manual' });
+            .filter((reference) => !committedSources.has(reference.sectionId));
+          for (const sourceSectionId of committedSources.keys()) {
+            references.push({ sectionId: sourceSectionId, mode: 'summary', reason: 'manual' });
+          }
           return { ...item, contextReferences: references };
         }),
       })),
@@ -906,7 +979,9 @@ function App() {
     setBook(candidate);
     setDirty(true);
     await saveCurrent(candidate);
-    setStatus(`已保存并加载「${sourceTitle}」的梗概。`);
+    setStatus(sourceTitles.length === 1
+      ? `已保存并加载「${sourceTitles[0]}」的梗概。`
+      : `已保存并加载 ${sourceTitles.length} 节梗概。`);
   };
 
   const deleteSectionMemory = async (sourceSectionId: string) => {
@@ -982,10 +1057,10 @@ function App() {
     setStatus(`已清除「${source.section.title}」的上一版本 Memory。`);
   };
 
-  const deleteSelection = (selection: DirectorySelection) => {
-    if (!book) return;
+  const deleteSelection = async (selection: DirectorySelection) => {
+    if (!book) throw new Error('请先打开一本书。');
     const result = deleteDirectorySelection(book, selection);
-    changeBook(() => result.book);
+    await commitBookChange(() => result.book);
     if (result.removedSectionIds.has(sectionId)) {
       setSectionId('');
       setInstruction('');
@@ -1005,10 +1080,10 @@ function App() {
     worldRules: current.worldRules.map((item) => item.id === id ? { ...item, ...patch } : item),
   }));
 
-  const deleteSources = (kind: SourceSelectionKind, ids: Set<string>) => {
-    if (!book || ids.size === 0) return;
+  const deleteSources = async (kind: SourceSelectionKind, ids: Set<string>) => {
+    if (!book || ids.size === 0) throw new Error('请先选择要删除的内容。');
     const next = deleteSourceSelection(book, kind, ids);
-    changeBook(() => next);
+    await commitBookChange(() => next);
     if (kind === 'character' && ids.has(selectedCharacterId)) {
       setSelectedCharacterId(next.characters[0]?.id ?? '');
     }
@@ -1162,9 +1237,11 @@ function App() {
             onInstructionChange={(value) => updateSectionDraft('instruction', value)}
             onAuthorNoteChange={(value) => updateSectionDraft('authorNote', value)}
             onSectionBlocksChange={updateSectionBlocks}
+            onDeleteSectionBlock={deleteSectionBlock}
             onRegenerateBlock={regenerateBlock}
-            onSectionTitleChange={(title) => {
-              if (sectionChapter && section) renameSection(sectionChapter.id, section.id, title);
+            onSectionTitleChange={async (title) => {
+              if (!sectionChapter || !section) throw new Error('找不到当前小节。');
+              await renameSection(sectionChapter.id, section.id, title);
             }}
             onGenerate={() => void generateContinuation()}
           />
@@ -1195,12 +1272,12 @@ function App() {
             }}
             onCreateBook={createBook}
             onDeleteBook={deleteCurrentBook}
-            onBookChange={changeBook}
-            onAddCharacter={addCharacter}
-            onAddWorldRule={addWorldRule}
-            onAddChapter={addChapter}
-            onAddSection={addSection}
-            onRenameChapter={renameChapter}
+            onBookChange={async (recipe) => { await commitBookChange(recipe); }}
+            onAddCharacter={async (name) => { await addCharacter(name); }}
+            onAddWorldRule={async (title) => { await addWorldRule(title); }}
+            onAddChapter={async (title) => { await addChapter(title); }}
+            onAddSection={async (chapterId, title) => { await addSection(chapterId, title); }}
+            onRenameChapter={async (chapterId, title) => { await renameChapter(chapterId, title); }}
             onDeleteSelection={deleteSelection}
             onDeleteSources={deleteSources}
             onPlotOutlineChange={(value) => changeBook((current) => ({ ...current, plotOutline: value }))}
@@ -1240,7 +1317,7 @@ function App() {
           onContextReferenceChange={updateContextReference}
           onContextReferencesChange={updateContextReferences}
           onGenerateMemory={generateSectionMemory}
-          onSaveMemoryAndLoad={saveSectionMemoryAndLoad}
+          onSaveMemoriesAndLoad={saveSectionMemoriesAndLoad}
           busy={busy}
           onCancelGeneration={cancelGeneration}
           onClose={closeContextTools}
@@ -1377,6 +1454,7 @@ function SettingsDrawer({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
   const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
+  const [discardOperation, setDiscardOperation] = useState<DialogOperationState>(idleDialogOperation);
   const discardChangesDialog = useRef<HTMLDialogElement>(null);
   const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
   useEffect(() => {
@@ -1436,8 +1514,15 @@ function SettingsDrawer({
       return;
     }
     setPendingSettingsAction(action);
+    setDiscardOperation(idleDialogOperation);
     discardChangesDialog.current?.showModal();
   };
+  const finishDiscardAction = () => {
+    const action = pendingSettingsAction;
+    discardChangesDialog.current?.close();
+    if (action) applySettingsAction(action);
+  };
+  useDismissSuccessfulDialog(discardOperation.phase === 'success', finishDiscardAction);
   const submitProfile = async (event: React.FormEvent) => {
     event.preventDefault();
     if (connectionState === 'saving' || connectionState === 'testing') return;
@@ -1595,31 +1680,38 @@ function SettingsDrawer({
       <dialog
         className="confirm-dialog"
         ref={discardChangesDialog}
-        onCancel={(event) => { event.preventDefault(); discardChangesDialog.current?.close(); }}
+        onClose={() => setDiscardOperation(idleDialogOperation)}
+        onCancel={(event) => {
+          event.preventDefault();
+          if (discardOperation.phase === 'success') finishDiscardAction();
+          else discardChangesDialog.current?.close();
+        }}
         aria-labelledby="discard-provider-dialog-title"
-        aria-describedby="discard-provider-dialog-description"
+        aria-describedby={discardOperation.phase === 'idle' ? 'discard-provider-dialog-description' : undefined}
       >
         <header className="dialog-heading">
           <h2 id="discard-provider-dialog-title">放弃未保存修改？</h2>
           <button type="button" className="icon-button" onClick={() => discardChangesDialog.current?.close()} aria-label="取消放弃修改" title="取消"><X aria-hidden="true" /></button>
         </header>
         <div className="confirm-dialog-body">
-          <p id="discard-provider-dialog-description">当前连接方案有未保存的修改；放弃后才会继续下一步。</p>
-          <div className="dialog-actions">
-            <button type="button" className="quiet-action" onClick={() => discardChangesDialog.current?.close()}>继续编辑</button>
-            <button
-              type="button"
-              className="danger-action"
-              onClick={() => {
-                const action = pendingSettingsAction;
-                discardChangesDialog.current?.close();
-                if (action) {
-                  restoreProfileBaseline();
-                  applySettingsAction(action);
-                }
-              }}
-            >放弃并继续</button>
-          </div>
+          {discardOperation.phase === 'idle' ? (
+            <>
+              <p id="discard-provider-dialog-description">当前连接方案有未保存的修改；放弃后才会继续下一步。</p>
+              <div className="dialog-actions">
+                <button type="button" className="quiet-action" onClick={() => discardChangesDialog.current?.close()}>继续编辑</button>
+                <button
+                  type="button"
+                  className="danger-action"
+                  onClick={() => {
+                    restoreProfileBaseline();
+                    setDiscardOperation({ phase: 'success', title: '已放弃修改' });
+                  }}
+                >放弃并继续</button>
+              </div>
+            </>
+          ) : (
+            <DialogOperationStatus state={discardOperation} />
+          )}
         </div>
       </dialog>
     </dialog>

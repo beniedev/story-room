@@ -20,6 +20,12 @@ import {
 import { parseProseFormatting } from '../proseFormatting';
 import { countWords, estimateTokens } from '../textMetrics';
 import { ContextCompositionDrawer } from './ContextCompositionDrawer';
+import {
+  DialogOperationStatus,
+  idleDialogOperation,
+  useDismissSuccessfulDialog,
+  type DialogOperationState,
+} from './shared/DialogOperationStatus';
 import { blocksAsContent, sectionBlocks } from './shared/sectionContent';
 import { compactTokenCount } from './shared/text';
 import type { Book, ContextPlan, GenerationMode, SectionBlock } from '../types';
@@ -52,8 +58,9 @@ interface WriterProps {
   onInstructionChange: (value: string) => void;
   onAuthorNoteChange: (value: string) => void;
   onSectionBlocksChange: (blocks: SectionBlock[]) => void;
+  onDeleteSectionBlock: (blockId: string) => Promise<void>;
   onRegenerateBlock: (blockId: string) => void;
-  onSectionTitleChange: (value: string) => void;
+  onSectionTitleChange: (value: string) => Promise<void>;
   onGenerate: () => void;
 }
 
@@ -64,6 +71,8 @@ export function Writer(props: WriterProps) {
   const [sectionTitle, setSectionTitle] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
   const [editingBlockId, setEditingBlockId] = useState('');
+  const [deleteOperation, setDeleteOperation] = useState<DialogOperationState>(idleDialogOperation);
+  const [titleOperation, setTitleOperation] = useState<DialogOperationState>(idleDialogOperation);
   const titleDialog = useRef<HTMLDialogElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleTrigger = useRef<HTMLElement | null>(null);
@@ -85,6 +94,9 @@ export function Writer(props: WriterProps) {
   const manuscriptText = blocksAsContent(blocks);
   const manuscriptWordCount = countWords(manuscriptText);
   const manuscriptTokenCount = estimateTokens(manuscriptText);
+
+  useDismissSuccessfulDialog(deleteOperation.phase === 'success', () => deleteBlockDialog.current?.close());
+  useDismissSuccessfulDialog(titleOperation.phase === 'success', () => titleDialog.current?.close());
 
   const contextTokens = props.contextPlan?.estimatedTokens ?? 0;
   const availableInput = props.contextPlan?.budget.availableInput ?? 0;
@@ -132,6 +144,7 @@ export function Writer(props: WriterProps) {
       titleTrigger.current = document.activeElement;
     }
     setSectionTitle(props.section?.title ?? '');
+    setTitleOperation(idleDialogOperation);
     titleDialog.current?.showModal();
     const focusTitleInput = () => {
       titleInputRef.current?.focus();
@@ -180,7 +193,18 @@ export function Writer(props: WriterProps) {
   const openDeleteBlockDialog = () => {
     if (!selectedBlock) return;
     blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setDeleteOperation(idleDialogOperation);
     deleteBlockDialog.current?.showModal();
+  };
+
+  const closeDeleteBlockDialog = () => {
+    if (deleteOperation.phase === 'pending') return;
+    deleteBlockDialog.current?.close();
+  };
+
+  const closeTitleDialog = () => {
+    if (titleOperation.phase === 'pending') return;
+    titleDialog.current?.close();
   };
 
   const restoreBlockActionFocus = () => {
@@ -311,12 +335,12 @@ export function Writer(props: WriterProps) {
           <div className="writer-tool-leading">
             <button
               type="button"
-              className="book-settings-button button-with-icon writer-book-settings-button"
+              className="book-settings-button icon-button writer-book-settings-button"
               onClick={props.onOpenBookSettings}
               disabled={props.busy}
               aria-label="打开本书设定"
               title="本书设定"
-            ><BookMarked aria-hidden="true" /><span>设定</span></button>
+            ><BookMarked aria-hidden="true" /></button>
             <button
               type="button"
               className="icon-button writer-context-tools-button"
@@ -568,59 +592,99 @@ export function Writer(props: WriterProps) {
       <dialog
         className="confirm-dialog"
         ref={deleteBlockDialog}
-        onClose={restoreBlockActionFocus}
-        onCancel={(event) => { event.preventDefault(); deleteBlockDialog.current?.close(); }}
+        onClose={() => {
+          setDeleteOperation(idleDialogOperation);
+          restoreBlockActionFocus();
+        }}
+        onCancel={(event) => { event.preventDefault(); closeDeleteBlockDialog(); }}
         aria-labelledby="delete-block-dialog-heading"
-        aria-describedby="delete-block-dialog-description"
+        aria-describedby={deleteOperation.phase === 'idle' ? 'delete-block-dialog-description' : undefined}
+        aria-busy={deleteOperation.phase === 'pending' || undefined}
       >
         <header className="dialog-heading">
           <h2 id="delete-block-dialog-heading">删除所选片段</h2>
-          <button type="button" className="icon-button" onClick={() => deleteBlockDialog.current?.close()} aria-label="取消删除片段" title="取消"><X aria-hidden="true" /></button>
+          <button type="button" className="icon-button" disabled={deleteOperation.phase === 'pending'} onClick={closeDeleteBlockDialog} aria-label="取消删除片段" title="取消"><X aria-hidden="true" /></button>
         </header>
         <div className="confirm-dialog-body">
-          <p id="delete-block-dialog-description">只会删除当前选中的这一块用户输入或 AI 输出，其他正文不会改变。</p>
-          <div className="dialog-actions">
-            <button type="button" className="quiet-action" onClick={() => deleteBlockDialog.current?.close()}>取消</button>
-            <button
-              type="button"
-              className="danger-action button-with-icon"
-              onClick={() => {
-                if (!selectedBlock) return;
-                props.onSectionBlocksChange(blocks.filter((item) => item.id !== selectedBlock.id));
-                setSelectedBlockId('');
-                deleteBlockDialog.current?.close();
-              }}
-            ><Trash2 aria-hidden="true" />删除这一块</button>
-          </div>
+          {deleteOperation.phase === 'idle' ? (
+            <>
+              <p id="delete-block-dialog-description">只会删除当前选中的这一块用户输入或 AI 输出，其他正文不会改变。</p>
+              <div className="dialog-actions">
+                <button type="button" className="quiet-action" onClick={closeDeleteBlockDialog}>取消</button>
+                <button
+                  type="button"
+                  className="danger-action button-with-icon"
+                  onClick={() => {
+                    if (!selectedBlock) return;
+                    setDeleteOperation({ phase: 'pending', title: '正在删除…' });
+                    void props.onDeleteSectionBlock(selectedBlock.id)
+                      .then(() => {
+                        setSelectedBlockId('');
+                        setDeleteOperation({ phase: 'success', title: '删除成功' });
+                      })
+                      .catch((error) => setDeleteOperation({
+                        phase: 'error',
+                        title: '删除失败',
+                        detail: error instanceof Error ? error.message : '请稍后重试。',
+                      }));
+                  }}
+                ><Trash2 aria-hidden="true" />删除这一块</button>
+              </div>
+            </>
+          ) : (
+            <DialogOperationStatus state={deleteOperation} onReturn={() => setDeleteOperation(idleDialogOperation)} />
+          )}
         </div>
       </dialog>
 
       <dialog
         className="name-dialog"
         ref={titleDialog}
-        onClose={restoreTitleTriggerFocus}
-        onCancel={(event) => { event.preventDefault(); titleDialog.current?.close(); }}
+        onClose={() => {
+          setTitleOperation(idleDialogOperation);
+          restoreTitleTriggerFocus();
+        }}
+        onCancel={(event) => { event.preventDefault(); closeTitleDialog(); }}
         aria-labelledby="section-title-dialog-heading"
+        aria-busy={titleOperation.phase === 'pending' || undefined}
       >
         <form onSubmit={(event) => {
           event.preventDefault();
           const cleanTitle = sectionTitle.trim();
-          if (!cleanTitle) return;
-          props.onSectionTitleChange(cleanTitle);
-          titleDialog.current?.close();
+          if (!cleanTitle || titleOperation.phase === 'pending') return;
+          setTitleOperation({ phase: 'pending', title: '正在保存修改…' });
+          void props.onSectionTitleChange(cleanTitle)
+            .then(() => setTitleOperation({ phase: 'success', title: '保存成功' }))
+            .catch((error) => setTitleOperation({
+              phase: 'error',
+              title: '保存失败',
+              detail: error instanceof Error ? error.message : '请稍后重试。',
+            }));
         }}>
           <header className="dialog-heading">
             <h2 id="section-title-dialog-heading">修改小节名称</h2>
-            <button type="button" className="icon-button" onClick={() => titleDialog.current?.close()} aria-label="取消修改小节名称" title="取消"><X aria-hidden="true" /></button>
+            <button type="button" className="icon-button" disabled={titleOperation.phase === 'pending'} onClick={closeTitleDialog} aria-label="取消修改小节名称" title="取消"><X aria-hidden="true" /></button>
           </header>
-          <div className="name-dialog-body">
-            <label htmlFor="section-title-input">小节名称</label>
-            <input id="section-title-input" ref={titleInputRef} required autoComplete="off" value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} />
-            <div className="dialog-actions">
-              <button type="button" className="quiet-action" onClick={() => titleDialog.current?.close()}>取消</button>
-              <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
+          {titleOperation.phase === 'idle' ? (
+            <div className="name-dialog-body">
+              <label htmlFor="section-title-input">小节名称</label>
+              <input id="section-title-input" ref={titleInputRef} required autoComplete="off" value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} />
+              <div className="dialog-actions">
+                <button type="button" className="quiet-action" onClick={closeTitleDialog}>取消</button>
+                <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="name-dialog-body dialog-operation-body">
+              <DialogOperationStatus
+                state={titleOperation}
+                onReturn={() => {
+                  setTitleOperation(idleDialogOperation);
+                  window.requestAnimationFrame(() => titleInputRef.current?.focus());
+                }}
+              />
+            </div>
+          )}
         </form>
       </dialog>
     </div>
