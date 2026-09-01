@@ -3,6 +3,7 @@ import type {
   Section,
   SectionMemory,
   SectionMemoryDraft,
+  SectionMemoryProvenance,
 } from './types';
 
 export const MAX_SECTION_MEMORY_JSON_BYTES = 64_000;
@@ -138,6 +139,32 @@ export const draftFromSectionMemory = (
     }
   : undefined;
 
+export const sectionMemoryDraftsEqual = (
+  left: SectionMemoryDraft,
+  right: SectionMemoryDraft,
+): boolean => left.synopsis === right.synopsis
+  && left.beats.length === right.beats.length
+  && left.beats.every((value, index) => value === right.beats[index])
+  && left.continuityFacts.length === right.continuityFacts.length
+  && left.continuityFacts.every((value, index) => value === right.continuityFacts[index])
+  && left.characterStateChanges.length === right.characterStateChanges.length
+  && left.characterStateChanges.every((value, index) => value === right.characterStateChanges[index])
+  && left.foreshadowingCandidates.length === right.foreshadowingCandidates.length
+  && left.foreshadowingCandidates.every((value, index) => value === right.foreshadowingCandidates[index]);
+
+export const sectionMemoryProvenanceAfterReview = (
+  existing: SectionMemory | undefined,
+  draft: SectionMemoryDraft,
+  generated?: SectionMemoryDraft,
+): SectionMemoryProvenance => {
+  if (generated) return sectionMemoryDraftsEqual(generated, draft) ? 'model-confirmed' : 'model-edited';
+  if (!existing) return 'manual';
+  if (sectionMemoryDraftsEqual(existing, draft)) {
+    return existing.provenance === 'model-draft' ? 'model-confirmed' : existing.provenance;
+  }
+  return existing.provenance.startsWith('model-') ? 'model-edited' : 'manual';
+};
+
 export const commitSectionMemoryDraft = (
   section: Section,
   draft: SectionMemoryDraft,
@@ -166,6 +193,16 @@ export const rollbackSectionMemory = (section: Section): Section => {
   };
 };
 
+export const deleteCurrentSectionMemory = (section: Section): Section => {
+  const { memory: _memory, ...withoutMemory } = section;
+  return withoutMemory;
+};
+
+export const clearPreviousSectionMemory = (section: Section): Section => {
+  const { previousMemory: _previousMemory, ...withoutPreviousMemory } = section;
+  return withoutPreviousMemory;
+};
+
 export const sectionMemoryFreshness = (
   memory: SectionMemory | undefined,
   content: string,
@@ -191,24 +228,34 @@ const normalizeMemory = (memory: SectionMemory | undefined, content: string) => 
     : { ...memory, status: 'stale' as const };
 };
 
-const normalizeSection = (section: Section): Section => {
-  const migrated = section.plan === undefined && typeof section.note === 'string' && section.note.length > 0
-    ? (() => {
-        const { note: _migratedNote, ...withoutNote } = section;
-        return { ...withoutNote, plan: { goal: section.note, intendedBeats: [] } };
-      })()
-    : section;
+const normalizeSection = (
+  section: Section,
+  sectionIds: Set<string>,
+): Section => {
+  const validReferences = section.contextReferences?.filter((reference) => sectionIds.has(reference.sectionId));
+  const normalized = section.contextReferences && validReferences?.length
+    ? { ...section, contextReferences: validReferences }
+    : section.contextReferences
+      ? (() => {
+          const { contextReferences: _removed, ...withoutReferences } = section;
+          return withoutReferences;
+        })()
+      : section;
   return {
-    ...migrated,
-    ...(migrated.memory ? { memory: normalizeMemory(migrated.memory, migrated.content) } : {}),
-    ...(migrated.previousMemory ? { previousMemory: normalizeMemory(migrated.previousMemory, migrated.content) } : {}),
+    ...normalized,
+    ...(normalized.memory ? { memory: normalizeMemory(normalized.memory, normalized.content) } : {}),
+    ...(normalized.previousMemory ? { previousMemory: normalizeMemory(normalized.previousMemory, normalized.content) } : {}),
   };
 };
 
-export const normalizeBook = (book: Book): Book => ({
-  ...book,
-  chapters: book.chapters.map((chapter) => ({
-    ...chapter,
-    sections: chapter.sections.map(normalizeSection),
-  })),
-});
+export const normalizeBook = (book: Book): Book => {
+  const sections = book.chapters.flatMap((chapter) => chapter.sections);
+  const sectionIds = new Set(sections.map((section) => section.id));
+  return {
+    ...book,
+    chapters: book.chapters.map((chapter) => ({
+      ...chapter,
+      sections: chapter.sections.map((section) => normalizeSection(section, sectionIds)),
+    })),
+  };
+};

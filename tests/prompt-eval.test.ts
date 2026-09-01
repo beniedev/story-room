@@ -205,7 +205,7 @@ describe('deterministic synthetic prompt eval', () => {
 
     expect(targetOnly.estimatedTokens).toBeLessThan(summary.estimatedTokens);
     expect(summary.estimatedTokens).toBeLessThan(summaryAndSelectedFull.estimatedTokens);
-    expect(summary.estimatedTokens).toBeLessThan(full.estimatedTokens);
+    expect(targetOnly.estimatedTokens).toBeLessThan(full.estimatedTokens);
     for (const plan of plans) {
       expect(plan.budget.estimatedInput).toBe(plan.estimatedTokens);
       expect(plan.budget.remainingInput).toBe(plan.budget.availableInput - plan.estimatedTokens);
@@ -233,6 +233,6 @@ describe('deterministic synthetic prompt eval', () => {
     expect(plan.excluded.find((item) => item.source?.sectionId === 'eval-section-four')?.reason)
       .toBe('当前或未来 Section 不能作为前文');
     expect(plan.excluded.find((item) => item.source?.sectionId === 'other-book-section')?.reason)
-      .toBe('引用不存在或不属于当前 Book');
+      .toBeUndefined();
   });
 });

@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { Book, SectionMemoryDraft } from '../src/types';
 import {
   commitSectionMemoryDraft,
+  clearPreviousSectionMemory,
   createSectionMemory,
+  deleteCurrentSectionMemory,
   draftFromSectionMemory,
   hashSectionContent,
   isEligibleSectionMemory,
   normalizeBook,
   parseSectionMemoryDraft,
   rollbackSectionMemory,
+  sectionMemoryProvenanceAfterReview,
   sectionMemoryFreshness,
   serializeSectionMemoryDraft,
 } from '../src/sectionMemory';
@@ -71,7 +74,7 @@ describe('section memory helper', () => {
     })).chapters[0]?.sections[0]?.memory?.status).toBe('stale');
   });
 
-  it('migrates a legacy note exactly once and marks changed memory stale', () => {
+  it('keeps legacy note and plan fields for compatibility without migrating them', () => {
     const memory = createSectionMemory(draft, 'old content');
     const migrated = normalizeBook(bookWithSection({
       id: 'legacy-section',
@@ -80,8 +83,8 @@ describe('section memory helper', () => {
       note: '  keep exact\n第二行  ',
       memory,
     })).chapters[0]?.sections[0];
-    expect(migrated?.note).toBeUndefined();
-    expect(migrated?.plan).toEqual({ goal: '  keep exact\n第二行  ', intendedBeats: [] });
+    expect(migrated?.note).toBe('  keep exact\n第二行  ');
+    expect(migrated?.plan).toBeUndefined();
     expect(migrated?.memory?.status).toBe('stale');
 
     const planned = normalizeBook(bookWithSection({
@@ -118,5 +121,79 @@ describe('section memory helper', () => {
     const rolledBack = rollbackSectionMemory(committed);
     expect(rolledBack.memory).toEqual(original);
     expect(rolledBack.previousMemory?.synopsis).toBe('新摘要');
+  });
+
+  it('deletes current memory without deleting history and can clear history separately', () => {
+    const original = createSectionMemory(draft, 'source content', 'manual', '2026-01-01T00:00:00.000Z');
+    const replacement = createSectionMemory({ ...draft, synopsis: '新摘要' }, 'source content', 'manual', '2026-01-02T00:00:00.000Z');
+    const section = { id: 'memory-section', title: 'Section', content: 'source content', memory: replacement, previousMemory: original };
+    const deleted = deleteCurrentSectionMemory(section);
+    expect(deleted.memory).toBeUndefined();
+    expect(deleted.previousMemory).toEqual(original);
+    const cleared = clearPreviousSectionMemory(section);
+    expect(cleared.memory).toEqual(replacement);
+    expect(cleared.previousMemory).toBeUndefined();
+  });
+
+  it('turns a reviewed model draft into confirmed memory before commit', () => {
+    const modelDraft = createSectionMemory(draft, 'source content', 'model-draft');
+    expect(sectionMemoryProvenanceAfterReview(modelDraft, draft)).toBe('model-confirmed');
+    expect(sectionMemoryProvenanceAfterReview(modelDraft, { ...draft, synopsis: 'edited' })).toBe('model-edited');
+  });
+
+  it('requires a complete review when refreshing stale memory', () => {
+    const stale = {
+      ...createSectionMemory(draft, 'old content', 'model-confirmed'),
+      status: 'stale' as const,
+    };
+    const replacement: SectionMemoryDraft = {
+      synopsis: '新摘要',
+      beats: [...stale.beats],
+      continuityFacts: [...stale.continuityFacts],
+      characterStateChanges: [...stale.characterStateChanges],
+      foreshadowingCandidates: [...stale.foreshadowingCandidates],
+    };
+    const section = { id: 'stale-section', title: 'Stale', content: 'new content', memory: stale };
+    const provenance = sectionMemoryProvenanceAfterReview(stale, replacement);
+    const committed = commitSectionMemoryDraft(section, replacement, provenance, '2026-01-02T00:00:00.000Z');
+    expect(provenance).toBe('model-edited');
+    expect(committed.memory).toMatchObject({
+      synopsis: '新摘要',
+      beats: stale.beats,
+      continuityFacts: stale.continuityFacts,
+      characterStateChanges: stale.characterStateChanges,
+      foreshadowingCandidates: stale.foreshadowingCandidates,
+      status: 'fresh',
+      sourceContentHash: hashSectionContent('new content'),
+    });
+    expect(committed.memory?.sourceContentHash).not.toBe(stale.sourceContentHash);
+  });
+
+  it('removes only references to sections that no longer exist', () => {
+    const normalized = normalizeBook({
+      ...bookWithSection({
+        id: 'target',
+        title: 'Target',
+        content: 'target',
+        contextReferences: [
+          { sectionId: 'blank-source', mode: 'full', reason: 'manual' },
+          { sectionId: 'missing-source', mode: 'full', reason: 'manual' },
+        ],
+      }),
+      chapters: [{
+        id: 'memory-chapter',
+        title: 'Chapter',
+        sections: [
+          { id: 'blank-source', title: 'Blank', content: '' },
+          { id: 'target', title: 'Target', content: 'target', contextReferences: [
+            { sectionId: 'blank-source', mode: 'full', reason: 'manual' },
+            { sectionId: 'missing-source', mode: 'full', reason: 'manual' },
+          ] },
+        ],
+      }],
+    }).chapters[0]?.sections[1];
+    expect(normalized?.contextReferences).toEqual([
+      { sectionId: 'blank-source', mode: 'full', reason: 'manual' },
+    ]);
   });
 });

@@ -9,7 +9,12 @@ describe('writing text metrics', () => {
   });
 
   it('shares the prompt token estimate used by the writing UI', () => {
-    expect(estimateTokens('一二三四')).toBe(2);
+    expect(estimateTokens('一二三四')).toBe(4);
+    expect(estimateTokens('hello world')).toBe(3);
+    expect(estimateTokens('你好 hello')).toBe(4);
+    expect(estimateTokens('!?😊')).toBe(3);
+    expect(estimateTokens('\n\n\n\n')).toBe(4);
+    expect(estimateTokens('a')).toBe(1);
     expect(estimateTokens('')).toBe(0);
   });
 });

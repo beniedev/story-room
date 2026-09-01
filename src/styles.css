@@ -415,7 +415,7 @@ h4 {
   inset-block-start: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
   padding-block: 0.65rem;
@@ -425,10 +425,6 @@ h4 {
   );
   background: color-mix(in srgb, var(--page) 94%, transparent);
   backdrop-filter: blur(14px);
-}
-
-.header-leading-space {
-  min-width: 0;
 }
 
 .header-actions,
@@ -447,7 +443,7 @@ h4 {
   display: grid;
   gap: 0.15rem;
   min-width: 0;
-  justify-items: center;
+  justify-items: start;
   line-height: 1.25;
 }
 
@@ -1642,14 +1638,6 @@ h4 {
   min-width: 0;
 }
 
-.chapter-card summary small {
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .chapter-card summary > span:last-child {
   color: var(--muted);
   font-size: 0.74rem;
@@ -2251,6 +2239,7 @@ h4 {
 
 .settings-drawer::backdrop,
 .book-settings-drawer::backdrop,
+.context-tools-drawer::backdrop,
 .name-dialog::backdrop,
 .confirm-dialog::backdrop,
 .export-dialog::backdrop,
@@ -2416,6 +2405,85 @@ h4 {
   margin: 0;
   color: var(--danger);
   font-size: 0.75rem;
+}
+
+.context-tools-drawer .source-load-tab {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.5rem;
+  padding-inline: 0.4rem;
+}
+
+.context-tools-drawer .context-reference-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.context-tools-drawer .context-reference-disclosure > span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.context-tools-drawer .context-reference-disclosure > span > small {
+  white-space: normal;
+}
+
+.context-reference-mode {
+  display: grid;
+  align-items: center;
+  min-width: 7rem;
+}
+
+.context-reference-mode select {
+  min-width: 7rem;
+}
+
+.context-memory-editor {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.context-memory-heading,
+.context-memory-history {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.context-memory-heading {
+  justify-content: space-between;
+}
+
+.context-memory-heading h3 {
+  margin: 0;
+}
+
+.context-memory-field,
+.context-memory-array {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.context-memory-array {
+  margin: 0;
+}
+
+.context-memory-array-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.context-memory-previous-content {
+  display: grid;
+  gap: 0.35rem;
+  padding-block: 0.5rem;
+}
+
+.context-memory-previous-content p,
+.context-memory-previous-content ul {
+  margin: 0;
 }
 
 .drawer-title-row {
@@ -2873,6 +2941,41 @@ h4 {
   white-space: nowrap;
 }
 
+.prompt-composition-details {
+  margin: 0;
+}
+
+.prompt-composition-details {
+  padding-block: 0.25rem;
+}
+
+.prompt-message-list,
+.prompt-excluded-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding-block: 0.5rem;
+}
+
+.prompt-message-preview {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.prompt-message-preview pre {
+  max-height: 24rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-excluded-list li {
+  display: grid;
+  gap: 0.15rem;
+}
+
 .prompt-composition-meta strong {
   color: var(--prompt-color);
   font-size: 0.76rem;
@@ -3084,7 +3187,7 @@ h4 {
 
 @media (max-width: 64rem) {
   .app-header {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .directory-layout {
@@ -3187,7 +3290,7 @@ h4 {
 
 @media (max-width: 24rem) {
   .app-header {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .header-actions {

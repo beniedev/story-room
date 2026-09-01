@@ -6,9 +6,9 @@ This document describes the trust boundaries of the pre-release local-first demo
 
 The local Node host writes a readable Book directory. The hosted/device build keeps the current Book in the browser. The main assets are:
 
-- manuscript text, interaction blocks, branches, source settings, and complete exports;
+- manuscript text, interaction blocks, branches, source settings, Section Memory snapshots, and complete exports;
 - local-host Provider configuration and its API Key;
-- a non-loopback host access token;
+- the optional local-host access password and the server-side token used for a non-loopback host;
 - a temporary Provider test key entered in the hosted/device page;
 - Provider request and response contents.
 
@@ -19,7 +19,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 | Browser/device | The current page can use its runtime storage and request the local host | Same-origin scripts, browser extensions, browser profile, and device malware can inspect browser data |
 | Local host/filesystem | The configured data directory and Book-scoped file layout | Filesystem changes outside the process, stale links, malformed files, and exported copies |
 | Provider endpoint | The URL and response are selected by the user and checked by the host | Endpoint operators, endpoint logs, returned content, and any compromise after the check |
-| LAN/network | A configured Host and access token provide a narrow development gate | Network observers, DNS/routing changes, public exposure, and other users on the network |
+| LAN/network | A configured Host and, when enabled, the access password/server token provide a narrow development gate | Network observers, DNS/routing changes, public exposure, and other users on the network |
 
 ## Current controls
 
@@ -27,6 +27,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - Local-host saves publish content before `book.json`, reconcile managed files, and update the library only after cleanup succeeds.
 - Local-host full-Book browser caches are not used; legacy `story-native:book:` entries are cleared on host startup. Device-local storage remains unencrypted by design.
 - The host defaults to loopback. Non-loopback entry requires an access token and explicit trusted Host values; when access-token mode is configured, `/api/health` is the only public API response. Loopback zero-config remains available for local use. State-changing requests with an Origin header require same-origin.
+- The page's access-password setting is optional and disabled by default. When enabled, its value stays in the current browser tab's session storage; this is a development gate, not encryption or multi-user authentication.
 - Provider URLs reject credentials, validate every resolved address before each request, require HTTPS except for loopback HTTP, keep private-network access opt-in, reject metadata/link-local targets, and use manual redirect handling.
 - Provider request and response bodies are bounded. Local-host Provider Keys are kept in a plaintext config file; POSIX writes use mode `0600`.
 - The hosted/device Provider test sends a temporary key directly to the entered endpoint and does not persist it.
@@ -36,7 +37,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - DNS preflight and the actual connection are separate operations. A theoretical DNS/routing TOCTOU can still change the destination after validation.
 - An attacker who controls the browser, a same-origin script, the operating system, the data directory, the local network, or the configured endpoint can read or alter data within that boundary.
 - Browser `localStorage` is not encrypted. Site-data clearing, browser profile loss, or user deletion can remove device-local Books. Exports are outside the app's control.
-- The local host uses HTTP and is not a hardened public service. An access token and Host checks do not provide TLS, user accounts, rate limiting, or multi-user authorization.
+- The local host uses HTTP and is not a hardened public service. An access password and Host checks do not provide TLS, user accounts, rate limiting, or multi-user authorization.
 - Full Book `PUT` and autosave remain whole-Book operations with a 1 MB request limit. Incremental revisions are future work described in [`INCREMENTAL_SAVE.md`](INCREMENTAL_SAVE.md).
 
 ## Out of scope

@@ -7,6 +7,8 @@ import type {
 import {
   buildContextPlan as composeContextPlan,
   ContextPlanInputError,
+  hasManualReference,
+  largestContextItems,
 } from '../src/contextPlan.ts';
 import {
   parseSectionMemoryDraft,
@@ -51,13 +53,12 @@ export function normalizeSectionMemoryResponse(draft: string): string {
 
 export function assertContextBudget(plan: ContextPlan) {
   if (plan.budget.overflow) {
-    const largest = [...plan.included]
-      .sort((first, second) => second.estimatedTokens - first.estimatedTokens)
-      .slice(0, 3)
-      .map((item) => item.title)
+    const largest = largestContextItems(plan.included)
+      .map((item) => `${item.title}（约 ${item.estimatedTokens.toLocaleString()} tokens）`)
       .join('、');
+    const label = hasManualReference(plan.included) ? '手选前文' : '内容';
     throw new RequestValidationError(
-      `当前上下文约超出 ${plan.budget.overflowTokens} tokens；占用最大的材料：${largest || '无'}。请缩短输入或调整 Prompt 材料。`,
+      `当前上下文约超出 ${plan.budget.overflowTokens} tokens；占用最大的${label}：${largest || '无'}。请缩短输入或调整 Prompt 材料。`,
     );
   }
 }

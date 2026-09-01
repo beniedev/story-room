@@ -95,9 +95,9 @@ describe('device-local library', () => {
     const loaded = await deviceLibrary.loadBook(cached.id);
     expect(loaded).toMatchObject({ id: cached.id, title: cached.title });
     expect(loaded.chapters[0]?.sections[0]).toMatchObject({
-      plan: { goal: 'legacy device goal', intendedBeats: [] },
+      note: 'legacy device goal',
       memory: { status: 'stale' },
     });
-    expect(loaded.chapters[0]?.sections[0]?.note).toBeUndefined();
+    expect(loaded.chapters[0]?.sections[0]?.plan).toBeUndefined();
   });
 });

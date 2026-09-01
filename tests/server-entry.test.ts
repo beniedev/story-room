@@ -262,6 +262,71 @@ describe('local server entry', () => {
     }
   });
 
+  it('aborts the Provider when the generation client disconnects', async () => {
+    const book = {
+      id: 'cancel-book',
+      title: 'Synthetic Book',
+      plotOutline: '',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'cancel-chapter',
+        title: 'Synthetic Chapter',
+        sections: [{ id: 'cancel-section', title: 'Synthetic Section', content: 'Existing text.' }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    let resolveStarted: (signal: AbortSignal) => void = () => undefined;
+    const providerStarted = new Promise<AbortSignal>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const storyStore = { loadBook: vi.fn(async () => book) };
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate: vi.fn(async (_profileId: string, _messages: unknown[], signal?: AbortSignal) => {
+        if (!signal) throw new Error('Generation did not receive an AbortSignal.');
+        resolveStarted(signal);
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('synthetic provider abort')), { once: true });
+        });
+      }),
+    };
+    const server = createStoryServer(storyStore as never, providerStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const request = httpRequest({
+        host: '127.0.0.1',
+        port: address.port,
+        path: '/api/generate',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      request.on('error', () => undefined);
+      request.end(JSON.stringify({
+        bookId: book.id,
+        sectionId: 'cancel-section',
+        providerProfileId: 'synthetic-provider',
+        mode: 'author',
+        instruction: 'Continue synthetic text.',
+        generationKind: 'continue-section',
+      }));
+
+      const providerSignal = await providerStarted;
+      request.destroy();
+      await vi.waitFor(() => expect(providerSignal.aborted).toBe(true));
+      expect(providerStore.generate).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it('keeps loopback health public and protects other APIs with the configured token', async () => {
     const server = createStoryServer(undefined, undefined, undefined, {
       accessToken: 'synthetic-access-token',

@@ -3,7 +3,12 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PROVIDER_RESPONSE_BYTES, ProviderStore } from '../server/providers.ts';
+import {
+  MAX_PROVIDER_RESPONSE_BYTES,
+  ProviderCancelledError,
+  ProviderStore,
+  ProviderTimeoutError,
+} from '../server/providers.ts';
 import type { ProviderProfile } from '../src/providerProfiles.ts';
 
 const mockedLookup = vi.hoisted(() => vi.fn());
@@ -127,6 +132,64 @@ describe('local provider store', () => {
       expect(JSON.stringify(await store.list())).not.toContain('private-test-key');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('propagates an external cancellation to the Provider fetch', async () => {
+    const store = await makeStore();
+    const profile = profileAt('http://127.0.0.1:4311/v1');
+    await store.save(profile, 'cancel-test-key');
+    const controller = new AbortController();
+    let resolveStarted: (signal: AbortSignal) => void = () => undefined;
+    const fetchStarted = new Promise<AbortSignal>((resolve) => {
+      resolveStarted = resolve;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error('Provider fetch did not receive an AbortSignal.');
+      resolveStarted(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    });
+
+    const pending = store.generate(profile.id, [{ role: 'user', content: 'synthetic request', blockIds: [] }], controller.signal);
+    const providerSignal = await fetchStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toBeInstanceOf(ProviderCancelledError);
+    expect(providerSignal.aborted).toBe(true);
+  });
+
+  it('reports Provider timeout separately and cleans up its timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = await makeStore();
+      const profile = profileAt('http://127.0.0.1:4311/v1');
+      await store.save(profile, 'timeout-test-key');
+      let resolveStarted: (signal: AbortSignal) => void = () => undefined;
+      const fetchStarted = new Promise<AbortSignal>((resolve) => {
+        resolveStarted = resolve;
+      });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error('Provider fetch did not receive an AbortSignal.');
+        resolveStarted(signal);
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')), { once: true });
+        });
+      });
+
+      const pending = store.generate(profile.id, [{ role: 'user', content: 'synthetic request', blockIds: [] }]);
+      const providerSignal = await fetchStarted;
+      const result = expect(pending).rejects.toBeInstanceOf(ProviderTimeoutError);
+      await vi.advanceTimersByTimeAsync(180_000);
+      await result;
+
+      expect(providerSignal.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

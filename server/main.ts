@@ -16,6 +16,7 @@ import { BookNotFoundError, StoreInputError, StoryStore } from './store.ts';
 import type { Book, GenerationRequest } from '../src/types.ts';
 import type { ProviderProfile } from '../src/providerProfiles.ts';
 import {
+  ProviderCancelledError,
   ProviderConnectionError,
   ProviderInputError,
   ProviderStore,
@@ -275,6 +276,7 @@ export const createStoryServer = (
   const accessToken = safeAccessToken(options.accessToken);
   const allowedHosts = parseAllowedHosts(options.allowedHosts);
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
+    let generationSignal: AbortSignal | undefined;
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const actualHost = requestHost(request);
@@ -341,24 +343,44 @@ export const createStoryServer = (
         return sendJson(response, 200, buildContextPlan(book, body, limits));
       }
       if (request.method === 'POST' && url.pathname === '/api/generate') {
-        const body = await readGenerationRequest(request);
-        const book = await storyStore.loadBook(body.bookId);
-        const limits = await providerStore.getContextLimits(body.providerProfileId);
-        const plan = buildContextPlan(book, body, limits);
-        assertGenerationExecutable(body);
-        assertContextBudget(plan);
-        const generated = body.providerProfileId
-          ? await providerStore.generate(body.providerProfileId, plan.messages)
-          : null;
-        if (generated !== null) {
-          return sendJson(response, 200, {
-            plan,
-            draft: body.generationKind === 'summarize-section'
-              ? normalizeSectionMemoryResponse(generated)
-              : generated,
-          });
+        const generationController = new AbortController();
+        let responseStarted = false;
+        generationSignal = generationController.signal;
+        const abortOnClientDisconnect = () => {
+          if (!responseStarted && !generationController.signal.aborted) generationController.abort();
+        };
+        request.once('aborted', abortOnClientDisconnect);
+        response.once('close', abortOnClientDisconnect);
+        try {
+          const body = await readGenerationRequest(request);
+          if (generationController.signal.aborted) return;
+          const book = await storyStore.loadBook(body.bookId);
+          if (generationController.signal.aborted) return;
+          const limits = await providerStore.getContextLimits(body.providerProfileId);
+          if (generationController.signal.aborted) return;
+          const plan = buildContextPlan(book, body, limits);
+          assertGenerationExecutable(body);
+          assertContextBudget(plan);
+          const generated = body.providerProfileId
+            ? await providerStore.generate(body.providerProfileId, plan.messages, generationController.signal)
+            : null;
+          if (generationController.signal.aborted) return;
+          if (generated !== null) {
+            responseStarted = true;
+            return sendJson(response, 200, {
+              plan,
+              draft: body.generationKind === 'summarize-section'
+                ? normalizeSectionMemoryResponse(generated)
+                : generated,
+            });
+          }
+          responseStarted = true;
+          return sendJson(response, 200, fakeGenerate(book, body, limits));
+        } finally {
+          responseStarted = true;
+          request.off('aborted', abortOnClientDisconnect);
+          response.off('close', abortOnClientDisconnect);
         }
-        return sendJson(response, 200, fakeGenerate(book, body, limits));
       }
       if (knownRouteMethods[url.pathname]) {
         response.setHeader('allow', knownRouteMethods[url.pathname].join(', '));
@@ -367,6 +389,10 @@ export const createStoryServer = (
       if (staticRoot && await serveStatic(request, response, staticRoot, url.pathname)) return;
       return sendJson(response, 404, { error: '未找到这个 DEMO API。' });
     } catch (error) {
+      if (error instanceof ProviderCancelledError
+        || generationSignal?.aborted
+        || response.destroyed
+        || response.writableEnded) return;
       const statusCode = error instanceof PayloadTooLargeError
         ? error.statusCode
         : error instanceof BookNotFoundError

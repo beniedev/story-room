@@ -32,11 +32,31 @@ export class ProviderInputError extends Error {
 }
 
 export class ProviderConnectionError extends Error {
-  readonly statusCode = 502;
+  readonly statusCode: number = 502;
 
   constructor(message: string) {
     super(message);
     this.name = 'ProviderConnectionError';
+  }
+}
+
+/** The caller stopped waiting before the Provider finished. */
+export class ProviderCancelledError extends ProviderConnectionError {
+  readonly statusCode = 499;
+
+  constructor() {
+    super('生成已取消。');
+    this.name = 'ProviderCancelledError';
+  }
+}
+
+/** The Provider did not finish within the generation timeout. */
+export class ProviderTimeoutError extends ProviderConnectionError {
+  readonly statusCode = 504;
+
+  constructor() {
+    super('本机 Provider 调用超时。');
+    this.name = 'ProviderTimeoutError';
   }
 }
 
@@ -323,6 +343,60 @@ const readErrorStatus = (status: number) => status === 401 || status === 403
   ? 'Provider 拒绝了本机凭据。'
   : `Provider 返回 HTTP ${status}。`;
 
+const GENERATION_TIMEOUT_MS = 180_000;
+
+type ProviderAbortCause = 'external' | 'timeout';
+
+type LinkedProviderAbort = {
+  signal: AbortSignal;
+  cause: () => ProviderAbortCause | undefined;
+  cleanup: () => void;
+};
+
+/**
+ * Combine the request lifetime with the existing Provider timeout while
+ * retaining which one won the race. The listener and timer are always
+ * removed by the generation finally block.
+ */
+const linkProviderAbort = (externalSignal?: AbortSignal): LinkedProviderAbort => {
+  const controller = new AbortController();
+  let abortCause: ProviderAbortCause | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const abortFromExternal = () => {
+    if (abortCause) return;
+    abortCause = 'external';
+    controller.abort();
+  };
+
+  if (externalSignal?.aborted) {
+    abortFromExternal();
+  } else if (externalSignal) {
+    externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+  }
+
+  if (!abortCause) {
+    timeout = setTimeout(() => {
+      if (abortCause) return;
+      abortCause = 'timeout';
+      controller.abort();
+    }, GENERATION_TIMEOUT_MS);
+  }
+
+  return {
+    signal: controller.signal,
+    cause: () => abortCause,
+    cleanup: () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromExternal);
+    },
+  };
+};
+
+const errorForAbortCause = (cause: ProviderAbortCause) => (
+  cause === 'external' ? new ProviderCancelledError() : new ProviderTimeoutError()
+);
+
 export class ProviderStore {
   readonly file: string;
   readonly allowPrivateNetwork: boolean;
@@ -436,8 +510,13 @@ export class ProviderStore {
     return { ok: true, modelId: candidate.modelId };
   }
 
-  async generate(profileId: string, messages: PromptMessage[]): Promise<string | null> {
+  async generate(
+    profileId: string,
+    messages: PromptMessage[],
+    externalSignal?: AbortSignal,
+  ): Promise<string | null> {
     const profile = await this.resolve(profileId);
+    if (externalSignal?.aborted) throw new ProviderCancelledError();
     if (profile.kind === 'fake') return null;
     const apiKey = normalizeApiKey(profile.apiKey);
     if (!apiKey) throw new ProviderInputError('所选连接方案没有本机 API Key。');
@@ -452,39 +531,65 @@ export class ProviderStore {
       ...(profile.reasoningEffort ? { reasoning_effort: profile.reasoningEffort } : {}),
       ...(profile.verbosity ? { verbosity: profile.verbosity } : {}),
     };
-    let response: Response;
     const parsed = parseProviderUrl(profile.baseUrl);
     await assertAllowedDestination(parsed, this.allowPrivateNetwork);
+    if (externalSignal?.aborted) throw new ProviderCancelledError();
+
+    const linkedAbort = linkProviderAbort(externalSignal);
     try {
-      response = await fetch(endpoint(parsed.url, 'chat/completions'), {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        redirect: 'manual',
-        signal: AbortSignal.timeout(180_000),
-      });
-    } catch {
+      let response: Response;
+      try {
+        response = await fetch(endpoint(parsed.url, 'chat/completions'), {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          redirect: 'manual',
+          signal: linkedAbort.signal,
+        });
+      } catch {
+        const cause = linkedAbort.cause();
+        if (cause) throw errorForAbortCause(cause);
+        throw new ProviderConnectionError('本机 Provider 调用失败。');
+      }
+      const causeAfterFetch = linkedAbort.cause();
+      if (causeAfterFetch) throw errorForAbortCause(causeAfterFetch);
+      if (response.status >= 300 && response.status < 400) {
+        throw new ProviderConnectionError('Provider 重定向被拒绝。');
+      }
+      if (!response.ok) throw new ProviderConnectionError(readErrorStatus(response.status));
+
+      let payload: {
+        choices?: Array<{ message?: { content?: unknown } }>;
+      };
+      try {
+        payload = await readJsonWithinLimit(response) as typeof payload;
+      } catch (error) {
+        const cause = linkedAbort.cause();
+        if (cause) throw errorForAbortCause(cause);
+        throw error;
+      }
+      const causeAfterBody = linkedAbort.cause();
+      if (causeAfterBody) throw errorForAbortCause(causeAfterBody);
+      const content = payload.choices?.[0]?.message?.content;
+      if (typeof content === 'string' && content.trim()) return content.trim();
+      if (Array.isArray(content)) {
+        const joined = content.map((item) => (
+          item && typeof item === 'object' && 'text' in item && typeof item.text === 'string' ? item.text : ''
+        )).join('').trim();
+        if (joined) return joined;
+      }
+      throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
+    } catch (error) {
+      const cause = linkedAbort.cause();
+      if (cause) throw errorForAbortCause(cause);
+      if (error instanceof ProviderInputError || error instanceof ProviderConnectionError) throw error;
       throw new ProviderConnectionError('本机 Provider 调用失败。');
+    } finally {
+      linkedAbort.cleanup();
     }
-    if (response.status >= 300 && response.status < 400) {
-      throw new ProviderConnectionError('Provider 重定向被拒绝。');
-    }
-    if (!response.ok) throw new ProviderConnectionError(readErrorStatus(response.status));
-    const payload = await readJsonWithinLimit(response) as {
-      choices?: Array<{ message?: { content?: unknown } }>;
-    };
-    const content = payload.choices?.[0]?.message?.content;
-    if (typeof content === 'string' && content.trim()) return content.trim();
-    if (Array.isArray(content)) {
-      const joined = content.map((item) => (
-        item && typeof item === 'object' && 'text' in item && typeof item.text === 'string' ? item.text : ''
-      )).join('').trim();
-      if (joined) return joined;
-    }
-    throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
   }
 }

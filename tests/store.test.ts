@@ -142,12 +142,13 @@ describe('story store', () => {
     await store.saveBook(book);
     const loaded = await store.loadBook(book.id);
     const section = loaded.chapters[0]?.sections[0];
-    expect(section?.note).toBeUndefined();
-    expect(section?.plan).toEqual({ goal: '  exact legacy goal\nsecond line  ', intendedBeats: [] });
+    expect(section?.note).toBe('  exact legacy goal\nsecond line  ');
+    expect(section?.plan).toBeUndefined();
     expect(section?.memory?.status).toBe('stale');
     const manifest = await readFile(path.join(root, 'books', book.id, 'book.json'), 'utf8');
     expect(manifest).toContain('exact legacy goal');
-    expect(manifest).not.toContain('"note"');
+    expect(manifest).toContain('"note"');
+    expect(manifest).not.toContain('"plan"');
   });
 
   it('rejects duplicate context reference source IDs at the host boundary', async () => {

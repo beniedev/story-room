@@ -2,7 +2,7 @@
 
 Story-native Writing Harness is a local-first novel-writing harness: a local Node host writes a readable Book directory, while the hosted/device build stores Books only in the current browser. It does not provide cloud manuscript storage or synchronization.
 
-The manuscript stays continuous prose rather than a chat transcript. Each Book owns its characters, world rules, canon, summaries, chapters, and sections. Author and first-person character modes share the same persistence and prompt pipeline, and the UI shows the provider input plan without claiming to show hidden model reasoning.
+The manuscript stays continuous prose rather than a chat transcript. Each Book stores its characters, world rules, canon, summaries, chapters, and sections; stored summaries and Canon facts are not hidden Provider prompt inputs. Author and first-person character modes share the same persistence and prompt pipeline, and the UI shows the actual Provider messages, budget, and any explicit degradation without claiming to show hidden model reasoning.
 
 ## Two runtimes
 
@@ -11,7 +11,7 @@ The manuscript stays continuous prose rather than a chat transcript. Each Book o
 | Local host | Readable files under `.data/` by default; set `STORY_DATA_DIR` to choose another directory | Fake Provider or OpenAI-compatible Provider; generated context plans are sent to the configured endpoint |
 | Hosted/device | Unencrypted `localStorage` in the current browser and origin | Fake generation only; Provider tests send the current page's temporary key directly to the URL you enter |
 
-The hosted/device build does not upload or merge Books. A complete JSON export contains the manuscript, blocks, branches, Book settings, and prompt-loading scope. It also offers EPUB, Markdown, and TXT exports. Clearing site data removes the device-local library.
+The hosted/device build does not upload or merge Books. A complete JSON export contains the manuscript, blocks, branches, Book settings, prompt-loading scope, and Section Memory data (including a previous snapshot when present). It also offers EPUB, Markdown, and TXT exports. Clearing site data removes the device-local library.
 
 ## Run locally
 
@@ -24,7 +24,7 @@ npm run dev
 
 Open `http://127.0.0.1:4310`.
 
-The local host defaults to loopback. To bind it to a non-loopback address, put the token and trusted Host value in the ignored `.env.local` file:
+The local host defaults to loopback and does not need an access password. The `访问密码` setting is optional and off by default. To bind the host to a non-loopback address, configure the server-side access token and trusted Host value in the ignored `.env.local` file:
 
 ```text
 STORY_ACCESS_TOKEN=<access-token>
@@ -37,7 +37,7 @@ Start the LAN-bound development host with the CLI flag; `scripts/dev.mjs` uses i
 npm run dev -- --host <lan-address>
 ```
 
-The access token is kept in the current browser tab's `sessionStorage`. `STORY_ALLOWED_HOSTS` must name the trusted Host value; wildcard bind addresses are not browser trust entries. Do not expose this development host to the public internet. `STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
+When access protection is enabled in the page, the entered password is kept in the current browser tab's `sessionStorage`; it is not a general account system or encryption. `STORY_ALLOWED_HOSTS` must name the trusted Host value; wildcard bind addresses are not browser trust entries. Do not expose this development host to the public internet. `STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
 
 ## Provider trust boundary
 
@@ -51,15 +51,17 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 - Book-scoped character cards, world rules, canon, summaries, chapters, and sections
 - Readable local-host persistence and device-local hosted persistence
 - Fake and OpenAI-compatible local-host Provider paths
-- Prompt-plan inspection with ordered layers, provenance, inclusion reasons, and estimated size
+- Prompt inspection with actual messages, provenance, inclusion/exclusion reasons, and an approximate size budget
 - EPUB, Markdown, TXT, and complete JSON exports
 - Responsive controls for desktop and mobile-sized viewports
 
 ### Context planning
 
-The writing page's Context drawer shows the active Provider limits, the estimated input budget, the ordered included material, and the exact system message plus structured user packet sent for the current request. The preview is Provider input, not hidden model reasoning. When an OpenAI-compatible local-host Provider is selected, it receives the selected manuscript and context material for that generation.
+The writing page's Context drawer shows the active Provider limits, an approximate input budget, the ordered included material and reasons, and the actual `{ role, content }` messages for the current request. If a request is over budget or material is excluded or degraded, the preview says so explicitly. It is Provider input, not hidden model reasoning. When an OpenAI-compatible local-host Provider is selected, it receives the messages shown for that generation.
 
-Each Section can keep a future-facing Section Plan (goal, intended beats, and optional POV character). Earlier Sections can be selected as `full`, `summary`, or `both` references. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; only a manual, author-confirmed, or edited memory is eligible for summary references. Freshness follows the source manuscript, and the UI supports cancel, confirm, and rollback without silently replacing the current memory.
+Cancelling a generation aborts the local request and propagates the abort to the Provider fetch. User cancellation and the 180-second Provider timeout are reported separately; a late result cannot write to the manuscript or Memory, and cancellation does not clear the author's current input or note. This cannot retract work already accepted by a configured endpoint or remove that endpoint's logs.
+
+The Book-level plot outline (`plotOutline`, shown as “剧情大纲”) is included in normal continuation and block-regeneration prompts as future guidance. Legacy Section `plan` and `note` fields may remain in an imported Book for read/export compatibility, but they are not inserted into Provider prompts. Book summaries and Canon facts are likewise stored/exportable Book data, not hidden prompt sources. Earlier Sections can be selected as `full`, `summary`, or `both` references. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; only a fresh, confirmed or edited memory is eligible for summary references. The current Memory and its previous snapshot are persisted with the Book and included in complete JSON export. The UI supports cancel, confirm, rollback, and permanent clear without silently replacing the current memory.
 
 Model-generated memory is never inserted into ordinary continuation until it is confirmed. Hosted/device generation remains Fake, and there is no automatic cloud storage or synchronization. Provider keys and endpoints remain a trust boundary: only enter a temporary device test key when you trust the current page and destination URL; local-host keys are stored as described above.
 
