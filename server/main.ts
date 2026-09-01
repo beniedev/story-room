@@ -246,10 +246,9 @@ export const createStoryServer = (
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const actualHost = requestHost(request);
-      const hostAllowed = actualHost && isLoopbackHost(actualHost.hostname);
-      if (!hostAllowed) return sendJson(response, 403, { error: '请求来源不被允许。' });
+      if (!actualHost) return sendJson(response, 403, { error: '请求来源不被允许。' });
       const stateChanging = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE';
-      if (stateChanging && actualHost && !sameOrigin(request, actualHost)) {
+      if (stateChanging && !sameOrigin(request, actualHost)) {
         return sendJson(response, 403, { error: '请求来源不被允许。' });
       }
       if (request.method === 'GET' && url.pathname === '/api/health') {

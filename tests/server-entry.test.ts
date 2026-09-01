@@ -8,14 +8,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
 import { createSectionMemory } from '../src/sectionMemory';
 
-const requestWithHost = (port: number, pathname: string, host: string) => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
-  const request = httpRequest({ host: '127.0.0.1', port, path: pathname, headers: { host } }, (response) => {
+const requestWithHost = (
+  port: number,
+  pathname: string,
+  host: string,
+  options: { method?: string; origin?: string; body?: string } = {},
+) => new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+  const headers: Record<string, string> = { host };
+  if (options.origin) headers.origin = options.origin;
+  if (options.body) headers['content-type'] = 'application/json';
+  const request = httpRequest({ host: '127.0.0.1', port, path: pathname, method: options.method, headers }, (response) => {
     const chunks: Buffer[] = [];
     response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
     response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
   });
   request.on('error', reject);
-  request.end();
+  request.end(options.body);
 });
 
 describe('local server entry', () => {
@@ -384,7 +392,7 @@ describe('local server entry', () => {
     }
   });
 
-  it('keeps loopback APIs available and rejects untrusted Host headers', async () => {
+  it('keeps loopback APIs available through a valid proxy Host', async () => {
     const providerStore = { list: vi.fn(async () => []) };
     const server = createStoryServer(undefined, providerStore as never);
 
@@ -402,8 +410,9 @@ describe('local server entry', () => {
       expect(missing.status).toBe(200);
       await expect(missing.json()).resolves.toEqual([]);
 
-      const untrustedHost = await requestWithHost(address.port, '/api/health', 'untrusted.synthetic');
-      expect(untrustedHost.status).toBe(403);
+      const proxiedHost = await requestWithHost(address.port, '/api/health', 'bookshelf.test:8000');
+      expect(proxiedHost.status).toBe(200);
+      expect(JSON.parse(proxiedHost.body)).toEqual({ ok: true });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -463,7 +472,15 @@ describe('local server entry', () => {
         headers: { ...request.headers, Origin: origin },
       });
       expect(sameOrigin.status).toBe(200);
-      expect(providerStore.save).toHaveBeenCalledOnce();
+
+      const proxiedOrigin = 'http://bookshelf.test:8000';
+      const proxiedSameOrigin = await requestWithHost(address.port, '/api/providers', 'bookshelf.test:8000', {
+        method: 'POST',
+        origin: proxiedOrigin,
+        body: request.body,
+      });
+      expect(proxiedSameOrigin.status).toBe(200);
+      expect(providerStore.save).toHaveBeenCalledTimes(2);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
