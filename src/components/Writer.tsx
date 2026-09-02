@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
+  ArrowDown,
   ArrowLeft,
   BookMarked,
   BookOpenText,
@@ -64,6 +65,9 @@ interface WriterProps {
   onGenerate: () => void;
 }
 
+const manuscriptScrollPositions = new Map<string, number>();
+const manuscriptTailTargets = new Map<string, string>();
+
 export function Writer(props: WriterProps) {
   const selectedCharacter = props.book.characters.find((character) => character.id === props.selectedCharacterId);
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
@@ -81,6 +85,7 @@ export function Writer(props: WriterProps) {
   const blockActionTrigger = useRef<HTMLElement | null>(null);
   const readerScrollPosition = useRef(0);
   const manuscriptWrapRef = useRef<HTMLElement>(null);
+  const manuscriptTailRef = useRef<HTMLDivElement>(null);
   const instructionDockRef = useRef<HTMLFormElement>(null);
   const instructionInput = useRef<HTMLTextAreaElement>(null);
   const resizePressTimer = useRef<number | null>(null);
@@ -89,11 +94,47 @@ export function Writer(props: WriterProps) {
   const [instructionInputHeight, setInstructionInputHeight] = useState<number | null>(null);
   const [instructionDockHeight, setInstructionDockHeight] = useState(0);
   const [isResizingInstruction, setIsResizingInstruction] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const generationStart = useRef<{ scrollKey: string; blockCount: number } | null>(null);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
   const manuscriptText = blocksAsContent(blocks);
   const manuscriptWordCount = countWords(manuscriptText);
   const manuscriptTokenCount = estimateTokens(manuscriptText);
+  const manuscriptScrollKey = `${props.book.id}:${props.section?.id ?? ''}`;
+
+  const prepareManuscriptTail = (targetBlockId = manuscriptTailTargets.get(manuscriptScrollKey)) => {
+    const container = manuscriptWrapRef.current;
+    const tail = manuscriptTailRef.current;
+    if (!container || !tail) return;
+    tail.style.height = '0px';
+    if (!targetBlockId) return;
+    const target = Array.from(container.querySelectorAll<HTMLElement>('[data-block-id]'))
+      .find((element) => element.dataset.blockId === targetBlockId);
+    if (!target) {
+      manuscriptTailTargets.delete(manuscriptScrollKey);
+      return;
+    }
+    const desiredScrollTop = container.scrollTop
+      + target.getBoundingClientRect().top
+      - container.getBoundingClientRect().top;
+    const maximumScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    tail.style.height = `${Math.max(0, Math.ceil(desiredScrollTop - maximumScrollTop))}px`;
+  };
+
+  const updateManuscriptScrollState = () => {
+    const container = manuscriptWrapRef.current;
+    if (!container) return;
+    manuscriptScrollPositions.set(manuscriptScrollKey, container.scrollTop);
+    setShowScrollToBottom(container.scrollHeight - container.clientHeight - container.scrollTop > 12);
+  };
+
+  const scrollManuscriptToBottom = () => {
+    const container = manuscriptWrapRef.current;
+    if (!container) return;
+    container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    updateManuscriptScrollState();
+  };
 
   useDismissSuccessfulDialog(deleteOperation.phase === 'success', () => deleteBlockDialog.current?.close());
   useDismissSuccessfulDialog(titleOperation.phase === 'success', () => titleDialog.current?.close());
@@ -109,6 +150,60 @@ export function Writer(props: WriterProps) {
   useEffect(() => () => {
     if (resizePressTimer.current !== null) window.clearTimeout(resizePressTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (props.generationState === 'generating') {
+      generationStart.current = { scrollKey: manuscriptScrollKey, blockCount: blocks.length };
+    }
+  }, [props.generationState, manuscriptScrollKey]);
+
+  useLayoutEffect(() => {
+    const container = manuscriptWrapRef.current;
+    if (!container) return undefined;
+    prepareManuscriptTail();
+    container.scrollTop = manuscriptScrollPositions.get(manuscriptScrollKey) ?? 0;
+    updateManuscriptScrollState();
+    return () => {
+      manuscriptScrollPositions.set(manuscriptScrollKey, container.scrollTop);
+    };
+  }, [manuscriptScrollKey]);
+
+  useLayoutEffect(() => {
+    const start = generationStart.current;
+    if (!start || props.generationState === 'generating') return;
+    if (start.scrollKey !== manuscriptScrollKey) {
+      generationStart.current = null;
+      return;
+    }
+    if (blocks.length <= start.blockCount) return;
+
+    const targetBlock = blocks.slice(start.blockCount).find((block) => block.kind === 'user')
+      ?? blocks[start.blockCount];
+    const container = manuscriptWrapRef.current;
+    const target = targetBlock && Array.from(container?.querySelectorAll<HTMLElement>('[data-block-id]') ?? [])
+      .find((element) => element.dataset.blockId === targetBlock.id);
+    if (!container || !target) return;
+
+    manuscriptTailTargets.set(manuscriptScrollKey, targetBlock.id);
+    prepareManuscriptTail(targetBlock.id);
+    container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    generationStart.current = null;
+    updateManuscriptScrollState();
+  }, [blocks.length, props.generationState, manuscriptScrollKey]);
+
+  useLayoutEffect(() => {
+    prepareManuscriptTail();
+    updateManuscriptScrollState();
+  }, [instructionDockHeight, manuscriptText, manuscriptScrollKey]);
+
+  useEffect(() => {
+    const update = () => {
+      prepareManuscriptTail();
+      updateManuscriptScrollState();
+    };
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [manuscriptScrollKey]);
 
   useEffect(() => {
     const dock = instructionDockRef.current;
@@ -386,11 +481,12 @@ export function Writer(props: WriterProps) {
       </div>
       </header>
 
-      <section className="manuscript-wrap" ref={manuscriptWrapRef} aria-labelledby="manuscript-label">
-        <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
-        <div className="manuscript" aria-label="连续小说正文">
-          {blocks.map((block) => (
-            <div className="manuscript-block-group" data-selected={selectedBlockId === block.id || undefined} key={block.id}>
+      <div className="manuscript-stage">
+        <section className="manuscript-wrap" ref={manuscriptWrapRef} onScroll={updateManuscriptScrollState} aria-labelledby="manuscript-label">
+          <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
+          <div className="manuscript" aria-label="连续小说正文">
+            {blocks.map((block) => (
+              <div className="manuscript-block-group" data-block-id={block.id} data-selected={selectedBlockId === block.id || undefined} key={block.id}>
               <div
                 className="manuscript-block"
                 data-kind={block.kind}
@@ -437,11 +533,24 @@ export function Writer(props: WriterProps) {
                   ><Trash2 aria-hidden="true" /></button>
                 </div>
               )}
-            </div>
-          ))}
-          {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
-        </div>
-      </section>
+              </div>
+            ))}
+            {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
+            <div className="manuscript-tail-space" ref={manuscriptTailRef} aria-hidden="true" />
+          </div>
+        </section>
+        {showScrollToBottom && (
+          <button
+            type="button"
+            className="icon-button manuscript-scroll-bottom"
+            onClick={scrollManuscriptToBottom}
+            aria-label="跳到正文末尾"
+            title="跳到正文末尾"
+          >
+            <ArrowDown aria-hidden="true" />
+          </button>
+        )}
+      </div>
 
       <form ref={instructionDockRef} className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
         <details

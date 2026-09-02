@@ -7,8 +7,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Circle,
-  CircleCheckBig,
   Ellipsis,
   FilePlus2,
   FolderPlus,
@@ -1075,9 +1073,7 @@ export function Bookshelf(props: BookshelfProps) {
                         key={character.id}
                       >
                         {sourceSelectionMode === 'character' && (
-                          <span className="source-selection-icon">
-                            {selectedSourceIds.has(character.id) ? <CircleCheckBig aria-hidden="true" /> : <Circle aria-hidden="true" />}
-                          </span>
+                          <DirectorySelectionIndicator state={selectedSourceIds.has(character.id) ? 'checked' : 'unchecked'} />
                         )}
                         <span className="source-card-name"><strong>{character.name}</strong><small>{character.role}</small></span>
                         {sourceSelectionMode !== 'character' && <ChevronRight className="icon-directional" aria-hidden="true" />}
@@ -1131,9 +1127,7 @@ export function Bookshelf(props: BookshelfProps) {
                         key={rule.id}
                       >
                         {sourceSelectionMode === 'world' && (
-                          <span className="source-selection-icon">
-                            {selectedSourceIds.has(rule.id) ? <CircleCheckBig aria-hidden="true" /> : <Circle aria-hidden="true" />}
-                          </span>
+                          <DirectorySelectionIndicator state={selectedSourceIds.has(rule.id) ? 'checked' : 'unchecked'} />
                         )}
                         <span className="source-card-name"><strong>{rule.title}</strong><small>世界观</small></span>
                         {sourceSelectionMode !== 'world' && <ChevronRight className="icon-directional" aria-hidden="true" />}

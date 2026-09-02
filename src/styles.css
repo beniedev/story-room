@@ -776,15 +776,42 @@ h4 {
   text-wrap: pretty;
 }
 
-.manuscript-wrap {
+.manuscript-stage {
+  position: relative;
   width: min(100%, var(--workspace-max));
   min-height: 0;
   margin-inline: auto;
+}
+
+.manuscript-wrap {
+  width: min(100%, var(--workspace-max));
+  height: 100%;
   background: var(--surface);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scroll-padding-block-end: calc(var(--instruction-dock-height, 5.5rem) + 1rem);
+}
+
+.manuscript-scroll-bottom {
+  position: absolute;
+  inset-inline-end: clamp(0.75rem, 3vw, 1.5rem);
+  inset-block-end: calc(var(--instruction-dock-height, 5.5rem) + 0.75rem);
+  z-index: 4;
+  border-radius: 50%;
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.manuscript-scroll-bottom:hover,
+.manuscript-scroll-bottom:focus-visible {
+  background: var(--accent);
+  color: var(--primary-text);
+}
+
+.manuscript-tail-space {
+  min-height: 0;
+  pointer-events: none;
 }
 
 .manuscript {
@@ -2012,17 +2039,6 @@ h4 {
 .source-open-row[data-selected="true"] {
   background: var(--surface-active);
   color: var(--accent-strong);
-}
-
-.source-selection-icon {
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-}
-
-.source-selection-icon svg {
-  width: 1.2rem;
-  height: 1.2rem;
 }
 
 .source-card-name {
