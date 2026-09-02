@@ -319,6 +319,67 @@ textarea {
   line-height: 1.45;
 }
 
+@supports (appearance: base-select) {
+  @media (hover: hover) and (pointer: fine) {
+    select,
+    select::picker(select) {
+      appearance: base-select;
+    }
+
+    select {
+      cursor: pointer;
+    }
+
+    select::picker(select) {
+      max-height: min(20rem, calc(100dvh - 2rem));
+      margin-block-start: 0.35rem;
+      padding: 0.35rem;
+      border: 0;
+      border-radius: var(--radius-card);
+      outline: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
+      background: var(--surface);
+      color: var(--text);
+      overflow-y: auto;
+    }
+
+    select option {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-height: 2.5rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: var(--radius-control);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      transition-property: background-color, color;
+      transition-duration: 120ms;
+      transition-timing-function: ease-out;
+    }
+
+    select option:hover,
+    select option:focus,
+    select option:checked {
+      background: var(--surface-active);
+      color: var(--accent-strong);
+    }
+
+    select option:checked {
+      font-weight: 650;
+    }
+
+    select option::checkmark {
+      order: 1;
+      margin-inline-start: auto;
+      color: var(--accent);
+    }
+
+    select::picker-icon {
+      color: var(--accent-strong);
+    }
+  }
+}
+
 textarea {
   resize: vertical;
 }
@@ -1169,6 +1230,10 @@ h4 {
   background: var(--surface-soft);
 }
 
+.writer-menu-character select {
+  background: var(--surface);
+}
+
 .writer-section-note {
   display: grid;
   gap: 0.4rem;
@@ -1234,7 +1299,7 @@ h4 {
 }
 
 .guide-editor-heading h1 {
-  margin-block-end: 0.5rem;
+  margin: 0;
 }
 
 .guide-editor-heading > p:last-child {
@@ -1255,10 +1320,25 @@ h4 {
   margin-block-end: 0.5rem;
 }
 
+.source-editor-title-row > h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .source-scope-open {
   flex: 0 0 44px;
   background: var(--surface);
   color: var(--accent-strong);
+}
+
+.source-editor-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.45rem;
+}
+
+.source-save-load {
+  flex: 0 0 44px;
 }
 
 .source-editor-heading > p:last-child,
@@ -2314,6 +2394,11 @@ h4 {
     transform: translateX(-100%);
   }
 
+  .context-tools-drawer[data-open="true"] {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+
 }
 
 .settings-drawer::backdrop,
@@ -2642,6 +2727,15 @@ h4 {
 
 .settings-section + .settings-section {
   margin-block-start: 0.75rem;
+}
+
+.storage-copy {
+  line-height: 1.65;
+}
+
+.storage-location {
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .settings-section h3 {

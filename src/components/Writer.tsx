@@ -605,21 +605,19 @@ export function Writer(props: WriterProps) {
                 </p>
               </div>
             )}
-            {props.mode === 'author' && (
-              <label className="writer-section-note" htmlFor="author-note-input">
-                <span><MessageSquareText aria-hidden="true" />小节注释</span>
-                <textarea
-                  id="author-note-input"
-                  rows={4}
-                  value={props.authorNote}
-                  disabled={props.busy}
-                  onChange={(event) => props.onAuthorNoteChange(event.target.value)}
-                  placeholder="例如：跳过路程，直接写抵达后的重逢……"
-                  spellCheck
-                />
-                <small>只指导当前小节的下一次续写，不进入正文；发送后自动清空。</small>
-              </label>
-            )}
+            <label className="writer-section-note" htmlFor="author-note-input">
+              <span><MessageSquareText aria-hidden="true" />小节注释</span>
+              <textarea
+                id="author-note-input"
+                rows={4}
+                value={props.authorNote}
+                disabled={props.busy}
+                onChange={(event) => props.onAuthorNoteChange(event.target.value)}
+                placeholder="例如：跳过路程，直接写抵达后的重逢……"
+                spellCheck
+              />
+              <small>指导当前小节之后的写作，不进入正文；修改后会保留，并在作者和扮演模式中生效。</small>
+            </label>
           </div>
         </details>
         <div className="instruction-input-wrap">

@@ -431,6 +431,7 @@ describe('context plan', () => {
       { id: 'block-target', kind: 'assistant', content: 'Target synthetic text.' },
       { id: 'block-after', kind: 'user', content: 'Suffix synthetic text.' },
     ];
+    section.note = 'Synthetic persistent section guidance.';
 
     const plan = buildContextPlan(book, {
       sectionId: section.id,
@@ -460,8 +461,9 @@ describe('context plan', () => {
     const suffixIndex = plan.included.findIndex((item) => item.title === 'TARGET suffix');
     expect(prefixIndex).toBeLessThan(targetBlockIndex);
     expect(targetBlockIndex).toBeLessThan(suffixIndex);
-    expect(plan.included.some((item) => item.layer === 'note')).toBe(false);
+    expect(plan.included.some((item) => item.layer === 'note')).toBe(true);
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
+    expect(packet).toContain('Synthetic persistent section guidance.');
     expect(packet).not.toContain('Synthetic transient note.');
     expect(packet).not.toContain('Rewrite only the target block.');
     expect(() => buildContextPlan(book, {
@@ -705,7 +707,7 @@ describe('context plan', () => {
     expect(forcedCharacterPlan.included.map((item) => item.sourceId)).toContain(disabledCharacter.id);
   });
 
-  it('places transient notes after manuscript without migrating persisted section notes', () => {
+  it('loads the persisted current-section note after manuscript in both writing modes', () => {
     const book = makeBook('book-a', 'ALPHA');
     const current = book.chapters[0]?.sections[0];
     if (!current) throw new Error('fixture section missing');
@@ -720,7 +722,6 @@ describe('context plan', () => {
     const plan = buildContextPlan(book, {
       sectionId: current.id,
       mode: 'author',
-      authorNote: '请让灯光熄灭后，人物听见门外的脚步。',
       instruction: '',
     });
     const noteIndex = plan.included.findIndex((item) => item.layer === 'note');
@@ -731,12 +732,19 @@ describe('context plan', () => {
     expect(planIndex).toBe(-1);
     expect(noteIndex).toBe(manuscriptIndex + 1);
     expect(plan.included[noteIndex]?.title).toBe('小节注释');
-    expect(plan.included[noteIndex]?.sourceId).toBe('request:author-note');
+    expect(plan.included[noteIndex]?.sourceId).toBe(`${current.id}:note`);
     expect(plan.included[noteIndex]?.cacheBand).toBe('dynamic');
-    expect(promptText(plan)).toContain('请让灯光熄灭后');
-    expect(promptText(plan)).not.toContain('Legacy persisted section note');
+    expect(promptText(plan)).toContain('Legacy persisted section note');
     expect(promptText(plan)).not.toContain('Other legacy section note');
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
+
+    const characterPlan = buildContextPlan(book, {
+      sectionId: current.id,
+      mode: 'character',
+      selectedCharacterId: 'book-a-character',
+      instruction: '',
+    });
+    expect(promptText(characterPlan)).toContain('Legacy persisted section note');
   });
 
   it('describes author mode as a user-to-AI prose relay', () => {

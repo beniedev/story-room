@@ -64,7 +64,6 @@ import {
 import type {
   Book,
   BookIndexEntry,
-  CharacterCard,
   ContextPlan,
   GenerationMode,
   GenerationRequest,
@@ -72,7 +71,6 @@ import type {
   SectionMemoryDraft,
   SectionMemoryProvenance,
   ThemeName,
-  WorldRule,
 } from './types';
 
 type ViewName = 'write' | 'shelf';
@@ -91,11 +89,10 @@ const clampManuscriptFontSize = (value: number) => Math.min(
 );
 type SectionDraft = {
   instruction: string;
-  authorNote: string;
 };
 
 const sectionDraftKey = (bookId: string, sectionId: string) => `${bookId}:${sectionId}`;
-const emptySectionDraft = (): SectionDraft => ({ instruction: '', authorNote: '' });
+const emptySectionDraft = (): SectionDraft => ({ instruction: '' });
 const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
   || error instanceof Error && error.name === 'AbortError';
 const abortGenerationError = () => {
@@ -192,7 +189,6 @@ function App() {
   const [mode, setMode] = useState<GenerationMode>('author');
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [instruction, setInstruction] = useState('');
-  const [authorNote, setAuthorNote] = useState('');
   const [theme, setTheme] = useState<ThemeName>(() => {
     const stored = localStorage.getItem('story-theme');
     return stored === 'manga' || stored === 'gray' || stored === 'purple' ? stored : 'paper';
@@ -234,12 +230,13 @@ function App() {
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
   const generationAbort = useRef<AbortController | null>(null);
   const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
-  const navigationState = useRef({ dirty: false, busy: false, instruction: '', authorNote: '', sectionDrafts: {} as Record<string, SectionDraft> });
+  const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
+  const authorNote = section?.note ?? '';
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
   const contextPreview = useMemo(() => {
@@ -249,7 +246,7 @@ function App() {
         sectionId: section.id,
         mode,
         selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
-        authorNote: mode === 'author' ? authorNote : undefined,
+        authorNote: authorNote || undefined,
         instruction,
       }, activeProviderProfile ? {
         maxContext: activeProviderProfile.maxContext,
@@ -297,16 +294,14 @@ function App() {
 
   useEffect(() => {
     sectionDraftsRef.current = sectionDrafts;
-    navigationState.current = { dirty, busy, instruction, authorNote, sectionDrafts };
-  }, [authorNote, busy, dirty, instruction, sectionDrafts]);
+    navigationState.current = { dirty, busy, instruction, sectionDrafts };
+  }, [busy, dirty, instruction, sectionDrafts]);
 
   useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
       const current = navigationState.current;
-      const hasDraft = Object.values(current.sectionDrafts).some((draft) => (
-        draft.instruction.trim() || draft.authorNote.trim()
-      ));
-      if (!current.dirty && !current.busy && !current.instruction.trim() && !current.authorNote.trim() && !hasDraft) return;
+      const hasDraft = Object.values(current.sectionDrafts).some((draft) => draft.instruction.trim());
+      if (!current.dirty && !current.busy && !current.instruction.trim() && !hasDraft) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -329,29 +324,27 @@ function App() {
   const rememberCurrentSectionDraft = () => {
     if (!book || !sectionId) return;
     const key = sectionDraftKey(book.id, sectionId);
-    const draft = { instruction, authorNote };
+    const draft = { instruction };
     const next = { ...sectionDraftsRef.current };
-    if (!draft.instruction.trim() && !draft.authorNote.trim()) delete next[key];
+    if (!draft.instruction.trim()) delete next[key];
     else next[key] = draft;
     sectionDraftsRef.current = next;
-    navigationState.current = { ...navigationState.current, instruction, authorNote, sectionDrafts: next };
+    navigationState.current = { ...navigationState.current, instruction, sectionDrafts: next };
     setSectionDrafts(next);
   };
 
-  const updateSectionDraft = (field: keyof SectionDraft, value: string) => {
-    if (field === 'instruction') setInstruction(value);
-    else setAuthorNote(value);
+  const updateInstructionDraft = (value: string) => {
+    setInstruction(value);
     if (!book || !sectionId) return;
     const key = sectionDraftKey(book.id, sectionId);
-    const draft = { ...emptySectionDraft(), ...sectionDraftsRef.current[key], [field]: value };
+    const draft = { ...emptySectionDraft(), ...sectionDraftsRef.current[key], instruction: value };
     const next = { ...sectionDraftsRef.current };
-    if (!draft.instruction.trim() && !draft.authorNote.trim()) delete next[key];
+    if (!draft.instruction.trim()) delete next[key];
     else next[key] = draft;
     sectionDraftsRef.current = next;
     navigationState.current = {
       ...navigationState.current,
-      instruction: field === 'instruction' ? value : navigationState.current.instruction,
-      authorNote: field === 'authorNote' ? value : navigationState.current.authorNote,
+      instruction: value,
       sectionDrafts: next,
     };
     setSectionDrafts(next);
@@ -360,13 +353,12 @@ function App() {
   const restoreSectionDraft = (bookId: string, nextSectionId: string) => {
     const draft = sectionDraftsRef.current[sectionDraftKey(bookId, nextSectionId)] ?? emptySectionDraft();
     setInstruction(draft.instruction);
-    setAuthorNote(draft.authorNote);
   };
 
-  const clearSectionDraft = (bookId: string, nextSectionId: string, sentInstruction: string, sentAuthorNote: string) => {
+  const clearSectionDraft = (bookId: string, nextSectionId: string, sentInstruction: string) => {
     const key = sectionDraftKey(bookId, nextSectionId);
     const current = sectionDraftsRef.current[key];
-    if (!current || current.instruction !== sentInstruction || current.authorNote !== sentAuthorNote) return;
+    if (!current || current.instruction !== sentInstruction) return;
     const next = { ...sectionDraftsRef.current };
     delete next[key];
     sectionDraftsRef.current = next;
@@ -627,7 +619,7 @@ function App() {
       providerProfileId: activeProviderProfile?.id,
       mode: modeSnapshot,
       selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-      authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined,
+      authorNote: noteSnapshot || undefined,
       instruction: inputSnapshot,
       generationKind: 'continue-section',
     } satisfies GenerationRequest;
@@ -652,10 +644,25 @@ function App() {
         })),
     }));
     setInstruction((current) => current === inputSnapshot ? '' : current);
-    setAuthorNote((current) => current === noteSnapshot ? '' : current);
-    clearSectionDraft(saved.id, targetSectionId, inputSnapshot, noteSnapshot);
+    clearSectionDraft(saved.id, targetSectionId, inputSnapshot);
     setStatus('续写已加入当前小节。');
   });
+
+  const updateSectionNote = (value: string) => {
+    if (!section) return;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => {
+          if (item.id !== section.id) return item;
+          if (value) return { ...item, note: value };
+          const { note: _removed, ...withoutNote } = item;
+          return withoutNote;
+        }),
+      })),
+    }));
+  };
 
   const updateSectionBlocks = (blocks: SectionBlock[]) => {
     if (!section) return;
@@ -1064,21 +1071,8 @@ function App() {
     if (result.removedSectionIds.has(sectionId)) {
       setSectionId('');
       setInstruction('');
-      setAuthorNote('');
     }
   };
-
-  const updateCharacter = (id: string, patch: Partial<CharacterCard>) => changeBook((current) => ({
-    ...current,
-    characters: current.characters.map((item) => item.id === id
-      ? { ...item, ...patch, title: patch.name ?? item.name }
-      : item),
-  }));
-
-  const updateWorldRule = (id: string, patch: Partial<WorldRule>) => changeBook((current) => ({
-    ...current,
-    worldRules: current.worldRules.map((item) => item.id === id ? { ...item, ...patch } : item),
-  }));
 
   const deleteSources = async (kind: SourceSelectionKind, ids: Set<string>) => {
     if (!book || ids.size === 0) throw new Error('请先选择要删除的内容。');
@@ -1234,8 +1228,8 @@ function App() {
             onCancelGeneration={cancelGeneration}
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
-            onInstructionChange={(value) => updateSectionDraft('instruction', value)}
-            onAuthorNoteChange={(value) => updateSectionDraft('authorNote', value)}
+            onInstructionChange={updateInstructionDraft}
+            onAuthorNoteChange={updateSectionNote}
             onSectionBlocksChange={updateSectionBlocks}
             onDeleteSectionBlock={deleteSectionBlock}
             onRegenerateBlock={regenerateBlock}
@@ -1280,10 +1274,6 @@ function App() {
             onRenameChapter={async (chapterId, title) => { await renameChapter(chapterId, title); }}
             onDeleteSelection={deleteSelection}
             onDeleteSources={deleteSources}
-            onPlotOutlineChange={(value) => changeBook((current) => ({ ...current, plotOutline: value }))}
-            onWritingBriefChange={(value) => changeBook((current) => ({ ...current, writingBrief: value }))}
-            onCharacterChange={updateCharacter}
-            onWorldRuleChange={updateWorldRule}
           />
         ) : (
           <p className="loading-copy">正在打开此设备的书库…</p>
@@ -1454,9 +1444,21 @@ function SettingsDrawer({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
   const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
+  const [storageLocation, setStorageLocation] = useState('正在读取本地地址…');
   const [discardOperation, setDiscardOperation] = useState<DialogOperationState>(idleDialogOperation);
   const discardChangesDialog = useRef<HTMLDialogElement>(null);
   const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.storageLocation()
+      .then(({ location }) => {
+        if (active) setStorageLocation(location);
+      })
+      .catch(() => {
+        if (active) setStorageLocation('本地地址暂时无法读取');
+      });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     if (!currentProfile || editingId) return;
     setEditingId(currentProfile.id);
@@ -1673,9 +1675,10 @@ function SettingsDrawer({
 
       <section className="settings-section" aria-labelledby="storage-heading">
         <h3 id="storage-heading">保存位置</h3>
-        <p className="helper-copy">{api.runtime === 'device'
-          ? '正文和资料只保存在这个浏览器中，不会自动上传。请按需导出备份。'
-          : '正文和资料保存在运行书库的电脑上，不会自动上传。请自行备份。'}</p>
+        <p className="helper-copy storage-copy">
+          正文和资料保存在本地：<span className="storage-location">{storageLocation}</span><br />
+          可以使用导出功能，导出为其他格式的文件。
+        </p>
       </section>
       <dialog
         className="confirm-dialog"

@@ -77,6 +77,18 @@ const setScrollGeometry = (element: HTMLElement, scrollHeight: number, clientHei
   Object.defineProperty(element, 'clientHeight', { configurable: true, value: clientHeight });
 };
 
+const setControlValue = async (control: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+  const prototype = control instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  if (!setter) throw new Error('Control value setter is unavailable.');
+  await act(async () => {
+    setter.call(control, value);
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
+
 beforeAll(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
@@ -161,6 +173,30 @@ describe('writer scroll interactions', () => {
   });
 });
 
+describe('section writing guidance', () => {
+  it('stays available and editable in character mode', async () => {
+    const book = makeBook('book-section-guidance');
+    const onAuthorNoteChange = vi.fn();
+    const { container, root } = await render(
+      <Writer
+        {...writerProps(book)}
+        mode="character"
+        selectedCharacterId="character-one"
+        authorNote="保持这一节的雨声。"
+        onAuthorNoteChange={onAuthorNoteChange}
+      />,
+    );
+
+    const note = container.querySelector<HTMLTextAreaElement>('#author-note-input');
+    expect(note?.value).toBe('保持这一节的雨声。');
+    expect(note?.closest('label')?.textContent).toContain('在作者和扮演模式中生效');
+    await setControlValue(note!, '让雨声逐渐靠近。');
+    expect(onAuthorNoteChange).toHaveBeenCalledWith('让雨声逐渐靠近。');
+
+    await act(async () => root.unmount());
+  });
+});
+
 describe('source selection visuals', () => {
   it('reuses the square directory checkbox for character and world selections', async () => {
     const book = makeBook('book-source-selection');
@@ -185,10 +221,6 @@ describe('source selection visuals', () => {
       onRenameChapter: vi.fn(async () => undefined),
       onDeleteSelection: vi.fn(async () => undefined),
       onDeleteSources: vi.fn(async () => undefined),
-      onPlotOutlineChange: vi.fn(),
-      onWritingBriefChange: vi.fn(),
-      onCharacterChange: vi.fn(),
-      onWorldRuleChange: vi.fn(),
     };
     const { container, root } = await render(<Bookshelf {...props} />);
 
@@ -206,5 +238,92 @@ describe('source selection visuals', () => {
     expect(worldRow.querySelector('.directory-selection-checkbox')?.getAttribute('data-state')).toBe('checked');
 
     await act(async () => root.unmount());
+  });
+
+  it('keeps setting edits temporary until each save-and-load confirmation succeeds', async () => {
+    const scenarios = [
+      {
+        open: '写作风格指导',
+        openByAria: false,
+        control: '.guide-editor-field textarea',
+        saveLabel: '保存并加载写作风格指导',
+        value: '新的全局指引',
+        read: (changed: Book) => changed.writingBrief,
+      },
+      {
+        open: '剧情大纲',
+        openByAria: false,
+        control: '.guide-editor-field textarea',
+        saveLabel: '保存并加载剧情大纲',
+        value: '新的剧情大纲',
+        read: (changed: Book) => changed.plotOutline,
+      },
+      {
+        open: '打开角色卡：角色一',
+        openByAria: true,
+        control: '.source-editor-fields textarea',
+        saveLabel: '保存并加载角色卡',
+        value: '新的角色设定',
+        read: (changed: Book) => changed.characters[0]?.content,
+      },
+      {
+        open: '打开世界观设定：设定一',
+        openByAria: true,
+        control: '.source-editor-fields textarea',
+        saveLabel: '保存并加载世界观设定',
+        value: '新的世界观设定',
+        read: (changed: Book) => changed.worldRules[0]?.content,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const book = makeBook(`book-save-${scenario.value}`);
+      const changes: Array<(current: Book) => Book> = [];
+      const onBookChange = vi.fn(async (recipe: (current: Book) => Book) => { changes.push(recipe); });
+      const props: ComponentProps<typeof Bookshelf> = {
+        book,
+        library: [{ id: book.id, title: book.title, updatedAt: book.updatedAt }],
+        selectedSectionId: 'section-one',
+        openNewBookRequest: 0,
+        onNewBookOpened: vi.fn(),
+        openBookSettingsRequest: 1,
+        onBookSettingsOpened: vi.fn(),
+        onBookSettingsClose: vi.fn(),
+        onOpenBook: vi.fn(),
+        onOpenSection: vi.fn(),
+        onCreateBook: vi.fn(async () => undefined),
+        onDeleteBook: vi.fn(async () => undefined),
+        onBookChange,
+        onAddCharacter: vi.fn(async () => undefined),
+        onAddWorldRule: vi.fn(async () => undefined),
+        onAddChapter: vi.fn(async () => undefined),
+        onAddSection: vi.fn(async () => undefined),
+        onRenameChapter: vi.fn(async () => undefined),
+        onDeleteSelection: vi.fn(async () => undefined),
+        onDeleteSources: vi.fn(async () => undefined),
+      };
+      const { container, root } = await render(<Bookshelf {...props} />);
+      const openButton = scenario.openByAria
+        ? container.querySelector<HTMLButtonElement>(`button[aria-label="${scenario.open}"]`)
+        : [...container.querySelectorAll<HTMLButtonElement>('button')]
+            .find((button) => button.textContent?.includes(scenario.open));
+      await act(async () => openButton?.click());
+
+      const control = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(scenario.control);
+      if (!control) throw new Error(`Missing editor control for ${scenario.open}.`);
+      await setControlValue(control, scenario.value);
+      expect(onBookChange).not.toHaveBeenCalled();
+
+      await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="${scenario.saveLabel}"]`)?.click());
+      expect(onBookChange).not.toHaveBeenCalled();
+      const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent?.includes('确认保存并加载'));
+      await act(async () => confirm?.click());
+
+      expect(onBookChange).toHaveBeenCalledTimes(1);
+      expect(scenario.read(changes[0]!(book))).toBe(scenario.value);
+      expect(container.querySelector('[data-phase="success"]')?.textContent).toContain('保存并加载成功');
+      await act(async () => root.unmount());
+    }
   });
 });

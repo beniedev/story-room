@@ -680,21 +680,24 @@ export function buildContextPlan(
     ));
   }
 
-  if (generationKind === 'continue-section') {
+  if (generationKind !== 'summarize-section') {
+    const sectionNote = generationKind === 'continue-section'
+      ? request.authorNote ?? section.note ?? ''
+      : section.note ?? '';
     blocks.push(block(
       book.id,
       'note',
       'dynamic',
-      'request:author-note',
+      `${section.id}:note`,
       '小节注释',
-      request.mode === 'author' ? request.authorNote ?? '' : '',
-      '仅指导当前小节本轮任务，不写入正文',
-      request.mode === 'author' && Boolean(request.authorNote?.trim()),
+      sectionNote,
+      '指导当前小节之后的写作，不写入正文',
+      Boolean(sectionNote.trim()),
       false,
       {
         semanticRole: 'note',
         manualSelection: true,
-        source: { bookId: book.id, sourceId: 'request:author-note', sectionId: target.sectionId, chapterId: target.chapterId },
+        source: { bookId: book.id, sourceId: `${section.id}:note`, sectionId: target.sectionId, chapterId: target.chapterId },
       },
     ));
   }

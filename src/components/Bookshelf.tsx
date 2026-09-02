@@ -43,23 +43,28 @@ type BookSettingsView =
   | { kind: 'character-scope'; id: string }
   | { kind: 'world-scope'; id: string };
 
-function GuideEditor({ title, description, placeholder, value, onChange }: {
+function GuideEditor({ id, title, description, placeholder, value, onSave }: {
+  id: string;
   title: string;
   description: string;
   placeholder: string;
   value: string;
-  onChange: (value: string) => void;
+  onSave: (value: string) => Promise<void>;
 }) {
+  const [draft, setDraft] = useState(value);
   return (
     <article className="guide-editor-page">
       <header className="guide-editor-heading">
         <p className="eyebrow">全局指引 · 作用于本书全部章与节</p>
-        <h1>{title}</h1>
+        <div className="source-editor-title-row">
+          <h1>{title}</h1>
+          <SaveAndLoadAction id={id} label={title} onConfirm={() => onSave(draft)} />
+        </div>
         <p>{description}</p>
       </header>
       <label className="guide-editor-field">
         <span className="sr-only">{title}</span>
-        <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} spellCheck />
+        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} spellCheck />
       </label>
     </article>
   );
@@ -256,54 +261,158 @@ export function SourceLoadScopePage({
   );
 }
 
-function CharacterEditor({ bookTitle, character, onChange, onOpenScope }: {
+function SaveAndLoadAction({ id, label, onConfirm }: {
+  id: string;
+  label: string;
+  onConfirm: () => Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [operation, setOperation] = useState<DialogOperationState>(idleDialogOperation);
+
+  useDismissSuccessfulDialog(operation.phase === 'success', () => dialogRef.current?.close());
+
+  const closeDialog = () => {
+    if (operation.phase === 'pending') return;
+    dialogRef.current?.close();
+  };
+
+  const saveAndLoad = async () => {
+    if (operation.phase === 'pending') return;
+    setOperation({ phase: 'pending', title: `正在保存并加载${label}…` });
+    try {
+      await onConfirm();
+      setOperation({ phase: 'success', title: `${label}保存并加载成功` });
+    } catch (error) {
+      setOperation({
+        phase: 'error',
+        title: `${label}保存并加载失败`,
+        detail: error instanceof Error ? error.message : '请稍后重试。',
+      });
+    }
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="primary-action icon-button source-save-load"
+        onClick={() => {
+          setOperation(idleDialogOperation);
+          dialogRef.current?.showModal();
+        }}
+        aria-haspopup="dialog"
+        aria-label={`保存并加载${label}`}
+        title="保存并加载"
+      >
+        <Check aria-hidden="true" />
+      </button>
+      <dialog
+        className="confirm-dialog"
+        ref={dialogRef}
+        onClose={(event) => {
+          event.stopPropagation();
+          setOperation(idleDialogOperation);
+          window.requestAnimationFrame(() => triggerRef.current?.focus());
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeDialog();
+        }}
+        onCancel={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          closeDialog();
+        }}
+        aria-labelledby={`${id}-save-load-title`}
+        aria-describedby={operation.phase === 'idle' ? `${id}-save-load-description` : undefined}
+        aria-busy={operation.phase === 'pending' || undefined}
+      >
+        <header className="dialog-heading">
+          <h2 id={`${id}-save-load-title`}>保存并加载{label}</h2>
+          <button type="button" className="icon-button" disabled={operation.phase === 'pending'} onClick={closeDialog} aria-label="取消保存并加载" title="取消"><X aria-hidden="true" /></button>
+        </header>
+        <div className="confirm-dialog-body">
+          {operation.phase === 'idle' ? (
+            <>
+              <p id={`${id}-save-load-description`}>会保存当前编辑内容，并按当前加载范围进入后续生成的 Prompt；取消不会更改已保存内容。</p>
+              <div className="dialog-actions">
+                <button type="button" className="quiet-action" autoFocus onClick={closeDialog}>取消</button>
+                <button type="button" className="primary-action button-with-icon" onClick={() => void saveAndLoad()}><Check aria-hidden="true" />确认保存并加载</button>
+              </div>
+            </>
+          ) : (
+            <DialogOperationStatus state={operation} onReturn={() => setOperation(idleDialogOperation)} />
+          )}
+        </div>
+      </dialog>
+    </>
+  );
+}
+
+function CharacterEditor({ bookTitle, character, onSave, onOpenScope }: {
   bookTitle: string;
   character: CharacterCard;
-  onChange: (patch: Partial<CharacterCard>) => void;
+  onSave: (patch: Pick<CharacterCard, 'name' | 'role' | 'content'>) => Promise<void>;
   onOpenScope: () => void;
 }) {
+  const [draft, setDraft] = useState(() => ({
+    name: character.name,
+    role: character.role,
+    content: character.content,
+  }));
   return (
     <article className="source-editor-page">
       <header className="source-editor-heading">
         <p className="eyebrow">{bookTitle} · 角色卡</p>
         <div className="source-editor-title-row">
-          <h1>{character.name}</h1>
-          <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${character.name}的加载范围`} title="加载角色卡">
-            <ListTree aria-hidden="true" />
-          </button>
+          <h1>{draft.name || character.name}</h1>
+          <div className="source-editor-actions">
+            <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${draft.name || character.name}的加载范围`} title="加载角色卡">
+              <ListTree aria-hidden="true" />
+            </button>
+            <SaveAndLoadAction id={`character-${character.id}`} label="角色卡" onConfirm={() => onSave(draft)} />
+          </div>
         </div>
         <p>这里的资料只属于当前书目，并在生成时描述这个角色。</p>
       </header>
-      <section className="source-editor-fields" aria-label={`${character.name}角色卡内容`}>
-        <label>角色名<input value={character.name} onChange={(event) => onChange({ name: event.target.value })} /></label>
-        <label>角色要点<input value={character.role} onChange={(event) => onChange({ role: event.target.value })} /></label>
-        <label>角色设定<textarea value={character.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
+      <section className="source-editor-fields" aria-label={`${draft.name || character.name}角色卡内容`}>
+        <label>角色名<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+        <label>角色要点<input value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} /></label>
+        <label>角色设定<textarea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
 }
 
-function WorldRuleEditor({ bookTitle, rule, onChange, onOpenScope }: {
+function WorldRuleEditor({ bookTitle, rule, onSave, onOpenScope }: {
   bookTitle: string;
   rule: WorldRule;
-  onChange: (patch: Partial<WorldRule>) => void;
+  onSave: (patch: Pick<WorldRule, 'title' | 'content'>) => Promise<void>;
   onOpenScope: () => void;
 }) {
+  const [draft, setDraft] = useState(() => ({ title: rule.title, content: rule.content }));
   return (
     <article className="source-editor-page">
       <header className="source-editor-heading">
         <p className="eyebrow">{bookTitle} · 世界观设定</p>
         <div className="source-editor-title-row">
-          <h1>{rule.title}</h1>
-          <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${rule.title}的加载范围`} title="加载世界观设定">
-            <ListTree aria-hidden="true" />
-          </button>
+          <h1>{draft.title || rule.title}</h1>
+          <div className="source-editor-actions">
+            <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${draft.title || rule.title}的加载范围`} title="加载世界观设定">
+              <ListTree aria-hidden="true" />
+            </button>
+            <SaveAndLoadAction id={`world-${rule.id}`} label="世界观设定" onConfirm={() => onSave(draft)} />
+          </div>
         </div>
         <p>这条设定只属于当前书目，可按小节决定是否加载。</p>
       </header>
-      <section className="source-editor-fields" aria-label={`${rule.title}世界观设定内容`}>
-        <label>设定名称<input value={rule.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
-        <label>设定内容<textarea value={rule.content} onChange={(event) => onChange({ content: event.target.value })} spellCheck /></label>
+      <section className="source-editor-fields" aria-label={`${draft.title || rule.title}世界观设定内容`}>
+        <label>设定名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label>
+        <label>设定内容<textarea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
@@ -339,10 +448,6 @@ interface BookshelfProps {
   onRenameChapter: (chapterId: string, title: string) => Promise<void>;
   onDeleteSelection: (selection: DirectorySelection) => Promise<void>;
   onDeleteSources: (kind: SourceSelectionKind, ids: Set<string>) => Promise<void>;
-  onPlotOutlineChange: (value: string) => void;
-  onWritingBriefChange: (value: string) => void;
-  onCharacterChange: (id: string, patch: Partial<CharacterCard>) => void;
-  onWorldRuleChange: (id: string, patch: Partial<WorldRule>) => void;
 }
 
 type NameDialogState =
@@ -1141,35 +1246,51 @@ export function Bookshelf(props: BookshelfProps) {
             </section>
           ) : bookSettingsView.kind === 'outline' ? (
             <GuideEditor
+              key="outline"
+              id="plot-outline"
               title="剧情大纲"
               description="记录本书的情节走向、阶段目标与关键转折；生成时会作为全书的长期指导。"
               placeholder="记录主要情节、阶段目标与关键转折……"
               value={props.book.plotOutline ?? ''}
-              onChange={props.onPlotOutlineChange}
+              onSave={(value) => props.onBookChange((current) => ({ ...current, plotOutline: value }))}
             />
           ) : bookSettingsView.kind === 'style' ? (
             <GuideEditor
+              key="style"
+              id="global-guidance"
               title="写作风格指导"
               description="指定本书的行文风格、语气和语言表达；适用于书内全部章节与小节。"
               placeholder="例如：克制、清澈；少用解释性旁白……"
               value={props.book.writingBrief}
-              onChange={props.onWritingBriefChange}
+              onSave={(value) => props.onBookChange((current) => ({ ...current, writingBrief: value }))}
             />
           ) : bookSettingsView.kind === 'character' ? (
             settingsCharacter
               ? <CharacterEditor
+                  key={settingsCharacter.id}
                   bookTitle={props.book.title}
                   character={settingsCharacter}
-                  onChange={(patch) => props.onCharacterChange(settingsCharacter.id, patch)}
+                  onSave={(patch) => props.onBookChange((current) => ({
+                    ...current,
+                    characters: current.characters.map((item) => item.id === settingsCharacter.id
+                      ? { ...item, ...patch, title: patch.name }
+                      : item),
+                  }))}
                   onOpenScope={() => openSourceScope({ kind: 'character-scope', id: settingsCharacter.id })}
                 />
               : <MissingSettingsItem label="角色卡" />
           ) : bookSettingsView.kind === 'world' ? (
             settingsWorldRule
               ? <WorldRuleEditor
+                  key={settingsWorldRule.id}
                   bookTitle={props.book.title}
                   rule={settingsWorldRule}
-                  onChange={(patch) => props.onWorldRuleChange(settingsWorldRule.id, patch)}
+                  onSave={(patch) => props.onBookChange((current) => ({
+                    ...current,
+                    worldRules: current.worldRules.map((item) => item.id === settingsWorldRule.id
+                      ? { ...item, ...patch }
+                      : item),
+                  }))}
                   onOpenScope={() => openSourceScope({ kind: 'world-scope', id: settingsWorldRule.id })}
                 />
               : <MissingSettingsItem label="世界观设定" />

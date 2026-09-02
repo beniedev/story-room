@@ -98,6 +98,7 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === '/api/library') {
         return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
       }
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
       if (url === '/api/providers') return jsonResponse([]);
       if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(book);
       if (url === `/api/books/${book.id}` && method === 'PUT') {
@@ -133,6 +134,59 @@ describe('browser IDs without crypto.randomUUID', () => {
     const sectionTitles = [...container.querySelectorAll('.section-row strong')]
       .map((element) => element.textContent);
     expect(sectionTitles).toContain('Fallback Section');
+    await act(async () => root.unmount());
+  });
+
+  it('persists section guidance, sends it in character mode, and keeps it after generation', async () => {
+    const book = createExampleBooks()[0]!;
+    let savedBook: typeof book | undefined;
+    let generationRequest: { authorNote?: string; mode?: string } | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url === '/api/library') {
+        return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
+      }
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(book);
+      if (url === `/api/books/${book.id}` && method === 'PUT') {
+        savedBook = JSON.parse(String(init?.body)) as typeof book;
+        return jsonResponse(savedBook);
+      }
+      if (url === '/api/generate' && method === 'POST') {
+        generationRequest = JSON.parse(String(init?.body)) as typeof generationRequest;
+        return jsonResponse({ draft: 'Synthetic provider continuation.' });
+      }
+      throw new Error(`Unexpected test request: ${method} ${url}`);
+    }));
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<App />));
+    const sectionButton = await waitForElement(() => container.querySelector<HTMLButtonElement>('.section-open'));
+    await act(async () => sectionButton.click());
+    await act(async () => container.querySelector<HTMLElement>('.writer-menu-trigger')?.click());
+    const characterMode = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('角色模式 · 第一视角'));
+    await act(async () => characterMode?.click());
+
+    const note = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter) throw new Error('HTML textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(note, '让钟声贯穿本节。');
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="发送并续写"]')?.click());
+    await waitForElement(() => [...container.querySelectorAll('.manuscript-block-copy')]
+      .find((element) => element.textContent?.includes('Synthetic provider continuation.')) ?? null);
+
+    expect(generationRequest).toMatchObject({ mode: 'character', authorNote: '让钟声贯穿本节。' });
+    expect(savedBook?.chapters.flatMap((chapter) => chapter.sections)
+      .find((section) => section.id === book.chapters[0]?.sections[0]?.id)?.note).toBe('让钟声贯穿本节。');
+    expect(container.querySelector<HTMLTextAreaElement>('#author-note-input')?.value).toBe('让钟声贯穿本节。');
     await act(async () => root.unmount());
   });
 

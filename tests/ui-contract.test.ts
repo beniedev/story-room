@@ -26,6 +26,11 @@ describe('writing UI contract', () => {
     expect(source).toContain('--scrollbar-thumb: rgba(217, 111, 149, 0.58)');
     expect(source).toContain('--scrollbar-thumb-hover: rgba(217, 111, 149, 0.82)');
     expect(source).toContain('linear-gradient(var(--page-gradient-start) 0%, var(--page-gradient-end) 100%)');
+    expect(source).toContain('@supports (appearance: base-select)');
+    expect(source).toContain('@media (hover: hover) and (pointer: fine)');
+    expect(source).toContain('select::picker(select)');
+    expect(source).toContain('select option:checked');
+    expect(source).toMatch(/select option::checkmark\s*\{[\s\S]{0,120}order:\s*1[\s\S]{0,120}margin-inline-start:\s*auto/);
     expect(source).toMatch(/\.manuscript-wrap\s*\{[\s\S]{0,220}background:\s*var\(--surface\)/);
     expect(source).toMatch(/\.manuscript\s*\{[\s\S]{0,420}background:\s*var\(--surface\)/);
     expect(source).toMatch(/\.writer-heading\s*\{[\s\S]{0,180}width:\s*min\(100%, var\(--workspace-max\)\)/);
@@ -282,6 +287,7 @@ describe('writing UI contract', () => {
     expect(compositionStyles).toContain('position: fixed');
     expect(toolStyles).toContain('position: fixed');
     expect(styles).toContain('transform: translateX(-100%)');
+    expect(styles).toMatch(/@starting-style\s*\{[\s\S]*\.context-tools-drawer\[data-open="true"\][\s\S]*transform:\s*translateX\(-100%\)/);
     expect(styles).not.toContain('.context-composition-drawer::backdrop');
     expect(styles).toContain('.context-tools-drawer::backdrop');
     const promptListStyleStart = styles.indexOf('.prompt-composition-list li');
@@ -406,14 +412,14 @@ describe('writing UI contract', () => {
     });
   });
 
-  it('keeps author relay input and temporary notes inside the continuous manuscript', async () => {
+  it('keeps author relay input and persistent section guidance inside the continuous manuscript', async () => {
     const app = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(app).toContain('className="writer-section-note"');
     expect(app).toContain('小节注释');
     expect(app).toContain('authorNote');
     expect(app).toContain('onAuthorNoteChange');
-    expect(app).toContain('只指导当前小节的下一次续写，不进入正文；发送后自动清空。');
+    expect(app).toContain('指导当前小节之后的写作，不进入正文；修改后会保留，并在作者和扮演模式中生效。');
     expect(app).toContain('写下一段正文，让 AI 从这里接着写');
     expect(app).not.toContain('props.section?.note');
     expect(app).not.toContain('onSectionNoteChange');
@@ -445,13 +451,14 @@ describe('writing UI contract', () => {
     expect(styles).toContain('.writer-menu-trigger:hover');
   });
 
-  it('sends directly, appends the continuation, and clears transient inputs only after success', async () => {
+  it('sends directly, appends the continuation, clears input, and keeps section guidance', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${writer}`;
     expect(source).toContain('const generateContinuation = () => withBusy(async () => {');
-    expect(source).toContain("authorNote: modeSnapshot === 'author' ? noteSnapshot : undefined");
-    expect(source).toContain("setAuthorNote((current) => current === noteSnapshot ? '' : current)");
+    expect(source).toContain('const authorNote = section?.note ??');
+    expect(source).toContain('authorNote: noteSnapshot || undefined');
+    expect(source).not.toContain('setAuthorNote(');
     expect(source).toContain("setInstruction((current) => current === inputSnapshot ? '' : current)");
     expect(source).toContain("{ id: makeId('block'), kind: 'assistant', content: result.draft }");
     expect(source).toContain('续写已加入当前小节。');
@@ -671,7 +678,9 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('访问密码');
     expect(source).not.toContain('host-access');
     expect(source).toContain('<h3 id="storage-heading">保存位置</h3>');
-    expect(source).toContain('正文和资料保存在运行书库的电脑上，不会自动上传。请自行备份。');
+    expect(source).toContain('正文和资料保存在本地：');
+    expect(source).toContain('可以使用导出功能，导出为其他格式的文件。');
+    expect(source).toContain('api.storageLocation()');
     expect(source).not.toContain('本机 host 的故事目录');
     expect(source).not.toContain('保存并连接');
     expect(source).not.toContain('window.prompt');

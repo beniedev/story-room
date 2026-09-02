@@ -62,11 +62,12 @@ describe('local server entry', () => {
       if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
       const origin = `http://127.0.0.1:${address.port}`;
 
-      const [rootResponse, routeResponse, assetResponse, healthResponse] = await Promise.all([
+      const [rootResponse, routeResponse, assetResponse, healthResponse, storageResponse] = await Promise.all([
         fetch(`${origin}/`),
         fetch(`${origin}/settings`),
         fetch(`${origin}/app.css`),
         fetch(`${origin}/api/health`),
+        fetch(`${origin}/api/storage-location`),
       ]);
 
       expect(await rootResponse.text()).toContain('Story Bookshelf');
@@ -74,6 +75,7 @@ describe('local server entry', () => {
       expect(assetResponse.headers.get('content-type')).toBe('text/css; charset=utf-8');
       expect(await assetResponse.text()).toContain('purple');
       await expect(healthResponse.json()).resolves.toEqual({ ok: true });
+      await expect(storageResponse.json()).resolves.toEqual({ location: path.resolve('.data') });
 
       const unknownApi = await fetch(`${origin}/api/not-a-route`);
       expect(unknownApi.status).toBe(404);

@@ -161,6 +161,7 @@ const readProviderBody = async (request: IncomingMessage) => {
 const knownRouteMethods: Record<string, string[]> = {
   '/api/health': ['GET'],
   '/api/library': ['GET'],
+  '/api/storage-location': ['GET'],
   '/api/books': ['POST'],
   '/api/providers': ['GET', 'POST'],
   '/api/provider-test': ['POST'],
@@ -235,6 +236,9 @@ export const createStoryServer = (
       }
       if (request.method === 'GET' && url.pathname === '/api/library') {
         return sendJson(response, 200, await storyStore.listBooks());
+      }
+      if (request.method === 'GET' && url.pathname === '/api/storage-location') {
+        return sendJson(response, 200, { location: path.resolve(storyStore.root) });
       }
       if (request.method === 'GET' && url.pathname === '/api/providers') {
         return sendJson(response, 200, await providerStore.list());

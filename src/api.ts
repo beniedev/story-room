@@ -50,6 +50,7 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
 const hostApi = {
   runtime: 'host' as const,
   listBooks: () => request<BookIndexEntry[]>('/api/library'),
+  storageLocation: () => request<{ location: string }>('/api/storage-location'),
   loadBook: (bookId: string) => request<Book>(`/api/books/${bookId}`),
   createBook: (title: string) => request<Book>('/api/books', {
     method: 'POST',
@@ -118,5 +119,10 @@ const deviceProviderApi = {
 };
 
 export const api = import.meta.env.MODE === 'site'
-  ? { runtime: 'device' as const, ...deviceLibrary, ...deviceProviderApi }
+  ? {
+      runtime: 'device' as const,
+      ...deviceLibrary,
+      ...deviceProviderApi,
+      storageLocation: async () => ({ location: `浏览器本地存储（${window.location.origin}）` }),
+    }
   : hostApi;
