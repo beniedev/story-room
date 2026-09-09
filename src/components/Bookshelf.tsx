@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { memo, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import {
   ArrowLeft,
   BookMarked,
@@ -25,6 +25,7 @@ import { toggleChapterSelection, toggleSectionSelection, type DirectorySelection
 import { toggleSourceSelection, type SourceSelectionKind } from '../sourceSelection';
 import { countWords, estimateTokens } from '../textMetrics';
 import { compactTokenCount } from './shared/text';
+import { TextArea } from './shared/TextArea';
 import {
   DialogOperationStatus,
   idleDialogOperation,
@@ -34,6 +35,10 @@ import {
 import type { Book, BookIndexEntry, CharacterCard, WorldRule } from '../types';
 
 type SettingsSection = 'guidance' | 'characters' | 'world';
+
+const SectionMetrics = memo(function SectionMetrics({ content }: { content: string }) {
+  return <>{countWords(content).toLocaleString('zh-CN')} 字 | 约 {compactTokenCount(estimateTokens(content))} tokens</>;
+});
 type BookSettingsView =
   | { kind: 'root' }
   | { kind: 'outline' }
@@ -64,7 +69,7 @@ function GuideEditor({ id, title, description, placeholder, value, onSave }: {
       </header>
       <label className="guide-editor-field">
         <span className="sr-only">{title}</span>
-        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} spellCheck />
+        <TextArea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} spellCheck />
       </label>
     </article>
   );
@@ -382,7 +387,7 @@ function CharacterEditor({ bookTitle, character, onSave, onOpenScope }: {
       <section className="source-editor-fields" aria-label={`${draft.name || character.name}角色卡内容`}>
         <label>角色名<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
         <label>角色要点<input value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} /></label>
-        <label>角色设定<textarea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
+        <label>角色设定<TextArea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
@@ -412,7 +417,7 @@ function WorldRuleEditor({ bookTitle, rule, onSave, onOpenScope }: {
       </header>
       <section className="source-editor-fields" aria-label={`${draft.title || rule.title}世界观设定内容`}>
         <label>设定名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label>
-        <label>设定内容<textarea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
+        <label>设定内容<TextArea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
@@ -985,7 +990,7 @@ export function Bookshelf(props: BookshelfProps) {
                                 : `${chapterIndex + 1}.${sectionIndex + 1}`}
                             </span>
                             <span><strong>{section.title}</strong><small>
-                              {countWords(section.content).toLocaleString('zh-CN')} 字 | 约 {compactTokenCount(estimateTokens(section.content))} tokens
+                              <SectionMetrics content={section.content} />
                             </small></span>
                             {!selectionMode && <ChevronRight className="icon-directional" aria-hidden="true" />}
                           </button>

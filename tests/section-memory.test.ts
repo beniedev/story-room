@@ -46,6 +46,41 @@ describe('section memory helper', () => {
     expect(hashSectionContent(content)).not.toBe(hashSectionContent('changed content'));
   });
 
+  it('reuses checks only for identical text and still respects changed memory metadata', () => {
+    const content = 'Synthetic cached section.';
+    const memory = createSectionMemory(draft, content);
+    expect(sectionMemoryFreshness(memory, content)).toBe('fresh');
+    expect(sectionMemoryFreshness(memory, content)).toBe('fresh');
+    expect(sectionMemoryFreshness(memory, content + ' edit')).toBe('stale');
+    expect(sectionMemoryFreshness(memory, content)).toBe('fresh');
+    memory.sourceContentHash = hashSectionContent('different');
+    expect(sectionMemoryFreshness(memory, content)).toBe('stale');
+    memory.sourceContentHash = hashSectionContent(content);
+    memory.provenance = 'model-draft';
+    expect(isEligibleSectionMemory(memory, content)).toBe(false);
+    memory.status = 'stale';
+    expect(sectionMemoryFreshness(memory, content)).toBe('stale');
+  });
+
+  it('preserves unchanged sections while still invalidating edits and removing deleted references', () => {
+    const content = 'Original manuscript';
+    const section = { id: 'stable-section', title: 'Stable', content, memory: createSectionMemory(draft, content) };
+    const book = bookWithSection(section);
+    book.chapters[0]!.sections.push({ id: 'target', title: 'Target', content: 'Other text',
+      contextReferences: [{ sectionId: section.id, mode: 'summary', reason: 'manual' }] });
+    expect(normalizeBook(book)).toBe(book);
+    section.content = 'Edited manuscript';
+    const changed = normalizeBook(book);
+    expect(changed.chapters[0]!.sections[0]!.memory!.status).toBe('stale');
+    expect(changed.chapters[0]!.sections[1]).toBe(book.chapters[0]!.sections[1]);
+    expect(section.memory.status).toBe('fresh');
+    changed.chapters[0]!.sections[0]!.content = content;
+    expect(normalizeBook(changed)).toBe(changed);
+    expect(changed.chapters[0]!.sections[0]!.memory!.status).toBe('stale');
+    changed.chapters[0]!.sections.shift();
+    expect(normalizeBook(changed).chapters[0]!.sections[0]!.contextReferences).toBeUndefined();
+  });
+
   it('strictly parses and serializes the five-field draft schema', () => {
     const serialized = serializeSectionMemoryDraft(draft);
     expect(parseSectionMemoryDraft(serialized)).toEqual(draft);

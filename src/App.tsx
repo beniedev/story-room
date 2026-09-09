@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenText,
   BookPlus,
@@ -222,6 +222,7 @@ function App() {
   const [bookSettingsRequest, setBookSettingsRequest] = useState(0);
   const [newBookRequest, setNewBookRequest] = useState(0);
   const [writerBookSettingsOpen, setWriterBookSettingsOpen] = useState(false);
+  const [manuscriptEditorOpen, setManuscriptEditorOpen] = useState(false);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
@@ -236,8 +237,14 @@ function App() {
   const authorNote = section?.note ?? '';
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
+  const previewVisible = view === 'write' && !manuscriptEditorOpen;
+  const contextPreviewInput = useMemo(() => ({
+    activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, previewVisible,
+  }), [activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, previewVisible]);
+  const deferredContextInput = useDeferredValue(contextPreviewInput);
   const contextPreview = useMemo(() => {
-    if (view !== 'write' || !book || !section) return { plan: null, error: '' };
+    const { activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, previewVisible } = deferredContextInput;
+    if (!previewVisible || !book || !section) return { plan: null, error: '' };
     try {
       return { plan: composeContextPlan(book, {
         sectionId: section.id,
@@ -257,9 +264,11 @@ function App() {
           : '暂时无法预览当前上下文。请检查当前小节和连接方案后重试。',
       };
     }
-  }, [activeProviderProfile, authorNote, book, instruction, mode, section, selectedCharacterId, view]);
-  const promptPreview = contextPreview.plan;
-  const promptPreviewError = contextPreview.error;
+  }, [deferredContextInput]);
+  const previewMatchesTarget = deferredContextInput.book?.id === book?.id
+    && deferredContextInput.section?.id === section?.id;
+  const promptPreview = previewMatchesTarget ? contextPreview.plan : null;
+  const promptPreviewError = previewMatchesTarget ? contextPreview.error : '';
   useEffect(() => {
     clearHostBookCaches();
   }, []);
@@ -1119,6 +1128,7 @@ function App() {
             generationState={generationState}
             contextPlanError={promptPreviewError}
             contextPlan={promptPreview}
+            contextPlanPending={deferredContextInput !== contextPreviewInput}
             contextCompositionOpen={contextCompositionOpen}
             contextToolsOpen={contextToolsOpen}
             providerName={activeProviderProfile?.name ?? '未选择方案'}
@@ -1135,6 +1145,7 @@ function App() {
             onModeChange={setMode}
             onCharacterChange={setSelectedCharacterId}
             onInstructionChange={updateInstructionDraft}
+            onEditorOpenChange={setManuscriptEditorOpen}
             onAuthorNoteChange={updateSectionNote}
             onSectionBlocksChange={updateSectionBlocks}
             onDeleteSectionBlock={deleteSectionBlock}

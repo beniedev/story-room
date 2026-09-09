@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from 'react';
+import { act, Profiler } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
@@ -8,6 +8,9 @@ import { makeId } from '../src/components/shared/id';
 import { deviceLibrary } from '../src/deviceLibrary';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
+import * as proseFormatting from '../src/proseFormatting';
+import * as contextPlanner from '../src/contextPlan';
+import * as textMetrics from '../src/textMetrics';
 
 const browserCrypto = globalThis.crypto;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -76,6 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('browser IDs without crypto.randomUUID', () => {
@@ -276,6 +280,193 @@ describe('browser IDs without crypto.randomUUID', () => {
       expect(counter()).not.toBe(before);
     } finally {
       await act(async () => root.unmount());
+    }
+  });
+
+  it('keeps typing ahead of preview work without reparsing unchanged prose or losing the latest input', async () => {
+    const book = createExampleBooks()[0]!;
+    const previousContent = 'Synthetic previous text. 合成前文。'.repeat(1000);
+    const blocks = Array.from({ length: 100 }, (_, index) => ({
+      id: `typing-block-${index}`, kind: 'assistant' as const, content: '合成正文。“继续向前。”'.repeat(10),
+    }));
+    book.chapters = [{ id: 'typing-chapter', title: 'Typing chapter', sections: [
+      { id: 'typing-source', title: 'Previous', content: previousContent, memory: createSectionMemory({
+        synopsis: 'A synthetic summary.', beats: [], continuityFacts: [], characterStateChanges: [], foreshadowingCandidates: [],
+      }, previousContent) },
+      { id: 'typing-target', title: 'Current', blocks, content: blocks.map((block) => block.content).join('\n\n'), contextReferences: [
+        { sectionId: 'typing-source', mode: 'summary', reason: 'manual' },
+      ] },
+    ] }];
+    let generationRequest: { instruction: string; sectionId: string } | undefined;
+    let saves = 0;
+    let finishGeneration: (response: Response) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/library') return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === `/api/books/${book.id}` && init?.method === 'PUT') {
+        saves += 1;
+        return jsonResponse(JSON.parse(String(init.body)));
+      }
+      if (url === `/api/books/${book.id}`) return jsonResponse(book);
+      if (url === '/api/generate') {
+        generationRequest = JSON.parse(String(init?.body)) as typeof generationRequest;
+        return new Promise<Response>((resolve) => { finishGeneration = resolve; });
+      }
+      throw new Error(`Unexpected typing test request: ${url}`);
+    }));
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const commits: Array<{ value: string; pending: boolean }> = [];
+    const parse = vi.spyOn(proseFormatting, 'parseProseFormatting');
+    try {
+      await act(async () => root.render(<Profiler id="typing" onRender={() => {
+        commits.push({ value: container.querySelector<HTMLTextAreaElement>('#writing-instruction')?.value ?? '',
+          pending: container.querySelector('.writer-context-trigger')?.getAttribute('aria-busy') === 'true' });
+      }}><App /></Profiler>));
+      const target = await waitForElement(() => container.querySelectorAll<HTMLButtonElement>('.section-open')[1] ?? null);
+      await act(async () => target.click());
+      parse.mockClear();
+      commits.length = 0;
+      const input = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+      input.focus();
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      const type = async (value: string, composing = false, caret = value.length) => act(async () => {
+        setter.call(input, value);
+        input.setSelectionRange(caret, caret);
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: composing }));
+      });
+      await act(async () => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+      await type('今天写xiao', true);
+      expect(input.value).toBe('今天写xiao');
+      await type('今天写小说', true);
+      await act(async () => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '小说' })));
+      await type('今天继续写小说', false, 4);
+      expect(input.selectionStart).toBe(4);
+      expect(document.activeElement).toBe(input);
+      expect(parse).not.toHaveBeenCalled();
+      expect(saves).toBe(0);
+      expect(commits.some((commit) => commit.value === '今天继续写小说' && commit.pending)).toBe(true);
+      expect(commits.at(-1)?.pending).toBe(false);
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="发送并续写"]')?.click());
+      expect(generationRequest).toMatchObject({ sectionId: 'typing-target', instruction: '今天继续写小说' });
+      await type('下一轮输入');
+      await act(async () => finishGeneration(jsonResponse({ draft: 'Synthetic continuation.' })));
+      expect(input.value).toBe('下一轮输入');
+      expect(container.querySelector('.manuscript')?.textContent).toContain('今天继续写小说');
+      expect(container.querySelector('.manuscript')?.textContent).toContain('Synthetic continuation.');
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('keeps title, manuscript and note edits responsive without losing edits across saves', async () => {
+    const book = createExampleBooks()[0]!;
+    const content = '合成长正文。“继续向前。”'.repeat(1000);
+    const memory = createSectionMemory({ synopsis: 'Synthetic summary.', beats: [], continuityFacts: [],
+      characterStateChanges: [], foreshadowingCandidates: [] }, content);
+    book.chapters = [{ id: 'editing-chapter', title: 'Editing chapter', sections: [
+      { id: 'editing-section', title: 'Editing section', content, memory,
+        blocks: [{ id: 'editing-block', kind: 'assistant', content }] },
+    ] }];
+    const saves: typeof book[] = [];
+    let finishFirstSave: (response: Response) => void = () => undefined;
+    let failSave = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/library') return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === `/api/books/${book.id}` && init?.method === 'PUT') {
+        const candidate = JSON.parse(String(init.body)) as typeof book;
+        saves.push(candidate);
+        if (saves.length === 1) return new Promise<Response>((resolve) => { finishFirstSave = resolve; });
+        if (failSave) throw new Error('Synthetic save failure');
+        return jsonResponse(candidate);
+      }
+      if (url === `/api/books/${book.id}`) return jsonResponse(book);
+      throw new Error(`Unexpected editing test request: ${url}`);
+    }));
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const words = vi.spyOn(textMetrics, 'countWords');
+    const tokens = vi.spyOn(textMetrics, 'estimateTokens');
+    const plan = vi.spyOn(contextPlanner, 'buildContextPlan');
+    const parse = vi.spyOn(proseFormatting, 'parseProseFormatting');
+    const type = async (input: HTMLInputElement | HTMLTextAreaElement, value: string, composing = false, caret = value.length) => act(async () => {
+      const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(input, value);
+      input.setSelectionRange(caret, caret);
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: composing }));
+    });
+    try {
+      await act(async () => root.render(<App />));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="修改章节名称：Editing chapter"]')!.click());
+      const title = container.querySelector<HTMLInputElement>('#name-dialog-input')!;
+      words.mockClear(); tokens.mockClear();
+      await type(title, '标题xiu', true);
+      await type(title, '标题修改');
+      expect(title.value).toBe('标题修改');
+      expect(words).not.toHaveBeenCalled();
+      expect(tokens).not.toHaveBeenCalled();
+      expect(saves).toHaveLength(0);
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="取消修改章节名称"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('.manuscript-block-select')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="编辑所选片段"]')!.click());
+      const editor = container.querySelector<HTMLTextAreaElement>('#block-editor-textarea')!;
+      editor.focus();
+      words.mockClear(); tokens.mockClear(); plan.mockClear(); parse.mockClear();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await act(async () => editor.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+      await type(editor, `  ${content}\n新增zhengwen`, true);
+      const edited = `  ${content}\n新增正文  `;
+      await type(editor, edited, true);
+      await act(async () => editor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '正文' })));
+      await type(editor, edited, false, 4);
+      expect(editor.selectionStart).toBe(4);
+      expect(document.activeElement).toBe(editor);
+      expect(words).not.toHaveBeenCalled();
+      expect(tokens).not.toHaveBeenCalled();
+      expect(plan).not.toHaveBeenCalled();
+      expect(parse).not.toHaveBeenCalled();
+      expect(saves).toHaveLength(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      expect(saves).toHaveLength(1);
+      expect(saves[0]!.chapters[0]!.sections[0]!.blocks![0]!.content).toBe(edited);
+      expect(saves[0]!.chapters[0]!.sections[0]!.memory!.status).toBe('stale');
+      const newer = `${edited}\n保存过程中继续输入`;
+      await type(editor, newer);
+      await act(async () => finishFirstSave(jsonResponse(saves[0])));
+      expect(editor.value).toBe(newer);
+      failSave = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      expect(container.querySelector('[role="status"]')?.textContent).toContain('无法连接');
+      expect(editor.value).toBe(newer);
+      failSave = false;
+      const latest = `${newer}，仍可编辑`;
+      await type(editor, latest);
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      expect(saves.at(-1)!.chapters[0]!.sections[0]!.blocks![0]!.content).toBe(latest);
+      expect(editor.value).toBe(latest);
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="完成编辑并返回正文"]')!.click());
+      expect(container.querySelector('.manuscript')?.textContent).toContain('仍可编辑');
+      expect(plan).toHaveBeenCalled();
+      expect(plan.mock.calls.at(-1)![0].chapters[0]!.sections[0]!.content).toBe(latest.trim());
+      const note = container.querySelector<HTMLTextAreaElement>('#author-note-input')!;
+      words.mockClear(); parse.mockClear();
+      await type(note, '新的小节注释');
+      expect(words).not.toHaveBeenCalled();
+      expect(parse).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      expect(saves.at(-1)!.chapters[0]!.sections[0]!.note).toBe('新的小节注释');
+      expect(saves.at(-1)!.chapters[0]!.sections[0]!.blocks![0]!.content).toBe(latest);
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
     }
   });
 

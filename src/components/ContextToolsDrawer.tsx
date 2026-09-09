@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronRight, Sparkles, X } from 'lucide-react';
 import {
   draftFromSectionMemory,
   sectionMemoryProvenanceAfterReview,
 } from '../sectionMemory';
 import { focusFirstDrawerElement } from './shared/dialogFocus';
+import { TextArea } from './shared/TextArea';
 import {
   DialogOperationStatus,
   idleDialogOperation,
@@ -80,31 +81,20 @@ export function ContextToolsDrawer({
     return undefined;
   }, [open, book.id, section.id]);
 
-  const currentReferences = new Map((section.contextReferences ?? [])
-    .map((reference) => [reference.sectionId, reference.mode] as const));
-  const targetLocation = book.chapters.flatMap((chapter, chapterIndex) => chapter.sections.map((item, sectionIndex) => ({
-    chapter,
-    section: item,
-    chapterIndex,
-    sectionIndex,
-  }))).find((item) => item.section.id === section.id);
-  const targetOrdinal = targetLocation
-    ? book.chapters.slice(0, targetLocation.chapterIndex)
-      .reduce((total, chapter) => total + chapter.sections.length, 0) + targetLocation.sectionIndex
-    : 0;
-  const referenceSections = book.chapters.flatMap((chapter, chapterIndex) => chapter.sections.map((item, sectionIndex) => ({
-    chapter,
-    section: item,
-    chapterIndex,
-    sectionIndex,
-    ordinal: book.chapters.slice(0, chapterIndex)
-      .reduce((total, previousChapter) => total + previousChapter.sections.length, 0) + sectionIndex,
-  }))).filter((item) => item.ordinal < targetOrdinal);
-  const referenceChapters = book.chapters.map((chapter) => ({
-    chapter,
-    sections: referenceSections.filter((item) => item.chapter.id === chapter.id),
-  })).filter((item) => item.sections.length > 0);
-  const selectableReferenceSections = referenceSections.filter((item) => item.section.content.trim());
+  const currentReferences = useMemo(() => new Map((section.contextReferences ?? [])
+    .map((reference) => [reference.sectionId, reference.mode] as const)), [section.contextReferences]);
+  const { referenceSections, referenceChapters, selectableReferenceSections } = useMemo(() => {
+    const locations = (open ? book.chapters : []).flatMap((chapter, chapterIndex) =>
+      chapter.sections.map((item, sectionIndex) => ({ chapter, section: item, chapterIndex, sectionIndex })));
+    const targetOrdinal = locations.findIndex((item) => item.section.id === section.id);
+    const referenceSections = locations.slice(0, Math.max(0, targetOrdinal));
+    const referenceChapters = (open ? book.chapters : []).map((chapter) => ({
+      chapter,
+      sections: referenceSections.filter((item) => item.chapter.id === chapter.id),
+    })).filter((item) => item.sections.length > 0);
+    return { referenceSections, referenceChapters,
+      selectableReferenceSections: referenceSections.filter((item) => item.section.content.trim()) };
+  }, [open, book.chapters, section.id]);
   const selectedReferenceCount = selectableReferenceSections
     .filter((item) => selectedSectionIds.has(item.section.id)).length;
   const allSelected = selectableReferenceSections.length > 0
@@ -414,7 +404,7 @@ export function ContextToolsDrawer({
                               <div className="context-summary-editor" id={panelId}>
                                 <label>
                                   <span className="sr-only">{item.section.title}梗概</span>
-                                  <textarea
+                                  <TextArea
                                     id={`context-summary-textarea-${item.section.id}`}
                                     value={value}
                                     onChange={(event) => updateSummary(item, event.target.value)}

@@ -307,6 +307,7 @@ const referenceBlocks = (
         transformedFrom: eligibleMemory ? 'summary' : undefined,
       },
     );
+    if (reference.mode === 'summary') return [memoryBlock];
     const fullBlock = block(
       book.id,
       'manuscript',
@@ -319,7 +320,6 @@ const referenceBlocks = (
       true,
       { ...common, transformedFrom: 'full' },
     );
-    if (reference.mode === 'summary') return [memoryBlock];
     if (reference.mode === 'both') return [memoryBlock, fullBlock];
     return [fullBlock];
   });

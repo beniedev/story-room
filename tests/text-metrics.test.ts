@@ -16,5 +16,8 @@ describe('writing text metrics', () => {
     expect(estimateTokens('\n\n\n\n')).toBe(4);
     expect(estimateTokens('a')).toBe(1);
     expect(estimateTokens('')).toBe(0);
+    expect(estimateTokens('é𐞥𝟘𝟙')).toBe(1);
+    expect(estimateTokens('👩‍💻e\u0301')).toBe(5);
+    expect(estimateTokens('abcd '.repeat(20_000))).toBe(25_000);
   });
 });

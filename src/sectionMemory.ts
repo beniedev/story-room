@@ -27,6 +27,17 @@ export const hashSectionContent = (content: string): string => {
   return hash.toString(16).padStart(16, '0');
 };
 
+// A memory object retains only its last checked text. Weak keys release old books;
+// comparing the text also detects edits when a caller reuses the memory object.
+const checkedMemoryContent = new WeakMap<SectionMemory, { content: string; hash: string }>();
+const hashMemoryContent = (memory: SectionMemory, content: string) => {
+  const cached = checkedMemoryContent.get(memory);
+  if (cached?.content === content) return cached.hash;
+  const hash = hashSectionContent(content);
+  checkedMemoryContent.set(memory, { content, hash });
+  return hash;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
 );
@@ -202,7 +213,7 @@ export const sectionMemoryFreshness = (
   content: string,
 ): SectionMemoryFreshness => {
   if (!memory) return 'missing';
-  return memory.status === 'fresh' && memory.sourceContentHash === hashSectionContent(content)
+  return memory.status === 'fresh' && memory.sourceContentHash === hashMemoryContent(memory, content)
     ? 'fresh'
     : 'stale';
 };
@@ -216,7 +227,9 @@ export const isEligibleSectionMemory = (
 
 const normalizeMemory = (memory: SectionMemory | undefined, content: string) => {
   if (!memory) return undefined;
-  const hash = hashSectionContent(content);
+  // Editing cannot make a stale summary fresh; only an explicit review can.
+  if (memory.status === 'stale') return memory;
+  const hash = hashMemoryContent(memory, content);
   return memory.sourceContentHash === hash
     ? memory
     : { ...memory, status: 'stale' as const };
@@ -228,28 +241,31 @@ const normalizeSection = (
 ): Section => {
   const validReferences = section.contextReferences?.filter((reference) => sectionIds.has(reference.sectionId));
   const normalized = section.contextReferences && validReferences?.length
-    ? { ...section, contextReferences: validReferences }
+    ? validReferences.length === section.contextReferences.length
+      ? section
+      : { ...section, contextReferences: validReferences }
     : section.contextReferences
       ? (() => {
           const { contextReferences: _removed, ...withoutReferences } = section;
           return withoutReferences;
         })()
       : section;
-  return {
+  const memory = normalizeMemory(normalized.memory, normalized.content);
+  const previousMemory = normalizeMemory(normalized.previousMemory, normalized.content);
+  return memory === normalized.memory && previousMemory === normalized.previousMemory ? normalized : {
     ...normalized,
-    ...(normalized.memory ? { memory: normalizeMemory(normalized.memory, normalized.content) } : {}),
-    ...(normalized.previousMemory ? { previousMemory: normalizeMemory(normalized.previousMemory, normalized.content) } : {}),
+    ...(memory ? { memory } : {}),
+    ...(previousMemory ? { previousMemory } : {}),
   };
 };
 
 export const normalizeBook = (book: Book): Book => {
   const sections = book.chapters.flatMap((chapter) => chapter.sections);
   const sectionIds = new Set(sections.map((section) => section.id));
-  return {
-    ...book,
-    chapters: book.chapters.map((chapter) => ({
-      ...chapter,
-      sections: chapter.sections.map((section) => normalizeSection(section, sectionIds)),
-    })),
-  };
+  const chapters = book.chapters.map((chapter) => {
+    const sections = chapter.sections.map((section) => normalizeSection(section, sectionIds));
+    return sections.every((section, index) => section === chapter.sections[index])
+      ? chapter : { ...chapter, sections };
+  });
+  return chapters.every((chapter, index) => chapter === book.chapters[index]) ? book : { ...book, chapters };
 };

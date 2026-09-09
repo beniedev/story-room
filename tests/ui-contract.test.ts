@@ -321,7 +321,7 @@ describe('writing UI contract', () => {
     expect(tools).toContain('setSelectedSectionIds');
     expect(tools).not.toContain('清空全部');
     expect(tools).not.toContain('SectionMemoryEditor');
-    expect(tools).toContain('<textarea');
+    expect(tools).toContain('<TextArea');
     expect(tools).toContain('className="icon-button context-summary-generate"');
     expect(tools).toContain("requestSummaryAction(item, 'generate')");
     expect(tools).toContain('aria-label={summaryBusy');
@@ -659,7 +659,8 @@ describe('writing UI contract', () => {
     expect(source).toContain('保存连接方案');
     const settingsStart = source.indexOf('function SettingsDrawer');
     expect(source.slice(settingsStart)).not.toContain('Prompt 组合');
-    expect(source).toContain("if (view !== 'write' || !book || !section) return { plan: null, error: '' };");
+    expect(source).toContain("const previewVisible = view === 'write' && !manuscriptEditorOpen;");
+    expect(source).toContain("if (!previewVisible || !book || !section) return { plan: null, error: '' };");
     expect(source).toContain('activeProviderProfile.maxContext');
     expect(source).toContain('activeProviderProfile.maxOutput');
     expect(source).toContain('availableInput');

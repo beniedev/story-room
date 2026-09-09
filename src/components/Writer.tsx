@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -29,6 +29,7 @@ import {
 } from './shared/DialogOperationStatus';
 import { blocksAsContent, sectionBlocks } from './shared/sectionContent';
 import { compactTokenCount } from './shared/text';
+import { TextArea } from './shared/TextArea';
 import type { Book, ContextPlan, GenerationMode, SectionBlock } from '../types';
 
 interface WriterProps {
@@ -44,6 +45,7 @@ interface WriterProps {
   generationState: 'idle' | 'generating';
   contextPlan: ContextPlan | null;
   contextPlanError: string;
+  contextPlanPending?: boolean;
   contextCompositionOpen: boolean;
   contextToolsOpen: boolean;
   providerName: string;
@@ -57,6 +59,7 @@ interface WriterProps {
   onModeChange: (mode: GenerationMode) => void;
   onCharacterChange: (id: string) => void;
   onInstructionChange: (value: string) => void;
+  onEditorOpenChange?: (open: boolean) => void;
   onAuthorNoteChange: (value: string) => void;
   onSectionBlocksChange: (blocks: SectionBlock[]) => void;
   onDeleteSectionBlock: (blockId: string) => Promise<void>;
@@ -68,10 +71,55 @@ interface WriterProps {
 const manuscriptScrollPositions = new Map<string, number>();
 const manuscriptTailTargets = new Map<string, string>();
 
+const renderBlockContent = (block: SectionBlock) => {
+  const renderDialogue = (text: string, segmentIndex: number) => block.kind === 'assistant'
+    ? text.split(/(“[^”]*”|"[^"\n]*")/g).map((part, dialogueIndex) => (
+      /^“[^”]*”$|^"[^"\n]*"$/.test(part)
+        ? <span className="manuscript-dialogue" key={`${block.id}-${segmentIndex}-dialogue-${dialogueIndex}`}>{part}</span>
+        : part
+    ))
+    : text;
+
+  return parseProseFormatting(block.content).map((segment, index) => (
+    segment.emphasized
+      ? <em key={`${block.id}-emphasis-${index}`}>{renderDialogue(segment.text, index)}</em>
+      : <Fragment key={`${block.id}-text-${index}`}>{renderDialogue(segment.text, index)}</Fragment>
+  ));
+};
+
+const ManuscriptBlockCopy = memo(function ManuscriptBlockCopy({ block }: { block: SectionBlock }) {
+  return <span className="manuscript-block-copy">{renderBlockContent(block)}</span>;
+});
+
+const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelect, children }: {
+  block: SectionBlock;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="manuscript-block-group" data-block-id={block.id} data-selected={selected || undefined}>
+      <div className="manuscript-block" data-kind={block.kind} onClick={() => onSelect(block.id)}>
+        <ManuscriptBlockCopy block={block} />
+      </div>
+      <button
+        type="button"
+        className="manuscript-block-select icon-button"
+        aria-pressed={selected}
+        aria-label={`${selected ? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段`}
+        title={`${selected ? '取消选择' : '选择'}片段`}
+        onClick={() => onSelect(block.id)}
+      ><MousePointer2 aria-hidden="true" /></button>
+      {children}
+    </div>
+  );
+});
+
 export function Writer(props: WriterProps) {
   const selectedCharacter = props.book.characters.find((character) => character.id === props.selectedCharacterId);
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
-  const blocks = props.section ? sectionBlocks(props.section) : [];
+  const blocks = useMemo(() => props.section ? sectionBlocks(props.section) : [],
+    [props.section?.id, props.section?.blocks, props.section?.content]);
   const [sectionTitle, setSectionTitle] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
   const [editingBlockId, setEditingBlockId] = useState('');
@@ -98,10 +146,16 @@ export function Writer(props: WriterProps) {
   const generationStart = useRef<{ scrollKey: string; blockCount: number } | null>(null);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
-  const manuscriptText = blocksAsContent(blocks);
-  const manuscriptWordCount = countWords(manuscriptText);
-  const manuscriptTokenCount = estimateTokens(manuscriptText);
+  const editorOpen = Boolean(editingBlock);
+  const manuscriptText = useMemo(() => editorOpen ? '' : blocksAsContent(blocks), [blocks, editorOpen]);
+  const manuscriptWordCount = useMemo(() => countWords(manuscriptText), [manuscriptText]);
+  const manuscriptTokenCount = useMemo(() => estimateTokens(manuscriptText), [manuscriptText]);
   const manuscriptScrollKey = `${props.book.id}:${props.section?.id ?? ''}`;
+
+  useEffect(() => {
+    props.onEditorOpenChange?.(editorOpen);
+    return () => props.onEditorOpenChange?.(false);
+  }, [editorOpen, props.onEditorOpenChange]);
 
   const prepareManuscriptTail = (targetBlockId = manuscriptTailTargets.get(manuscriptScrollKey)) => {
     const container = manuscriptWrapRef.current;
@@ -309,26 +363,10 @@ export function Writer(props: WriterProps) {
     });
   };
 
-  const renderBlockContent = (block: SectionBlock) => {
-    const renderDialogue = (text: string, segmentIndex: number) => block.kind === 'assistant'
-      ? text.split(/(“[^”]*”|"[^"\n]*")/g).map((part, dialogueIndex) => (
-        /^“[^”]*”$|^"[^"\n]*"$/.test(part)
-          ? <span className="manuscript-dialogue" key={`${block.id}-${segmentIndex}-dialogue-${dialogueIndex}`}>{part}</span>
-          : part
-      ))
-      : text;
-
-    return parseProseFormatting(block.content).map((segment, index) => (
-      segment.emphasized
-        ? <em key={`${block.id}-emphasis-${index}`}>{renderDialogue(segment.text, index)}</em>
-        : <Fragment key={`${block.id}-text-${index}`}>{renderDialogue(segment.text, index)}</Fragment>
-    ));
-  };
-
-  const selectManuscriptBlock = (blockId: string) => {
+  const selectManuscriptBlock = useCallback((blockId: string) => {
     actionMenu.current?.removeAttribute('open');
     setSelectedBlockId((current) => current === blockId ? '' : blockId);
-  };
+  }, []);
 
   if (editingBlock) {
     const editorLabel = editingBlock.kind === 'user' ? '用户输入' : 'AI 输出';
@@ -358,7 +396,8 @@ export function Writer(props: WriterProps) {
         </header>
         <div className="block-editor-body">
           <label className="sr-only" htmlFor="block-editor-textarea">{editorLabel}内容</label>
-          <textarea
+          <TextArea
+            key={editingBlock.id}
             id="block-editor-textarea"
             className="block-editor-textarea"
             data-kind={editingBlock.kind}
@@ -393,6 +432,7 @@ export function Writer(props: WriterProps) {
             disabled={props.busy}
             aria-expanded={props.contextCompositionOpen}
             aria-controls="context-composition-drawer"
+            aria-busy={props.contextPlanPending || undefined}
             aria-label={props.contextPlanError
               ? `查看当前上下文：${props.contextPlanError}`
               : `查看当前上下文：已估算约 ${contextTokens} tokens，可用输入约 ${availableInput} tokens`}
@@ -405,6 +445,7 @@ export function Writer(props: WriterProps) {
             />
             <span className="writer-context-count" data-over-limit={contextPercent > 100 || undefined}>
               {props.contextPlanError ? '无法预览' : `约 ${compactTokenCount(contextTokens)} / 约 ${compactTokenCount(availableInput)} · ${contextPercent}%`}
+              {props.contextPlanPending && <span className="sr-only">，上下文预览更新中</span>}
             </span>
             <small className="writer-provider-line">
               <span>{props.providerName}</span><span aria-hidden="true">|</span><span>{props.modelId}</span>
@@ -486,24 +527,7 @@ export function Writer(props: WriterProps) {
           <h2 id="manuscript-label" className="sr-only">连续小说正文</h2>
           <div className="manuscript" aria-label="连续小说正文">
             {blocks.map((block) => (
-              <div className="manuscript-block-group" data-block-id={block.id} data-selected={selectedBlockId === block.id || undefined} key={block.id}>
-              <div
-                className="manuscript-block"
-                data-kind={block.kind}
-                onClick={() => selectManuscriptBlock(block.id)}
-              >
-                <span className="manuscript-block-copy">{renderBlockContent(block)}</span>
-              </div>
-              <button
-                type="button"
-                className="manuscript-block-select icon-button"
-                aria-pressed={selectedBlockId === block.id}
-                aria-label={`${selectedBlockId === block.id ? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段`}
-                title={`${selectedBlockId === block.id ? '取消选择' : '选择'}片段`}
-                onClick={() => selectManuscriptBlock(block.id)}
-              >
-                <MousePointer2 aria-hidden="true" />
-              </button>
+              <ManuscriptBlock block={block} selected={selectedBlockId === block.id} onSelect={selectManuscriptBlock} key={block.id}>
               {selectedBlockId === block.id && (
                 <div className="manuscript-block-actions" data-block-id={block.id} role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
                   {block.kind === 'assistant' && <button
@@ -533,7 +557,7 @@ export function Writer(props: WriterProps) {
                   ><Trash2 aria-hidden="true" /></button>
                 </div>
               )}
-              </div>
+              </ManuscriptBlock>
             ))}
             {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
             <div className="manuscript-tail-space" ref={manuscriptTailRef} aria-hidden="true" />
@@ -607,7 +631,7 @@ export function Writer(props: WriterProps) {
             )}
             <label className="writer-section-note" htmlFor="author-note-input">
               <span><MessageSquareText aria-hidden="true" />小节注释</span>
-              <textarea
+              <TextArea
                 id="author-note-input"
                 rows={4}
                 value={props.authorNote}
@@ -670,7 +694,7 @@ export function Writer(props: WriterProps) {
             }}
           ><span aria-hidden="true" /></button>
           <label className="sr-only" htmlFor="writing-instruction">{props.mode === 'author' ? '接龙正文' : '角色行动或台词'}</label>
-          <textarea
+          <TextArea
             ref={instructionInput}
             id="writing-instruction"
             rows={1}

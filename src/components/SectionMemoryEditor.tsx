@@ -1,5 +1,6 @@
 import type { RefObject } from 'react';
 import { ArrowLeft, Check, Sparkles } from 'lucide-react';
+import { TextArea } from './shared/TextArea';
 import type { Book, SectionMemory, SectionMemoryDraft } from '../types';
 
 export type ContextReferenceSection = {
@@ -76,7 +77,7 @@ export function SectionMemoryEditor({
       <p className="helper-copy">五个字段完整复核后，点击保存才会写入书目并允许梗概加载。</p>
       <label className="context-memory-field">
         <span>摘要</span>
-        <textarea
+        <TextArea
           id={`context-memory-synopsis-${item.section.id}`}
           value={memoryDraft.synopsis}
           onChange={(event) => onSynopsisChange(event.target.value)}

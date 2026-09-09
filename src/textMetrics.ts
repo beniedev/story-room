@@ -6,28 +6,27 @@ const cjkPattern = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Scr
 const latinNumberSpacePattern = /^[\p{Script=Latin}\p{N} ]$/u;
 
 export const estimateTokens = (content: string): number => {
-  const characters = Array.from(content);
   let tokens = 0;
-  let latinRun = '';
+  let latinRunLength = 0;
   const flushLatinRun = () => {
-    if (!latinRun) return;
-    tokens += Math.max(1, Math.ceil(Array.from(latinRun).length / 4));
-    latinRun = '';
+    if (!latinRunLength) return;
+    tokens += Math.ceil(latinRunLength / 4);
+    latinRunLength = 0;
   };
 
-  characters.forEach((character) => {
+  for (const character of content) {
     if (cjkPattern.test(character)) {
       flushLatinRun();
       tokens += 1;
-      return;
+      continue;
     }
     if (latinNumberSpacePattern.test(character)) {
-      latinRun += character;
-      return;
+      latinRunLength += 1;
+      continue;
     }
     flushLatinRun();
     tokens += 1;
-  });
+  }
   flushLatinRun();
   return tokens;
 };
