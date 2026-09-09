@@ -565,19 +565,11 @@ describe('context plan', () => {
     }, { maxContext: 2200, maxOutput: 100 });
     expect(overflow.budget.overflow).toBe(true);
     expect(overflow.budget.overflowTokens).toBeGreaterThan(0);
-    let budgetError: unknown;
-    try {
-      fakeGenerate(book, {
-        sectionId: section.id,
-        mode: 'author',
-        instruction: 'Continue.',
-      }, { maxContext: 2200, maxOutput: 100 });
-    } catch (error) {
-      budgetError = error;
-    }
-    expect(String(budgetError)).toContain('约超出');
-    expect(String(budgetError)).toContain('写作风格指导');
-    expect(String(budgetError)).not.toContain('required brief');
+    expect(() => fakeGenerate(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Continue.',
+    }, { maxContext: 2200, maxOutput: 100 })).not.toThrow();
   });
 
   it('keeps the full target when no positive tail fits the budget', () => {
@@ -617,7 +609,7 @@ describe('context plan', () => {
       mode: 'author',
       instruction: 'Summarize.',
       generationKind: 'summarize-section',
-    }, { maxContext: 1_000, maxOutput: 100 })).toThrow('约超出');
+    }, { maxContext: 1_000, maxOutput: 100 })).not.toThrow();
   });
 
   it('loads scoped character cards and world settings only for matching sections', () => {

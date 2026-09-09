@@ -6,11 +6,6 @@ import type {
   SectionMemoryProvenance,
 } from './types';
 
-export const MAX_SECTION_MEMORY_JSON_BYTES = 64_000;
-export const MAX_SECTION_MEMORY_TEXT_LENGTH = 4_000;
-export const MAX_SECTION_MEMORY_ITEMS = 32;
-export const MAX_SECTION_MEMORY_ITEM_LENGTH = 1_000;
-
 const draftFields = [
   'synopsis',
   'beats',
@@ -39,18 +34,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
 const assertText = (
   value: unknown,
   label: string,
-  maxLength = MAX_SECTION_MEMORY_TEXT_LENGTH,
 ) => {
-  if (typeof value !== 'string' || value.length > maxLength) {
-    throw new Error(`${label}必须是 ${maxLength} 字以内的文本。`);
+  if (typeof value !== 'string') {
+    throw new Error(`${label}必须是文本。`);
   }
 };
 
 function assertTextList(value: unknown, label: string): asserts value is string[] {
-  if (!Array.isArray(value) || value.length > MAX_SECTION_MEMORY_ITEMS) {
-    throw new Error(`${label}必须是最多 ${MAX_SECTION_MEMORY_ITEMS} 项的文本数组。`);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label}必须是文本数组。`);
   }
-  value.forEach((item) => assertText(item, `${label}元素`, MAX_SECTION_MEMORY_ITEM_LENGTH));
+  value.forEach((item) => assertText(item, `${label}元素`));
 }
 
 function assertDraft(value: unknown): asserts value is SectionMemoryDraft {
@@ -66,8 +60,8 @@ function assertDraft(value: unknown): asserts value is SectionMemoryDraft {
 }
 
 export const parseSectionMemoryDraft = (input: string): SectionMemoryDraft => {
-  if (typeof input !== 'string' || new TextEncoder().encode(input).byteLength > MAX_SECTION_MEMORY_JSON_BYTES) {
-    throw new Error(`Section memory draft 必须是 ${MAX_SECTION_MEMORY_JSON_BYTES} bytes 以内的 JSON。`);
+  if (typeof input !== 'string') {
+    throw new Error('Section memory draft 必须是 JSON 文本。');
   }
   let parsed: unknown;
   try {

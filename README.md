@@ -26,7 +26,7 @@ Open `http://127.0.0.1:4310`.
 
 The default bind address is `127.0.0.1`. To use the same host from another device on a trusted LAN or private network, choose the bind address explicitly, for example `npm run dev -- --host 0.0.0.0`. The app does not add an access-password, token, or Host allowlist; any device that can reach the chosen address can use it. State-changing browser requests that include an `Origin` header must remain same-origin.
 
-`STORY_ALLOW_PRIVATE_PROVIDERS=1` only opts into HTTPS private-network Provider targets; metadata and link-local targets and redirects remain rejected.
+Configured Providers may use HTTP or HTTPS on public, loopback, LAN, or private-network addresses without an extra opt-in flag. Metadata and link-local targets and redirects remain rejected to avoid sending credentials to unintended services.
 
 ## Provider trust boundary
 
@@ -48,7 +48,7 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 
 The writing page's Context drawer shows the active Provider limits, an approximate input budget, and an overview of included material and reasons for the current request. If a request is over budget or material is excluded or degraded, the preview says so explicitly. It does not display raw Provider messages or hidden model reasoning. The local-host Provider still receives the internally assembled messages for that generation; the API returns only the context preview or generated draft needed by the app.
 
-Cancelling a generation aborts the local request and propagates the abort to the Provider fetch. User cancellation and the 180-second Provider timeout are reported separately; a late result cannot write to the manuscript or Memory, and cancellation does not clear the author's current input or note. This cannot retract work already accepted by a configured endpoint or remove that endpoint's logs.
+Cancelling a generation aborts the local request and propagates the abort to the Provider fetch. Generation has no application-defined deadline; the author can cancel while waiting. A late result cannot write to the manuscript or Memory, and cancellation does not clear the author's current input or note. This cannot retract work already accepted by a configured endpoint or remove that endpoint's logs.
 
 The Book-level plot outline (`plotOutline`, shown as “剧情大纲”) is included in normal continuation and block-regeneration prompts as future guidance. Legacy Section `plan` and `note` fields may remain in an imported Book for read/export compatibility, but they are not inserted into Provider prompts. Book summaries and Canon facts are likewise stored/exportable Book data, not hidden prompt sources. In “前文选择”, a checkbox loads or removes an earlier Section, while the rest of its row expands an inline synopsis editor. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; generating a synopsis changes only the local draft until the user confirms save-and-load. The current Memory and its previous snapshot are persisted with the Book and included in complete JSON export.
 
@@ -56,7 +56,8 @@ Model-generated memory is never inserted into ordinary continuation until it is 
 
 ## Current limits
 
-- A Book `PUT` request is limited to 1 MB, and autosave currently writes the whole Book. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); it is not implemented.
+- API requests, Provider responses, and Section Memory have no application-defined size or item-count caps. Autosave currently writes the whole Book, so large Books require more memory and I/O. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); it is not implemented.
+- Context estimates are advisory and do not block generation. Model context and output settings accept positive safe integers; the configured Provider determines its actual supported limits.
 - Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books.
 - The local host and Provider endpoint are not a production deployment. Browser, operating-system, or configured endpoint compromise is outside this demo's guarantees.
 - There is no cloud storage, account sync, multi-user collaboration, RAG, embeddings, or desktop wrapper.

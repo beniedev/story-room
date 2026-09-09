@@ -22,9 +22,6 @@ import type {
   WorldRule,
 } from '../src/types.ts';
 import {
-  MAX_SECTION_MEMORY_ITEM_LENGTH,
-  MAX_SECTION_MEMORY_ITEMS,
-  MAX_SECTION_MEMORY_TEXT_LENGTH,
   normalizeBook,
 } from '../src/sectionMemory.ts';
 import { createExampleBooks, createLegacyFixtureBook, upgradeExampleBookContent } from '../src/fixtures.ts';
@@ -95,18 +92,15 @@ const requiredArray = (value: unknown, label: string): unknown[] => {
   return value;
 };
 
-const validateMemoryText = (value: unknown, label: string, maxLength: number) => {
-  if (typeof value !== 'string' || value.length > maxLength) {
-    throw new StoreInputError(`${label}必须是 ${maxLength} 字以内的文本。`);
+const validateMemoryText = (value: unknown, label: string) => {
+  if (typeof value !== 'string') {
+    throw new StoreInputError(`${label}必须是文本。`);
   }
 };
 
 const validateMemoryTextList = (value: unknown, label: string) => {
   const items = requiredArray(value, label);
-  if (items.length > MAX_SECTION_MEMORY_ITEMS) {
-    throw new StoreInputError(`${label}必须是最多 ${MAX_SECTION_MEMORY_ITEMS} 项的文本数组。`);
-  }
-  for (const item of items) validateMemoryText(item, `${label}元素`, MAX_SECTION_MEMORY_ITEM_LENGTH);
+  for (const item of items) validateMemoryText(item, `${label}元素`);
 };
 
 const validateSectionPlan = (value: unknown) => {
@@ -134,7 +128,7 @@ const validateSectionMemory = (value: unknown, label: string) => {
   if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.prototype.hasOwnProperty.call(value, field))) {
     throw new StoreInputError(`${label}字段不完整或包含未知字段。`);
   }
-  validateMemoryText(value.synopsis, `${label} synopsis`, MAX_SECTION_MEMORY_TEXT_LENGTH);
+  validateMemoryText(value.synopsis, `${label} synopsis`);
   validateMemoryTextList(value.beats, `${label} beats`);
   validateMemoryTextList(value.continuityFacts, `${label} continuityFacts`);
   validateMemoryTextList(value.characterStateChanges, `${label} characterStateChanges`);
@@ -149,7 +143,7 @@ const validateSectionMemory = (value: unknown, label: string) => {
     && value.provenance !== 'model-confirmed' && value.provenance !== 'model-edited') {
     throw new StoreInputError(`${label} provenance 无效。`);
   }
-  validateMemoryText(value.updatedAt, `${label} updatedAt`, 128);
+  validateMemoryText(value.updatedAt, `${label} updatedAt`);
 };
 
 const validateSource = (value: unknown, label: string) => {

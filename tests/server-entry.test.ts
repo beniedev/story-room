@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
+import { StoryStore } from '../server/store';
+import type { Book } from '../src/types';
 import { createSectionMemory } from '../src/sectionMemory';
 import { formatUrlHost } from '../vite.config';
 
@@ -87,42 +89,85 @@ describe('local server entry', () => {
     }
   });
 
-  it('accepts a body just below 1 MB and rejects a larger body clearly', async () => {
-    const storyStore = {
-      saveBook: vi.fn(async (book: unknown) => book),
-    };
-    const server = createStoryServer(storyStore as never);
+  it('saves, renames, and adds sections to a large Book without a fixed body limit', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'story-large-book-'));
+    const storyStore = new StoryStore(root);
+    const server = createStoryServer(storyStore);
 
     try {
+      let book = await storyStore.createBook('Synthetic large Book');
+      const manuscript = '合成正文。'.repeat(150_000);
+      book.chapters[0].sections[0].content = manuscript;
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
-      const origin = `http://127.0.0.1:${address.port}`;
-      const nearLimit = JSON.stringify({ id: 'body-limit-book', filler: 'x'.repeat(999_000) });
-      const accepted = await fetch(`${origin}/api/books/body-limit-book`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: nearLimit,
-      });
-      expect(accepted.status).toBe(200);
-      await accepted.text();
-      expect(storyStore.saveBook).toHaveBeenCalledOnce();
+      const url = `http://127.0.0.1:${address.port}/api/books/${book.id}`;
+      const saveAndReload = async () => {
+        const body = JSON.stringify(book);
+        expect(Buffer.byteLength(body)).toBeGreaterThan(2_000_000);
+        const saved = await fetch(url, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body,
+        });
+        const expected = await saved.json() as Book;
+        expect(saved.status).toBe(200);
+        const reloaded = await fetch(url);
+        expect(reloaded.status).toBe(200);
+        book = await reloaded.json() as Book;
+        expect(book).toEqual(expected);
+        expect(book.chapters[0].sections[0].content).toBe(manuscript);
+      };
 
-      const overLimit = JSON.stringify({ id: 'body-limit-book', filler: 'x'.repeat(1_000_000) });
-      const rejected = await fetch(`${origin}/api/books/body-limit-book`, {
-        method: 'PUT',
+      book.chapters[0].sections[0].memory = createSectionMemory({
+        synopsis: '摘要'.repeat(40_000),
+        beats: Array.from({ length: 40 }, () => '节拍'.repeat(1_001)),
+        continuityFacts: [],
+        characterStateChanges: [],
+        foreshadowingCandidates: [],
+      }, manuscript);
+      await saveAndReload();
+      expect(book.chapters[0].sections[0].memory?.beats).toHaveLength(40);
+      book.title = 'Renamed large Book';
+      book.chapters[0].title = 'Renamed chapter';
+      book.chapters[0].sections[0].title = 'Renamed section';
+      await saveAndReload();
+      expect(book.title).toBe('Renamed large Book');
+      expect(book.chapters[0].title).toBe('Renamed chapter');
+      expect(book.chapters[0].sections[0].title).toBe('Renamed section');
+
+      book.chapters[0].sections.push({ id: 'new-section', title: 'New section', content: '' });
+      await saveAndReload();
+      expect(book.chapters[0].sections).toHaveLength(2);
+      expect(book.chapters[0].sections[1]).toMatchObject({ id: 'new-section', title: 'New section', content: '' });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts large author inputs without a fixed request-body cap', async () => {
+    const instruction = '合成指导。'.repeat(150_000);
+    const storyStore = { createBook: vi.fn(async (title: string) => ({ title })) };
+    const server = createStoryServer(storyStore as never);
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/books`, {
+        method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: overLimit,
+        body: JSON.stringify({ title: instruction }),
       });
-      expect(rejected.status).toBe(413);
-      expect(await rejected.text()).toContain('1 MB');
-      expect(storyStore.saveBook).toHaveBeenCalledOnce();
+      const result = await response.json() as { title: string };
+      expect(response.status).toBe(201);
+      expect(result.title).toBe(instruction);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
 
-  it('passes the structured context messages through the generation route', async () => {
+  it('passes full context to generation even when the estimate exceeds the configured budget', async () => {
     const book = {
       id: 'book-a',
       title: 'Synthetic Book',
@@ -144,7 +189,7 @@ describe('local server entry', () => {
       loadBook: vi.fn(async () => book),
     };
     const providerStore = {
-      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      getContextLimits: vi.fn(async () => ({ maxContext: 100, maxOutput: 10 })),
       generate: vi.fn(async (_profileId: string, messages: unknown[]) => {
         expect(messages).toHaveLength(2);
         expect(messages.map((message) => (message as { role: string }).role)).toEqual(['system', 'user']);

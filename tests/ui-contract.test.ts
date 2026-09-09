@@ -384,8 +384,7 @@ describe('writing UI contract', () => {
     expect(source).toContain("mode: 'summary', reason: 'manual'");
     expect(source).toContain('parseSectionMemoryDraft(result.draft)');
     expect(source).toContain('commitSectionMemoryDraft(source.section, draft, provenance)');
-    expect(source).toContain('assertGenerationBudget(saved, generation)');
-    expect(source).toContain('上下文预算不足：约超出');
+    expect(source).not.toContain('assertGenerationBudget(');
     expect(source).not.toContain('contextDialog');
     expect(styles).toContain('.context-summary-generate');
   });

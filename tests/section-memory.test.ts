@@ -52,7 +52,8 @@ describe('section memory helper', () => {
     expect(() => parseSectionMemoryDraft('not json')).toThrow('有效 JSON');
     expect(() => parseSectionMemoryDraft(JSON.stringify({ ...draft, extra: true }))).toThrow('严格匹配');
     expect(() => parseSectionMemoryDraft(JSON.stringify({ ...draft, beats: ['ok', 1] }))).toThrow('文本');
-    expect(() => parseSectionMemoryDraft(JSON.stringify({ ...draft, synopsis: 'x'.repeat(4_001) }))).toThrow('4000');
+    const largeDraft = { ...draft, synopsis: '摘要'.repeat(40_000), beats: Array.from({ length: 40 }, () => '节拍'.repeat(1_001)) };
+    expect(parseSectionMemoryDraft(serializeSectionMemoryDraft(largeDraft))).toEqual(largeDraft);
   });
 
   it('gates freshness by content hash and rejects model drafts as usable memory', () => {

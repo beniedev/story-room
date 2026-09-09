@@ -4,7 +4,6 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  assertContextBudget,
   assertGenerationExecutable,
   buildContextPlan,
   buildContextPreview,
@@ -25,7 +24,6 @@ import {
 
 const host = process.env.STORY_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
-const MAX_BODY_BYTES = 1_000_000;
 const generationKinds = new Set(['continue-section', 'regenerate-block', 'rewrite-selection', 'summarize-section']);
 
 type HostAuthority = {
@@ -93,15 +91,6 @@ const contentTypes: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-class PayloadTooLargeError extends Error {
-  readonly statusCode = 413;
-
-  constructor() {
-    super('请求内容超过 DEMO 的 1 MB 限制。');
-    this.name = 'PayloadTooLargeError';
-  }
-}
-
 const sendJson = (response: ServerResponse, status: number, value: unknown) => {
   const body = JSON.stringify(value);
   response.writeHead(status, {
@@ -118,11 +107,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
 
 const readBody = async (request: IncomingMessage): Promise<unknown> => {
   const chunks: Buffer[] = [];
-  let length = 0;
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk);
-    length += buffer.length;
-    if (length > MAX_BODY_BYTES) throw new PayloadTooLargeError();
     chunks.push(buffer);
   }
   try {
@@ -264,6 +250,7 @@ export const createStoryServer = (
         return sendJson(response, 200, await storyStore.loadBook(bookMatch[1]));
       }
       if (bookMatch && request.method === 'PUT') {
+        // Every edit saves the whole Book, so manuscript growth must not block saving.
         const body = await readBody(request);
         if (!isRecord(body) || typeof body.id !== 'string') {
           throw new RequestValidationError('Book 数据无效。');
@@ -302,7 +289,6 @@ export const createStoryServer = (
           if (generationController.signal.aborted) return;
           const plan = buildContextPlan(book, body, limits);
           assertGenerationExecutable(body);
-          assertContextBudget(plan);
           const generated = body.providerProfileId
             ? await providerStore.generate(body.providerProfileId, plan.messages, generationController.signal)
             : null;
@@ -337,9 +323,7 @@ export const createStoryServer = (
         || generationSignal?.aborted
         || response.destroyed
         || response.writableEnded) return;
-      const statusCode = error instanceof PayloadTooLargeError
-        ? error.statusCode
-        : error instanceof BookNotFoundError
+      const statusCode = error instanceof BookNotFoundError
           ? error.statusCode
           : error instanceof RequestValidationError || error instanceof StoreInputError
             ? error.statusCode
@@ -348,8 +332,7 @@ export const createStoryServer = (
             : error instanceof ProviderInputError || error instanceof ProviderConnectionError
               ? error.statusCode
               : 500;
-      const message = error instanceof PayloadTooLargeError
-        || error instanceof BookNotFoundError
+      const message = error instanceof BookNotFoundError
         || error instanceof RequestValidationError
         || error instanceof StoreInputError
         || error instanceof ProviderResponseError
@@ -369,9 +352,7 @@ const isEntryPoint = process.argv[1]
 
 if (isEntryPoint) {
   const staticRoot = process.env.STORY_STATIC_DIR ?? path.resolve('dist-local');
-  const providerStore = new ProviderStore(undefined, {
-    allowPrivateNetwork: process.env.STORY_ALLOW_PRIVATE_PROVIDERS === '1',
-  });
+  const providerStore = new ProviderStore();
   const server = createStoryServer(undefined, providerStore, staticRoot);
   server.listen(port, host, () => {
     console.log(`Story host ready at http://${formatUrlHost(host)}:${port}`);

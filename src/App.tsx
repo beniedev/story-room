@@ -15,8 +15,6 @@ import { api } from './api';
 import { createBookExport, type BookExportFormat } from './bookExport';
 import {
   buildContextPlan as composeContextPlan,
-  hasManualReference,
-  largestContextItems,
 } from './contextPlan';
 import {
   applyRegenerateBlockOutcome,
@@ -539,20 +537,6 @@ function App() {
     }
   };
 
-  const assertGenerationBudget = (saved: Book, request: GenerationRequest) => {
-    const { bookId: _bookId, ...planRequest } = request;
-    const plan = composeContextPlan(saved, planRequest, activeProviderProfile ? {
-      maxContext: activeProviderProfile.maxContext,
-      maxOutput: activeProviderProfile.maxOutput,
-    } : undefined);
-    if (!plan.budget.overflow) return plan;
-    const largest = largestContextItems(plan.included)
-      .map((item) => `${item.title}（约 ${item.estimatedTokens.toLocaleString()} tokens）`)
-      .join('、');
-    const label = hasManualReference(plan.included) ? '手选前文' : '内容';
-    throw new Error(`上下文预算不足：约超出 ${plan.budget.overflowTokens.toLocaleString()} tokens。占用较大的${label}：${largest || '当前输入'}。`);
-  };
-
   const withBusy = async (action: () => Promise<void>) => {
     setBusy(true);
     try {
@@ -623,7 +607,6 @@ function App() {
       instruction: inputSnapshot,
       generationKind: 'continue-section',
     } satisfies GenerationRequest;
-    assertGenerationBudget(saved, generation);
     const result = await runGeneration(generation, '正在生成当前小节…');
     const additions: SectionBlock[] = [
       ...(inputSnapshot.trim()
@@ -692,7 +675,6 @@ function App() {
         selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
         targetBlockId: blockId,
       });
-      assertGenerationBudget(saved, generation);
       const result = await runGeneration(generation, '正在重新生成所选正文片段…');
       changeBook((current) => ({
         ...current,
@@ -930,7 +912,6 @@ function App() {
         instruction: '',
         generationKind: 'summarize-section',
       } satisfies GenerationRequest;
-      assertGenerationBudget(saved, generation);
       const result = await runGeneration(generation, '正在生成前文梗概…');
       const draft = parseSectionMemoryDraft(result.draft);
       setStatus(`已生成「${source.section.title}」的梗概草稿，请确认保存。`);

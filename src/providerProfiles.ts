@@ -9,8 +9,8 @@ export interface ProviderProfile {
 }
 
 export const PROVIDER_PROFILES_STORAGE_KEY = 'story-native:provider-profiles';
-export const MAX_PROVIDER_CONTEXT_TOKENS = 10_000_000;
-export const MAX_PROVIDER_OUTPUT_TOKENS = 1_000_000;
+export const MAX_PROVIDER_CONTEXT_TOKENS = Number.MAX_SAFE_INTEGER;
+export const MAX_PROVIDER_OUTPUT_TOKENS = Number.MAX_SAFE_INTEGER;
 
 export const isValidProviderLimit = (value: number, maximum: number) => (
   Number.isSafeInteger(value) && value > 0 && value <= maximum

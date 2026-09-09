@@ -24,10 +24,6 @@ type StoredProviderProfile = ProviderProfile & {
 
 type ProviderConfig = { profiles: StoredProviderProfile[] };
 
-export type ProviderStoreOptions = {
-  allowPrivateNetwork?: boolean;
-};
-
 export class ProviderInputError extends Error {
   readonly statusCode = 400;
 
@@ -55,18 +51,6 @@ export class ProviderCancelledError extends ProviderConnectionError {
     this.name = 'ProviderCancelledError';
   }
 }
-
-/** The Provider did not finish within the generation timeout. */
-export class ProviderTimeoutError extends ProviderConnectionError {
-  readonly statusCode = 504;
-
-  constructor() {
-    super('本机 Provider 调用超时。');
-    this.name = 'ProviderTimeoutError';
-  }
-}
-
-export const MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024;
 
 type ParsedProviderUrl = {
   url: URL;
@@ -239,94 +223,18 @@ const resolvedAddresses = async (url: URL) => {
   }
 };
 
-const assertAllowedDestination = async (parsed: ParsedProviderUrl, allowPrivateNetwork: boolean) => {
+const assertAllowedDestination = async (parsed: ParsedProviderUrl) => {
   const policies = (await resolvedAddresses(parsed.url)).map(addressPolicy);
   if (policies.some((policy) => !policy)) throw new ProviderInputError('连接目标被本机安全策略拒绝。');
   const resolved = policies as AddressPolicy[];
   if (resolved.some((policy) => policy.linkLocal || policy.metadata)) {
     throw new ProviderInputError('连接目标被本机安全策略拒绝。');
   }
-  const allLoopback = resolved.every((policy) => policy.loopback);
-  if (parsed.url.protocol === 'http:') {
-    if (!allLoopback) throw new ProviderInputError('非回环 Provider 只允许使用 HTTPS。');
-    return;
-  }
-  const hasPrivateNetwork = resolved.some((policy) => policy.privateNetwork || policy.loopback);
-  if (hasPrivateNetwork && !allowPrivateNetwork) {
-    throw new ProviderInputError('私有网络 Provider 需要显式启用。');
-  }
 };
 
-const responseContentLength = (response: Response) => {
+const readProviderJson = async (response: Response): Promise<unknown> => {
   try {
-    const value = response.headers?.get('content-length');
-    if (!value) return null;
-    const length = Number(value);
-    return Number.isSafeInteger(length) && length >= 0 ? length : null;
-  } catch {
-    return null;
-  }
-};
-
-const oversizedResponse = () => new ProviderConnectionError('Provider 响应过大。');
-
-const readJsonWithinLimit = async (response: Response): Promise<unknown> => {
-  const contentLength = responseContentLength(response);
-  if (contentLength !== null && contentLength > MAX_PROVIDER_RESPONSE_BYTES) throw oversizedResponse();
-
-  let payloadText: string;
-  if (response.body?.getReader) {
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-        total += chunk.byteLength;
-        if (total > MAX_PROVIDER_RESPONSE_BYTES) {
-          await reader.cancel().catch(() => undefined);
-          throw oversizedResponse();
-        }
-        chunks.push(chunk);
-      }
-    } catch (error) {
-      if (error instanceof ProviderConnectionError) throw error;
-      throw new ProviderConnectionError('Provider 响应读取失败。');
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    payloadText = new TextDecoder().decode(bytes);
-  } else if (typeof response.arrayBuffer === 'function') {
-    try {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > MAX_PROVIDER_RESPONSE_BYTES) throw oversizedResponse();
-      payloadText = new TextDecoder().decode(bytes);
-    } catch (error) {
-      if (error instanceof ProviderConnectionError) throw error;
-      throw new ProviderConnectionError('Provider 响应读取失败。');
-    }
-  } else {
-    try {
-      const payload = await response.json();
-      const serialized = JSON.stringify(payload);
-      if (serialized && new TextEncoder().encode(serialized).byteLength > MAX_PROVIDER_RESPONSE_BYTES) {
-        throw oversizedResponse();
-      }
-      return payload;
-    } catch (error) {
-      if (error instanceof ProviderConnectionError) throw error;
-      throw new ProviderConnectionError('Provider 响应读取失败。');
-    }
-  }
-
-  try {
-    return JSON.parse(payloadText) as unknown;
+    return await response.json();
   } catch {
     throw new ProviderConnectionError('Provider 返回的数据无效。');
   }
@@ -349,70 +257,13 @@ const readErrorStatus = (status: number) => status === 401 || status === 403
   ? 'Provider 拒绝了本机凭据。'
   : `Provider 返回 HTTP ${status}。`;
 
-const GENERATION_TIMEOUT_MS = 180_000;
-
-type ProviderAbortCause = 'external' | 'timeout';
-
-type LinkedProviderAbort = {
-  signal: AbortSignal;
-  cause: () => ProviderAbortCause | undefined;
-  cleanup: () => void;
-};
-
-/**
- * Combine the request lifetime with the existing Provider timeout while
- * retaining which one won the race. The listener and timer are always
- * removed by the generation finally block.
- */
-const linkProviderAbort = (externalSignal?: AbortSignal): LinkedProviderAbort => {
-  const controller = new AbortController();
-  let abortCause: ProviderAbortCause | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  const abortFromExternal = () => {
-    if (abortCause) return;
-    abortCause = 'external';
-    controller.abort();
-  };
-
-  if (externalSignal?.aborted) {
-    abortFromExternal();
-  } else if (externalSignal) {
-    externalSignal.addEventListener('abort', abortFromExternal, { once: true });
-  }
-
-  if (!abortCause) {
-    timeout = setTimeout(() => {
-      if (abortCause) return;
-      abortCause = 'timeout';
-      controller.abort();
-    }, GENERATION_TIMEOUT_MS);
-  }
-
-  return {
-    signal: controller.signal,
-    cause: () => abortCause,
-    cleanup: () => {
-      if (timeout !== undefined) clearTimeout(timeout);
-      externalSignal?.removeEventListener('abort', abortFromExternal);
-    },
-  };
-};
-
-const errorForAbortCause = (cause: ProviderAbortCause) => (
-  cause === 'external' ? new ProviderCancelledError() : new ProviderTimeoutError()
-);
-
 export class ProviderStore {
   readonly file: string;
-  readonly allowPrivateNetwork: boolean;
 
   constructor(
     file = process.env.STORY_PROVIDER_CONFIG ?? path.resolve('.data/private/providers.json'),
-    options: ProviderStoreOptions = {},
   ) {
     this.file = file;
-    this.allowPrivateNetwork = options.allowPrivateNetwork === true;
   }
 
   private async readConfig(): Promise<ProviderConfig> {
@@ -491,7 +342,7 @@ export class ProviderStore {
     const candidate = await this.credentials(profile, apiKey);
     if (candidate.kind === 'fake') return { ok: true, modelId: candidate.modelId };
     const parsed = parseProviderUrl(candidate.baseUrl);
-    await assertAllowedDestination(parsed, this.allowPrivateNetwork);
+    await assertAllowedDestination(parsed);
     let response: Response;
     try {
       response = await fetch(endpoint(parsed.url, 'models'), {
@@ -506,7 +357,7 @@ export class ProviderStore {
       throw new ProviderConnectionError('Provider 重定向被拒绝。');
     }
     if (!response.ok) throw new ProviderConnectionError(readErrorStatus(response.status));
-    const payload = await readJsonWithinLimit(response) as { data?: Array<{ id?: unknown }> };
+    const payload = await readProviderJson(response) as { data?: Array<{ id?: unknown }> };
     const ids = Array.isArray(payload.data)
       ? payload.data.map((item) => item?.id).filter((id): id is string => typeof id === 'string')
       : [];
@@ -538,10 +389,10 @@ export class ProviderStore {
       ...(profile.verbosity ? { verbosity: profile.verbosity } : {}),
     };
     const parsed = parseProviderUrl(profile.baseUrl);
-    await assertAllowedDestination(parsed, this.allowPrivateNetwork);
+    await assertAllowedDestination(parsed);
     if (externalSignal?.aborted) throw new ProviderCancelledError();
 
-    const linkedAbort = linkProviderAbort(externalSignal);
+    const signal = externalSignal ?? new AbortController().signal;
     try {
       let response: Response;
       try {
@@ -554,15 +405,13 @@ export class ProviderStore {
           },
           body: JSON.stringify(body),
           redirect: 'manual',
-          signal: linkedAbort.signal,
+          signal,
         });
       } catch {
-        const cause = linkedAbort.cause();
-        if (cause) throw errorForAbortCause(cause);
+        if (signal.aborted) throw new ProviderCancelledError();
         throw new ProviderConnectionError('本机 Provider 调用失败。');
       }
-      const causeAfterFetch = linkedAbort.cause();
-      if (causeAfterFetch) throw errorForAbortCause(causeAfterFetch);
+      if (signal.aborted) throw new ProviderCancelledError();
       if (response.status >= 300 && response.status < 400) {
         throw new ProviderConnectionError('Provider 重定向被拒绝。');
       }
@@ -572,14 +421,12 @@ export class ProviderStore {
         choices?: Array<{ message?: { content?: unknown } }>;
       };
       try {
-        payload = await readJsonWithinLimit(response) as typeof payload;
+        payload = await readProviderJson(response) as typeof payload;
       } catch (error) {
-        const cause = linkedAbort.cause();
-        if (cause) throw errorForAbortCause(cause);
+        if (signal.aborted) throw new ProviderCancelledError();
         throw error;
       }
-      const causeAfterBody = linkedAbort.cause();
-      if (causeAfterBody) throw errorForAbortCause(causeAfterBody);
+      if (signal.aborted) throw new ProviderCancelledError();
       const content = payload.choices?.[0]?.message?.content;
       if (typeof content === 'string' && content.trim()) return content.trim();
       if (Array.isArray(content)) {
@@ -590,12 +437,9 @@ export class ProviderStore {
       }
       throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
     } catch (error) {
-      const cause = linkedAbort.cause();
-      if (cause) throw errorForAbortCause(cause);
+      if (signal.aborted) throw new ProviderCancelledError();
       if (error instanceof ProviderInputError || error instanceof ProviderConnectionError) throw error;
       throw new ProviderConnectionError('本机 Provider 调用失败。');
-    } finally {
-      linkedAbort.cleanup();
     }
   }
 }

@@ -16,7 +16,7 @@ The important assets are:
 
 The local host defaults to `127.0.0.1` and may bind to an explicitly configured LAN or private-network address. It has no access-password, token, or Host allowlist, so any device that can reach that address can use it. State-changing requests with an `Origin` header must match the request Host. This is a deployment choice, not a production service or a guarantee of network security.
 
-Provider requests validate the URL and all DNS results before each request. Public HTTP is rejected, HTTPS private-network access requires `STORY_ALLOW_PRIVATE_PROVIDERS=1`, metadata and link-local targets remain rejected, and redirects are not followed. Local-host Provider Keys are stored as plaintext in the configured Provider file; POSIX writes use mode `0600`, while Windows permissions are not treated as an equivalent credential store.
+Provider requests validate the URL and all DNS results before each request. User-configured HTTP and HTTPS endpoints are accepted on public and private networks without an extra opt-in flag. Metadata and link-local targets remain rejected, and redirects are not followed. Local-host Provider Keys are stored as plaintext in the configured Provider file; POSIX writes use mode `0600`, while Windows permissions are not treated as an equivalent credential store.
 
 The hosted/device build keeps Books in unencrypted browser `localStorage`. Same-origin scripts can read that storage, and clearing site data removes the device-local library. A hosted/device Provider test sends its temporary key directly to the entered URL; the page can read it while it is running and the app does not persist it.
 

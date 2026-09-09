@@ -8,8 +8,6 @@ import type {
 import {
   buildContextPlan as composeContextPlan,
   ContextPlanInputError,
-  hasManualReference,
-  largestContextItems,
   toContextPlanPreview,
 } from '../src/contextPlan.ts';
 import {
@@ -68,18 +66,6 @@ export function normalizeSectionMemoryResponse(draft: string): string {
   }
 }
 
-export function assertContextBudget(plan: ContextPlan) {
-  if (plan.budget.overflow) {
-    const largest = largestContextItems(plan.included)
-      .map((item) => `${item.title}（约 ${item.estimatedTokens.toLocaleString()} tokens）`)
-      .join('、');
-    const label = hasManualReference(plan.included) ? '手选前文' : '内容';
-    throw new RequestValidationError(
-      `当前上下文约超出 ${plan.budget.overflowTokens} tokens；占用最大的${label}：${largest || '无'}。请缩短输入或调整 Prompt 材料。`,
-    );
-  }
-}
-
 export function fakeGenerate(
   book: Book,
   request: Omit<GenerationRequest, 'bookId'>,
@@ -87,7 +73,6 @@ export function fakeGenerate(
 ): { plan: ContextPlan; draft: string } {
   const plan = buildContextPlan(book, request, limits);
   assertGenerationExecutable(request);
-  assertContextBudget(plan);
   if (request.generationKind === 'summarize-section') {
     return {
       plan,

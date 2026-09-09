@@ -142,7 +142,7 @@ export function ContextCompositionDrawer({
         <div className="prompt-composition-content">
           {error ? <p className="context-preview-error" role="alert">{error}</p> : plan && <div className="prompt-composition-chart">
             {plan.budget.overflow && <p className="context-preview-error" role="alert">
-              上下文预算不足：约超出 {plan.budget.overflowTokens.toLocaleString()} tokens。占用较大的{largestItemsLabel}：{largestItems.map((item) => `${item.title}（约 ${item.estimatedTokens.toLocaleString()} tokens）`).join('、') || '当前输入'}。
+              上下文预算不足：约超出 {plan.budget.overflowTokens.toLocaleString()} tokens，仅供参考，仍可发送。占用较大的{largestItemsLabel}：{largestItems.map((item) => `${item.title}（约 ${item.estimatedTokens.toLocaleString()} tokens）`).join('、') || '当前输入'}。
             </p>}
             <div className="prompt-composition-map">
               <div className="prompt-proportion-bar" aria-hidden="true">

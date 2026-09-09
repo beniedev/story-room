@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  MAX_PROVIDER_RESPONSE_BYTES,
   ProviderCancelledError,
   ProviderStore,
-  ProviderTimeoutError,
 } from '../server/providers.ts';
 import {
   MAX_PROVIDER_CONTEXT_TOKENS,
@@ -46,10 +44,10 @@ const profileAt = (baseUrl: string, overrides: Partial<ProviderProfile> = {}): P
   ...overrides,
 });
 
-const makeStore = async (options?: ConstructorParameters<typeof ProviderStore>[1]) => {
+const makeStore = async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'story-provider-'));
   temporaryRoots.push(root);
-  return new ProviderStore(path.join(root, 'providers.json'), options);
+  return new ProviderStore(path.join(root, 'providers.json'));
 };
 
 afterEach(async () => {
@@ -187,7 +185,7 @@ describe('local provider store', () => {
     expect(providerSignal.aborted).toBe(true);
   });
 
-  it('reports Provider timeout separately and cleans up its timer', async () => {
+  it('lets long generations continue until the caller cancels', async () => {
     vi.useFakeTimers();
     try {
       const store = await makeStore();
@@ -206,10 +204,13 @@ describe('local provider store', () => {
         });
       });
 
-      const pending = store.generate(profile.id, [{ role: 'user', content: 'synthetic request', blockIds: [] }]);
+      const controller = new AbortController();
+      const pending = store.generate(profile.id, [{ role: 'user', content: 'synthetic request', blockIds: [] }], controller.signal);
       const providerSignal = await fetchStarted;
-      const result = expect(pending).rejects.toBeInstanceOf(ProviderTimeoutError);
-      await vi.advanceTimersByTimeAsync(180_000);
+      const result = expect(pending).rejects.toBeInstanceOf(ProviderCancelledError);
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(providerSignal.aborted).toBe(false);
+      controller.abort();
       await result;
 
       expect(providerSignal.aborted).toBe(true);
@@ -273,16 +274,13 @@ describe('local provider store', () => {
     expect(await readFile(store.file, 'utf8')).not.toContain('saved-test-key');
   });
 
-  it('rejects credentials, metadata, link-local, private, and public HTTP targets', async () => {
+  it('rejects embedded credentials and metadata targets', async () => {
     const store = await makeStore();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const blocked = [
       'https://user:password@example.com/v1',
       'https://169.254.169.254/v1',
       'https://100.100.100.200/v1',
-      'https://192.168.1.10/v1',
-      'http://192.168.1.10/v1',
-      'http://8.8.8.8/v1',
     ];
     for (const baseUrl of blocked) {
       await expect(store.test(profileAt(baseUrl), 'synthetic-test-key')).rejects.toThrow();
@@ -290,26 +288,22 @@ describe('local provider store', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('validates every DNS result and supports explicit private-network opt-in', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: [{ id: 'test-model' }] }), {
-        headers: { 'content-type': 'application/json' },
-      }),
+  it('allows configured HTTP and private-network providers without an opt-in flag', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ data: [{ id: 'test-model' }] })),
     );
     const store = await makeStore();
+    for (const baseUrl of ['https://192.168.1.10/v1', 'http://192.168.1.10/v1', 'http://8.8.8.8/v1',
+      'https://[fd12::10]/v1', 'http://[::ffff:192.168.1.10]/v1']) {
+      await expect(store.test(profileAt(baseUrl), 'synthetic-test-key')).resolves.toEqual({ ok: true, modelId: 'test-model' });
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
     mockedLookup.mockResolvedValue([
       { address: '8.8.8.8', family: 4 },
-      { address: '192.168.1.10', family: 4 },
+      { address: '169.254.169.254', family: 4 },
     ] as never);
-    await expect(store.test(profileAt('https://provider.synthetic/v1'), 'synthetic-test-key'))
-      .rejects.toThrow();
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    mockedLookup.mockResolvedValue([{ address: '192.168.1.10', family: 4 }] as never);
-    const optedInStore = await makeStore({ allowPrivateNetwork: true });
-    expect(await optedInStore.test(profileAt('https://provider.synthetic/v1'), 'synthetic-test-key'))
-      .toEqual({ ok: true, modelId: 'test-model' });
-    expect(fetchSpy).toHaveBeenCalledOnce();
+    await expect(store.test(profileAt('https://provider.synthetic/v1'), 'synthetic-test-key')).rejects.toThrow();
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
   it('allows public HTTPS and fails closed when DNS resolution fails', async () => {
@@ -333,7 +327,7 @@ describe('local provider store', () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it('allows HTTP localhost only when every DNS result is loopback', async () => {
+  it('allows HTTP endpoints while checking every DNS result', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: [{ id: 'test-model' }] }), {
         headers: { 'content-type': 'application/json' },
@@ -352,7 +346,7 @@ describe('local provider store', () => {
     fetchSpy.mockClear();
     mockedLookup.mockResolvedValue([
       { address: '127.0.0.1', family: 4 },
-      { address: '8.8.8.8', family: 4 },
+      { address: '169.254.169.254', family: 4 },
     ] as never);
     await expect(store.test(profileAt('http://localhost/v1'), 'localhost-test-key')).rejects.toThrow();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -368,8 +362,6 @@ describe('local provider store', () => {
     const blocked = [
       'https://[fe80::1]/v1',
       'https://[fd00:ec2::254]/v1',
-      'https://[fd12::10]/v1',
-      'https://[::ffff:192.168.1.10]/v1',
     ];
     for (const baseUrl of blocked) {
       await expect(store.test(profileAt(baseUrl), 'ipv6-test-key')).rejects.toThrow();
@@ -402,20 +394,19 @@ describe('local provider store', () => {
     expect(secondRequests).toBe(0);
   });
 
-  it('rejects provider responses over the fixed size limit without exposing the key', async () => {
-    const hugeBody = `{"data":[{"id":"test-model"}]}${'x'.repeat(MAX_PROVIDER_RESPONSE_BYTES)}`;
-    const { baseUrl } = await startServer((_request, response) => {
+  it('accepts large model lists and generated text without truncation', async () => {
+    const content = '合成输出。'.repeat(150_000);
+    const { baseUrl } = await startServer((request, response) => {
       response.setHeader('content-type', 'application/json');
-      response.end(hugeBody);
+      response.end(JSON.stringify(request.url === '/v1/models'
+        ? { data: [{ id: 'test-model', description: content }] }
+        : { choices: [{ message: { content } }] }));
     });
     const store = await makeStore();
-    let error: unknown;
-    try {
-      await store.test(profileAt(baseUrl), 'oversized-test-key');
-    } catch (caught) {
-      error = caught;
-    }
-    expect(String(error)).not.toContain('oversized-test-key');
-    expect(String(error)).toContain('过大');
+    const profile = profileAt(baseUrl);
+    await store.save(profile, 'synthetic-test-key');
+    await expect(store.test(profile)).resolves.toEqual({ ok: true, modelId: 'test-model' });
+    await expect(store.generate(profile.id, [{ role: 'user', content: 'Continue.', blockIds: [] }]))
+      .resolves.toBe(content);
   });
 });

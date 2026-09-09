@@ -26,8 +26,8 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - Local-host saves publish content before `book.json`, reconcile managed files, and update the library only after cleanup succeeds.
 - Local-host full-Book browser caches are not used; legacy `story-native:book:` entries are cleared on host startup. Device-local storage remains unencrypted by design.
 - The host and development launcher default to loopback and accept an explicitly configured LAN or private-network bind address. They do not add a password/token gate or Host allowlist. State-changing requests with an Origin header require same-origin.
-- Provider URLs reject credentials, validate every resolved address before each request, require HTTPS except for loopback HTTP, keep private-network access opt-in, reject metadata/link-local targets, and use manual redirect handling.
-- Provider request and response bodies are bounded. Local-host Provider Keys are kept in a plaintext config file; POSIX writes use mode `0600`.
+- Provider URLs reject embedded credentials, validate every resolved address before each request, accept user-configured HTTP/HTTPS endpoints on public and private networks, reject metadata/link-local targets, and use manual redirect handling.
+- Local-host Provider Keys are kept in a plaintext config file; POSIX writes use mode `0600`.
 - The hosted/device Provider test sends a temporary key directly to the entered endpoint and does not persist it.
 
 ## Residual risks
@@ -36,7 +36,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - An attacker who controls the browser, a same-origin script, the operating system, the data directory, the local network, or the configured endpoint can read or alter data within that boundary.
 - Browser `localStorage` is not encrypted. Site-data clearing, browser profile loss, or user deletion can remove device-local Books. Exports are outside the app's control.
 - The local host uses HTTP and is not a hardened public service. Binding it to a reachable address does not add TLS, user accounts, rate limiting, or multi-user authorization.
-- Full Book `PUT` and autosave remain whole-Book operations with a 1 MB request limit. Incremental revisions are future work described in [`INCREMENTAL_SAVE.md`](INCREMENTAL_SAVE.md).
+- API request bodies, Provider responses, and Section Memory have no application-defined size caps. Full Book `PUT` and autosave remain whole-Book operations buffered in memory, so large inputs increase memory and I/O use. Generation has no application-defined deadline; callers can cancel it. Incremental revisions are future work described in [`INCREMENTAL_SAVE.md`](INCREMENTAL_SAVE.md).
 
 ## Out of scope
 

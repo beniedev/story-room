@@ -34,10 +34,15 @@ describe('provider profile persistence', () => {
   it.each([
     { maxContext: 1.5 },
     { maxOutput: 0 },
-    { maxOutput: Number.MAX_SAFE_INTEGER },
+    { maxOutput: Number.MAX_SAFE_INTEGER + 1 },
     { maxContext: '128000' },
   ])('rejects unsafe persisted token limits: %o', (override) => {
     const stored = JSON.stringify([{ ...defaultProviderProfiles[0], ...override }]);
     expect(readProviderProfiles(stored)).toEqual(defaultProviderProfiles);
+  });
+
+  it('preserves model limits beyond the former application caps', () => {
+    const profile = { ...defaultProviderProfiles[0], maxContext: 20_000_000, maxOutput: 2_000_000 };
+    expect(readProviderProfiles(JSON.stringify([profile]))).toEqual([profile]);
   });
 });
