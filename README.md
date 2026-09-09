@@ -11,7 +11,7 @@ The manuscript stays continuous prose rather than a chat transcript. Each Book s
 | Local host | Readable files under `.data/` by default; set `STORY_DATA_DIR` to choose another directory | Fake Provider or OpenAI-compatible Provider; generated context plans are sent to the configured endpoint |
 | Hosted/device | Unencrypted `localStorage` in the current browser and origin | Fake generation only; Provider tests send the current page's temporary key directly to the URL you enter |
 
-The hosted/device build does not upload or merge Books. A complete JSON export contains the manuscript, blocks, branches, Book settings, prompt-loading scope, and Section Memory data (including a previous snapshot when present). It also offers EPUB, Markdown, and TXT exports. Clearing site data removes the device-local library.
+The hosted/device build does not upload or merge Books. A complete JSON backup contains the manuscript, blocks, answer candidates and their adopted versions, branches, Book settings, prompt-loading scope, and Section Memory data (including a previous snapshot when present). EPUB, Markdown, and TXT exports contain the adopted manuscript, without unadopted candidates. Clearing site data removes the device-local library.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ Configured Providers may use HTTP or HTTPS on public, loopback, LAN, or private-
 
 ## Provider trust boundary
 
-The local host supports the deterministic Fake Provider and OpenAI-compatible endpoints. The context plan and prompt for a generation request are assembled internally and sent to the Provider endpoint configured by the user. `/api/context-plan` returns a compact preview; `/api/generate` returns the draft only. The writing UI does not display raw Provider messages. The local-host API Key is stored as plaintext in `.data/private/providers.json` by default; set `STORY_PROVIDER_CONFIG` to choose another file. On POSIX, the file is written with mode `0600`. Windows file permissions are not treated as an equivalent credential store. Changing a saved profile's endpoint or kind requires entering its key again.
+The local host supports the deterministic Fake Provider and OpenAI-compatible endpoints. The context plan and prompt for a generation request are assembled internally and sent to the Provider endpoint configured by the user. `/api/context-plan` returns a compact preview; `/api/generate` returns the draft and source-signature metadata for answer comparison, without echoing the internal messages. The writing UI does not display raw Provider messages. The local-host API Key is stored as plaintext in `.data/private/providers.json` by default; set `STORY_PROVIDER_CONFIG` to choose another file. On POSIX, the file is written with mode `0600`. Windows file permissions are not treated as an equivalent credential store. Changing a saved profile's endpoint or kind requires entering its key again.
 
 In hosted/device mode, generation remains Fake. A Provider test sends a temporary key directly to the URL in the current page; page scripts can read that input while the page is running, and the key is not persisted by the app.
 
@@ -43,6 +43,14 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 - Compact prompt preview with provenance, inclusion/exclusion reasons, and an approximate size budget
 - EPUB, Markdown, TXT, and complete JSON exports
 - Responsive controls for desktop and mobile-sized viewports
+
+### Generating and comparing answers
+
+After editing an already-sent user passage, use “再生成一版” on its answer to generate a new candidate from the latest adopted text before that answer. The old answer, its alternative candidates, and later passages are excluded from that request. If the manuscript ends with a user passage, “生成回答” beneath it generates an answer without duplicating the user passage or consuming the next draft in the bottom input.
+
+The candidate arrows only browse saved answers; they do not start generation. “采用这版” saves the chosen answer as the manuscript version. Until adoption succeeds, the previous adopted answer remains the source for subsequent generation, ordinary exports, statistics, and Section Memory freshness. Unadopted candidates remain in the Book and complete JSON backup. Adopting a different answer in the middle of a section preserves later passages, which may need a continuity review.
+
+Candidate source signatures distinguish changed writing material without storing another full prompt snapshot. Older answers whose source was not recorded are shown as unknown. Existing Books remain readable without a bulk migration, and candidate counts have no application-defined cap.
 
 ### Context planning
 

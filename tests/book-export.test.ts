@@ -93,4 +93,32 @@ describe('book exports', () => {
     expect(sectionDocument).not.toContain('Synthetic future plan');
     expect(sectionDocument).not.toContain('Synthetic memory synopsis');
   });
+
+  it('exports only adopted candidate content in reading formats and keeps all candidates in JSON', () => {
+    const candidateBook = structuredClone(book);
+    const section = candidateBook.chapters[0]?.sections[0];
+    if (!section) throw new Error('section fixture missing');
+    section.blocks = [
+      { id: 'candidate-user', kind: 'user', content: '用户输入' },
+      {
+        id: 'candidate-answer',
+        kind: 'assistant',
+        content: '采用答案',
+        adoptedCandidateId: 'candidate-1',
+        candidates: [
+          { id: 'candidate-1', content: '采用答案' },
+          { id: 'candidate-2', content: '未采用答案' },
+        ],
+      },
+    ];
+    section.content = '用户输入\n\n采用答案';
+
+    expect(renderBookMarkdown(candidateBook)).toContain('采用答案');
+    expect(renderBookMarkdown(candidateBook)).not.toContain('未采用答案');
+    expect(renderBookText(candidateBook)).not.toContain('未采用答案');
+    const epub = unzipSync(renderBookEpub(candidateBook));
+    const sectionDocument = strFromU8(epub[`EPUB/text/${section.id}.xhtml`]);
+    expect(sectionDocument).not.toContain('未采用答案');
+    expect(JSON.parse(String(createBookExport(candidateBook, 'json').content))).toEqual(candidateBook);
+  });
 });

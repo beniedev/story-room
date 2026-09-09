@@ -1,6 +1,6 @@
 export type GenerationMode = 'author' | 'character';
 export type ThemeName = 'paper' | 'manga' | 'gray' | 'purple';
-export type GenerationKind = 'continue-section' | 'regenerate-block' | 'rewrite-selection' | 'summarize-section';
+export type GenerationKind = 'continue-section' | 'regenerate-block' | 'respond-to-input' | 'rewrite-selection' | 'summarize-section';
 
 export interface PromptSource {
   id: string;
@@ -23,10 +23,18 @@ export interface Summary extends PromptSource {
   sourceSectionIds: string[];
 }
 
+export interface AnswerCandidate {
+  id: string;
+  content: string;
+  sourceSignature?: string;
+}
+
 export interface SectionBlock {
   id: string;
   kind: 'user' | 'assistant';
   content: string;
+  candidates?: AnswerCandidate[];
+  adoptedCandidateId?: string;
 }
 
 export type SectionContextReferenceMode = 'summary' | 'full' | 'both';
@@ -210,6 +218,7 @@ export interface ContextPlan {
   messages: PromptMessage[];
   estimatedTokens: number;
   budget: ContextBudget;
+  sourceSignature?: string;
 }
 
 export interface ContextPreviewItem {
@@ -248,4 +257,5 @@ export interface GenerationRequest {
 
 export interface GenerationResult {
   draft: string;
+  sourceSignature?: string;
 }

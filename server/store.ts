@@ -163,10 +163,12 @@ const validateSection = (value: unknown) => {
   if (!isRecord(value)) throw new StoreInputError('Section 数据无效。');
   validId(requiredString(value.id, 'Section ID'));
   requiredString(value.title, 'Section 标题');
-  requiredString(value.content, 'Section 正文');
+  const sectionContent = requiredString(value.content, 'Section 正文');
   if (value.note !== undefined) requiredString(value.note, 'Section 注释');
   if (value.blocks !== undefined) {
     const blockIds = new Set<string>();
+    const activeContents: string[] = [];
+    let hasCandidateMetadata = false;
     for (const block of requiredArray(value.blocks, 'Section blocks')) {
       if (!isRecord(block)) throw new StoreInputError('Section block 数据无效。');
       const blockId = validId(requiredString(block.id, 'Section block ID'));
@@ -175,7 +177,44 @@ const validateSection = (value: unknown) => {
       if (block.kind !== 'user' && block.kind !== 'assistant') {
         throw new StoreInputError('Section block kind 无效。');
       }
-      requiredString(block.content, 'Section block 正文');
+      const blockContent = requiredString(block.content, 'Section block 正文');
+      if (block.candidates !== undefined || block.adoptedCandidateId !== undefined) {
+        hasCandidateMetadata = true;
+        if (block.kind !== 'assistant') throw new StoreInputError('只有 assistant block 可以保存回答候选。');
+        const candidates = requiredArray(block.candidates, 'Section block candidates');
+        const candidateIds = new Set<string>();
+        const candidateRecords: Array<Record<string, unknown>> = [];
+        for (const candidate of candidates) {
+          if (!isRecord(candidate)) throw new StoreInputError('Section block candidate 数据无效。');
+          candidateRecords.push(candidate);
+          const candidateId = validId(requiredString(candidate.id, 'Section block candidate ID'));
+          if (candidateIds.has(candidateId)) throw new StoreInputError('同一 assistant block 的 candidate ID 不得重复。');
+          candidateIds.add(candidateId);
+          requiredString(candidate.content, 'Section block candidate 正文');
+          if (candidate.sourceSignature !== undefined
+            && (typeof candidate.sourceSignature !== 'string' || !/^[0-9a-f]{16}$/.test(candidate.sourceSignature))) {
+            throw new StoreInputError('Section block candidate sourceSignature 无效。');
+          }
+        }
+        if (block.adoptedCandidateId !== undefined) {
+          const adoptedId = validId(requiredString(block.adoptedCandidateId, 'Section adopted candidate ID'));
+          if (!candidateIds.has(adoptedId)) throw new StoreInputError('Section adopted candidate 不属于当前 block。');
+          const adopted = candidateRecords.find((candidate) => candidate.id === adoptedId);
+          if (!adopted || blockContent !== adopted.content) {
+            throw new StoreInputError('Section block.content 必须镜像 adopted candidate。');
+          }
+          activeContents.push(adopted.content as string);
+        } else if (blockContent.trim()) {
+          throw new StoreInputError('有回答候选但没有 adopted candidate 时，block 正文必须为空。');
+        } else {
+          activeContents.push('');
+        }
+      } else {
+        activeContents.push(blockContent);
+      }
+    }
+    if (hasCandidateMetadata && sectionContent !== activeContents.map((content) => content.trim()).filter(Boolean).join('\n\n')) {
+      throw new StoreInputError('Section 正文必须镜像采用候选。');
     }
   }
   if (value.contextReferences !== undefined) {

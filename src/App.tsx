@@ -17,9 +17,16 @@ import {
   buildContextPlan as composeContextPlan,
 } from './contextPlan';
 import {
-  applyRegenerateBlockOutcome,
+  applyAnswerCandidateOutcome,
   makeRegenerateBlockRequest,
+  makeRespondToInputRequest,
 } from './generationRequests';
+import {
+  adoptCandidate,
+  appendCandidate,
+  deleteCandidate,
+  editCandidate,
+} from './answerCandidates';
 import {
   applySummaryReferenceSelection,
   reconcileReferencesAfterMemoryDeletion,
@@ -102,6 +109,10 @@ const abortGenerationError = () => {
     return error;
   }
 };
+const staleSaveError = () => new Error('保存期间正文已变化，请稍后重试。');
+const generationSourceFingerprint = (blocks: SectionBlock[], targetIndex: number) => JSON.stringify(
+  blocks.slice(0, targetIndex).map((block) => [block.id, block.kind, block.content]),
+);
 
 const isCachedBook = (value: unknown, bookId: string): value is Book => {
   if (!value || typeof value !== 'object') return false;
@@ -223,8 +234,11 @@ function App() {
   const [newBookRequest, setNewBookRequest] = useState(0);
   const [writerBookSettingsOpen, setWriterBookSettingsOpen] = useState(false);
   const [manuscriptEditorOpen, setManuscriptEditorOpen] = useState(false);
+  const bookRef = useRef<Book | null>(null);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const busyRef = useRef(false);
+  const candidateOperationRef = useRef(false);
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
   const generationAbort = useRef<AbortController | null>(null);
   const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
@@ -302,6 +316,10 @@ function App() {
     sectionDraftsRef.current = sectionDrafts;
     navigationState.current = { dirty, busy, instruction, sectionDrafts };
   }, [busy, dirty, instruction, sectionDrafts]);
+
+  useEffect(() => {
+    bookRef.current = book;
+  }, [book]);
 
   useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
@@ -431,6 +449,7 @@ function App() {
     const loaded = normalizeBook(newerBook(stored, cached));
     if (api.runtime === 'device') cacheBook(loaded);
     saveRevision.current += 1;
+    bookRef.current = loaded;
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
@@ -441,9 +460,11 @@ function App() {
 
   const changeBook = (recipe: (current: Book) => Book) => {
     saveRevision.current += 1;
-    setBook((current) => current
-      ? normalizeBook({ ...recipe(current), updatedAt: new Date().toISOString() })
-      : current);
+    const current = bookRef.current ?? book;
+    if (!current) return;
+    const next = normalizeBook({ ...recipe(current), updatedAt: new Date().toISOString() });
+    bookRef.current = next;
+    setBook(next);
     setDirty(true);
   };
 
@@ -454,18 +475,18 @@ function App() {
   };
 
   const saveCurrent = async (candidateOverride?: Book) => {
-    const currentBook = candidateOverride ?? book;
+    const currentBook = candidateOverride ?? bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook(currentBook);
     const revision = saveRevision.current;
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     if (api.runtime === 'device') cacheBook(candidate);
     const saved = normalizeBook(await queueBookSave(candidate));
-    if (saveRevision.current === revision) {
-      if (api.runtime === 'device') cacheBook(saved);
-      setBook(saved);
-      setDirty(false);
-    }
+    if (saveRevision.current !== revision) throw staleSaveError();
+    if (api.runtime === 'device') cacheBook(saved);
+    bookRef.current = saved;
+    setBook(saved);
+    setDirty(false);
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
     setStatus(api.runtime === 'device'
@@ -475,20 +496,21 @@ function App() {
   };
 
   const commitBookChange = async (recipe: (current: Book) => Book) => {
-    if (!book) throw new Error('请先打开一本书。');
+    const currentBook = bookRef.current ?? book;
+    if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook({
-      ...recipe(book),
+      ...recipe(currentBook),
       updatedAt: new Date().toISOString(),
     });
     const revision = ++saveRevision.current;
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
       const saved = normalizeBook(await queueBookSave(candidate));
-      if (saveRevision.current === revision) {
-        if (api.runtime === 'device') cacheBook(saved);
-        setBook(saved);
-        setDirty(false);
-      }
+      if (saveRevision.current !== revision) throw staleSaveError();
+      if (api.runtime === 'device') cacheBook(saved);
+      bookRef.current = saved;
+      setBook(saved);
+      setDirty(false);
       setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
         ...items.filter((item) => item.id !== saved.id)]);
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
@@ -540,6 +562,8 @@ function App() {
   };
 
   const withBusy = async (action: () => Promise<void>) => {
+    if (busyRef.current || candidateOperationRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       await action();
@@ -548,6 +572,21 @@ function App() {
         ? '已取消生成；迟到结果未写入正文。'
         : error instanceof Error ? error.message : '操作失败。');
     } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const withCandidateBusy = async (action: () => Promise<void>) => {
+    if (busyRef.current || candidateOperationRef.current) {
+      throw new Error('当前正在保存或生成，请稍后再试。');
+    }
+    candidateOperationRef.current = true;
+    setBusy(true);
+    try {
+      await action();
+    } finally {
+      candidateOperationRef.current = false;
       setBusy(false);
     }
   };
@@ -598,11 +637,14 @@ function App() {
     const noteSnapshot = authorNote;
     const modeSnapshot = mode;
     const characterSnapshot = selectedCharacterId;
+    const providerProfileIdSnapshot = activeProviderProfile?.id;
+    const generationRevision = saveRevision.current;
     const saved = await saveCurrent();
+    if (saveRevision.current !== generationRevision) throw staleSaveError();
     const generation = {
       bookId: saved.id,
       sectionId: targetSectionId,
-      providerProfileId: activeProviderProfile?.id,
+      providerProfileId: providerProfileIdSnapshot,
       mode: modeSnapshot,
       selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
       authorNote: noteSnapshot || undefined,
@@ -610,11 +652,22 @@ function App() {
       generationKind: 'continue-section',
     } satisfies GenerationRequest;
     const result = await runGeneration(generation, '正在生成当前小节…');
+    if (bookRef.current?.id !== saved.id || saveRevision.current !== generationRevision) {
+      setStatus('当前书目或正文已变化，生成结果未写入。');
+      return;
+    }
     const additions: SectionBlock[] = [
       ...(inputSnapshot.trim()
         ? [{ id: makeId('block'), kind: 'user' as const, content: inputSnapshot.trim() }]
         : []),
-      { id: makeId('block'), kind: 'assistant', content: result.draft },
+      appendCandidate(
+        { id: makeId('block'), kind: 'assistant', content: '' },
+        {
+          id: makeId('candidate'),
+          content: result.draft,
+          ...(result.sourceSignature !== undefined ? { sourceSignature: result.sourceSignature } : {}),
+        },
+      ),
     ];
     changeBook((current) => ({
       ...current,
@@ -656,44 +709,269 @@ function App() {
       chapters: current.chapters.map((chapter) => ({
         ...chapter,
         sections: chapter.sections.map((item) => item.id === section.id
-          ? { ...item, blocks, content: blocksAsContent(blocks) }
+          ? (() => {
+              const previousBlocks = new Map(sectionBlocks(item).map((block) => [block.id, block]));
+              const nextBlocks = blocks.map((block) => {
+                const previous = previousBlocks.get(block.id);
+                if (block.kind !== 'assistant'
+                  || !block.adoptedCandidateId
+                  || !previous
+                  || previous.content === block.content) return block;
+                return editCandidate(block, block.adoptedCandidateId, block.content);
+              });
+              return { ...item, blocks: nextBlocks, content: blocksAsContent(nextBlocks) };
+            })()
           : item),
       })),
     }));
   };
 
-  const regenerateBlock = (blockId: string) => {
-    if (!section) return;
-    const target = sectionBlocks(section).find((item) => item.id === blockId);
-    if (!target || target.kind !== 'assistant') return;
-    const writerDraft = { instruction, authorNote };
+  const respondToInput = (blockId: string) => {
+    const currentBook = bookRef.current ?? book;
+    const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
+      .find((item) => item.id === sectionId);
+    if (!currentSection) return;
+    const targetSectionId = currentSection.id;
+    const currentBlocks = sectionBlocks(currentSection);
+    const targetIndex = currentBlocks.findIndex((item) => item.id === blockId);
+    const target = targetIndex >= 0 ? currentBlocks[targetIndex] : undefined;
+    if (!target || target.kind !== 'user' || !target.content.trim()) return;
+    const targetContentSnapshot = target.content;
+    const sourceSnapshot = generationSourceFingerprint(currentBlocks, targetIndex);
     void withBusy(async () => {
+      const modeSnapshot = mode;
+      const characterSnapshot = selectedCharacterId;
+      const providerProfileIdSnapshot = activeProviderProfile?.id;
+      const generationRevision = saveRevision.current;
       const saved = await saveCurrent();
-      const generation = makeRegenerateBlockRequest({
+      if (saveRevision.current !== generationRevision) throw staleSaveError();
+      const savedSection = saved.chapters.flatMap((chapter) => chapter.sections)
+        .find((item) => item.id === targetSectionId);
+      const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
+      const savedTargetIndex = savedBlocks.findIndex((item) => item.id === blockId);
+      const savedTarget = savedTargetIndex >= 0 ? savedBlocks[savedTargetIndex] : undefined;
+      const savedLastNonEmptyIndex = savedBlocks.reduce((last, item, index) => item.content.trim() ? index : last, -1);
+      if (saved.id !== bookRef.current?.id
+        || !savedTarget
+        || savedTarget.kind !== 'user'
+        || savedTarget.content !== targetContentSnapshot
+        || savedTargetIndex !== savedLastNonEmptyIndex
+        || generationSourceFingerprint(savedBlocks, savedTargetIndex) !== sourceSnapshot) {
+        setStatus('当前输入已变化，回答未写入正文。');
+        return;
+      }
+      const generation = makeRespondToInputRequest({
         bookId: saved.id,
-        sectionId: section.id,
-        providerProfileId: activeProviderProfile?.id,
-        mode,
-        selectedCharacterId: mode === 'character' ? selectedCharacterId : undefined,
+        sectionId: targetSectionId,
+        providerProfileId: providerProfileIdSnapshot,
+        mode: modeSnapshot,
+        selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
         targetBlockId: blockId,
       });
-      const result = await runGeneration(generation, '正在重新生成所选正文片段…');
+      const result = await runGeneration(generation, '正在生成这条输入的回答…');
+      const currentBook = bookRef.current;
+      const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
+        .find((item) => item.id === targetSectionId);
+      const currentBlocks = currentSection ? sectionBlocks(currentSection) : [];
+      const currentTargetIndex = currentBlocks.findIndex((item) => item.id === blockId);
+      const currentLastNonEmptyIndex = currentBlocks.reduce((last, item, index) =>
+        item.content.trim() ? index : last, -1);
+      if (currentBook?.id !== saved.id
+        || saveRevision.current !== generationRevision
+        || currentTargetIndex < 0
+        || currentTargetIndex !== currentLastNonEmptyIndex
+        || currentBlocks[currentTargetIndex]?.kind !== 'user'
+        || currentBlocks[currentTargetIndex]?.content !== targetContentSnapshot
+        || generationSourceFingerprint(currentBlocks, currentTargetIndex) !== sourceSnapshot) {
+        setStatus('当前输入已变化，回答未写入正文。');
+        return;
+      }
       changeBook((current) => ({
         ...current,
         chapters: current.chapters.map((chapter) => ({
           ...chapter,
           sections: chapter.sections.map((item) => {
-            if (item.id !== section.id) return item;
-            return applyRegenerateBlockOutcome({
+            if (item.id !== targetSectionId) return item;
+            return applyAnswerCandidateOutcome({
               section: item,
               targetBlockId: blockId,
-              writerDraft,
-              outcome: { status: 'success', content: result.draft },
+              writerDraft: { instruction: '', authorNote: '' },
+              outcome: {
+                status: 'success',
+                content: result.draft,
+                sourceSignature: result.sourceSignature,
+              },
             }).section;
           }),
         })),
       }));
-      setStatus('已重新生成所选 AI 正文片段。');
+      setStatus('已生成回答并加入正文。');
+    });
+  };
+
+  const regenerateBlock = (blockId: string) => {
+    const currentBook = bookRef.current ?? book;
+    const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
+      .find((item) => item.id === sectionId);
+    if (!currentSection) return;
+    const currentBlocks = sectionBlocks(currentSection);
+    const targetIndex = currentBlocks.findIndex((item) => item.id === blockId);
+    const target = targetIndex >= 0 ? currentBlocks[targetIndex] : undefined;
+    if (!target || target.kind !== 'assistant') return;
+    const targetSectionId = currentSection.id;
+    const targetContentSnapshot = target.content;
+    const sourceSnapshot = generationSourceFingerprint(currentBlocks, targetIndex);
+    void withBusy(async () => {
+      const modeSnapshot = mode;
+      const characterSnapshot = selectedCharacterId;
+      const providerProfileIdSnapshot = activeProviderProfile?.id;
+      const generationRevision = saveRevision.current;
+      const saved = await saveCurrent();
+      if (saveRevision.current !== generationRevision) throw staleSaveError();
+      const savedSection = saved.chapters.flatMap((chapter) => chapter.sections)
+        .find((item) => item.id === targetSectionId);
+      const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
+      const savedTargetIndex = savedBlocks.findIndex((item) => item.id === blockId);
+      const savedTarget = savedTargetIndex >= 0 ? savedBlocks[savedTargetIndex] : undefined;
+      if (saved.id !== bookRef.current?.id
+        || !savedTarget
+        || savedTarget.kind !== 'assistant'
+        || savedTarget.content !== targetContentSnapshot
+        || generationSourceFingerprint(savedBlocks, savedTargetIndex) !== sourceSnapshot) {
+        setStatus('当前 AI 正文已变化，候选未写入。');
+        return;
+      }
+      const generation = makeRegenerateBlockRequest({
+        bookId: saved.id,
+        sectionId: targetSectionId,
+        providerProfileId: providerProfileIdSnapshot,
+        mode: modeSnapshot,
+        selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
+        targetBlockId: blockId,
+      });
+      const result = await runGeneration(generation, '正在生成新的候选回答…');
+      const resultSection = bookRef.current?.chapters.flatMap((chapter) => chapter.sections)
+        .find((item) => item.id === targetSectionId);
+      const resultBlocks = resultSection ? sectionBlocks(resultSection) : [];
+      const resultTargetIndex = resultBlocks.findIndex((item) => item.id === blockId);
+      if (bookRef.current?.id !== saved.id
+        || saveRevision.current !== generationRevision
+        || resultTargetIndex < 0
+        || resultBlocks[resultTargetIndex]?.kind !== 'assistant'
+        || resultBlocks[resultTargetIndex]?.content !== targetContentSnapshot
+        || generationSourceFingerprint(resultBlocks, resultTargetIndex) !== sourceSnapshot) {
+        setStatus('当前书目或正文已变化，候选未写入。');
+        return;
+      }
+      const candidate = {
+        id: makeId('candidate'),
+        content: result.draft,
+        ...(result.sourceSignature !== undefined ? { sourceSignature: result.sourceSignature } : {}),
+      };
+      changeBook((current) => ({
+        ...current,
+        chapters: current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== targetSectionId) return item;
+            const blocks = sectionBlocks(item).map((block) => block.id === blockId
+              ? appendCandidate(block, candidate)
+              : block);
+            if (!blocks.some((block) => block.id === blockId)) return item;
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        })),
+      }));
+      setStatus('已生成新的候选回答，可浏览后采用。');
+    });
+  };
+
+  const adoptBlockCandidate = async (blockId: string, candidateId: string): Promise<void> => {
+    return withCandidateBusy(async () => {
+      if (!section) throw new Error('找不到当前小节。');
+      const targetSectionId = section.id;
+      let hasLaterContent = false;
+      await commitBookChange((current) => {
+        const chapters = current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== targetSectionId) return item;
+            const currentBlocks = sectionBlocks(item);
+            const targetIndex = currentBlocks.findIndex((block) => block.id === blockId);
+            hasLaterContent = targetIndex >= 0 && currentBlocks.slice(targetIndex + 1).some((block) => block.content.trim());
+            const blocks = currentBlocks.map((block) => block.id === blockId
+              ? adoptCandidate(block, candidateId)
+              : block);
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        }));
+        return { ...current, chapters };
+      });
+      if (hasLaterContent) {
+        setStatus('已采用这版；后续正文已保留，请检查衔接。');
+      }
+    });
+  };
+
+  const editBlockCandidate = async (blockId: string, candidateId: string, content: string): Promise<void> => {
+    return withCandidateBusy(async () => {
+      if (!section) throw new Error('找不到当前小节。');
+      const targetSectionId = section.id;
+      await commitBookChange((current) => ({
+        ...current,
+        chapters: current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== targetSectionId) return item;
+            const blocks = sectionBlocks(item).map((block) => block.id === blockId
+              ? editCandidate(block, candidateId, content)
+              : block);
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        })),
+      }));
+    });
+  };
+
+  const removeBlockCandidate = async (blockId: string, candidateId: string): Promise<void> => {
+    return withCandidateBusy(async () => {
+      if (!section) throw new Error('找不到当前小节。');
+      const targetSectionId = section.id;
+      await commitBookChange((current) => ({
+        ...current,
+        chapters: current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== targetSectionId) return item;
+            const blocks = sectionBlocks(item).map((block) => block.id === blockId
+              ? deleteCandidate(block, candidateId)
+              : block);
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        })),
+      }));
+    });
+  };
+
+  const removeAdoptedBlockCandidate = async (blockId: string, candidateId: string, replacementId: string): Promise<void> => {
+    return withCandidateBusy(async () => {
+      if (!section) throw new Error('找不到当前小节。');
+      const targetSectionId = section.id;
+      await commitBookChange((current) => ({
+        ...current,
+        chapters: current.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => {
+            if (item.id !== targetSectionId) return item;
+            const blocks = sectionBlocks(item).map((block) => {
+              if (block.id !== blockId) return block;
+              const adopted = adoptCandidate(block, replacementId);
+              return deleteCandidate(adopted, candidateId);
+            });
+            return { ...item, blocks, content: blocksAsContent(blocks) };
+          }),
+        })),
+      }));
     });
   };
 
@@ -1150,6 +1428,11 @@ function App() {
             onSectionBlocksChange={updateSectionBlocks}
             onDeleteSectionBlock={deleteSectionBlock}
             onRegenerateBlock={regenerateBlock}
+            onGenerateForBlock={respondToInput}
+            onAdoptCandidate={adoptBlockCandidate}
+            onEditCandidate={editBlockCandidate}
+            onDeleteCandidate={removeBlockCandidate}
+            onDeleteAdoptedCandidate={removeAdoptedBlockCandidate}
             onSectionTitleChange={async (title) => {
               if (!sectionChapter || !section) throw new Error('找不到当前小节。');
               await renameSection(sectionChapter.id, section.id, title);

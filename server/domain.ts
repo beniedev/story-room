@@ -70,17 +70,18 @@ export function fakeGenerate(
   book: Book,
   request: Omit<GenerationRequest, 'bookId'>,
   limits?: ProviderLimits,
-): { plan: ContextPlan; draft: string } {
+): { plan: ContextPlan; draft: string; sourceSignature?: string } {
   const plan = buildContextPlan(book, request, limits);
   assertGenerationExecutable(request);
   if (request.generationKind === 'summarize-section') {
     return {
       plan,
       draft: normalizeSectionMemoryResponse(serializeSectionMemoryDraft(syntheticSectionMemoryDraft())),
+      sourceSignature: plan.sourceSignature,
     };
   }
   const draft = request.mode === 'character'
     ? '我把手掌贴在冰凉的观测窗上。远处的星群缓慢转动，我知道，下一步必须由自己决定。身后的仪器发出短促的提示音，整座观测站像是在等待一个答案。'
     : '观测穹顶的灯光依次亮起，沉睡的仪器在寂静中恢复运转。远处的星群越过窗框，留下缓慢而清晰的轨迹；新的变化已经发生，但它的意义仍等待书中人物亲手确认。';
-  return { plan, draft };
+  return { plan, draft, sourceSignature: plan.sourceSignature };
 }

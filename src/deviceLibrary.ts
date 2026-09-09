@@ -155,11 +155,12 @@ export const deviceLibrary = {
   ),
   generate: async (request: GenerationRequest, signal?: AbortSignal): Promise<GenerationResult> => {
     if (signal?.aborted) throw new DOMException('生成已取消。', 'AbortError');
-    buildContextPlan(loadBook(request.bookId), request);
+    const plan = buildContextPlan(loadBook(request.bookId), request);
     return {
       draft: request.generationKind === 'summarize-section'
         ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
         : fakeDraft(request.mode),
+      sourceSignature: plan.sourceSignature,
     };
   },
 };

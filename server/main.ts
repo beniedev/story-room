@@ -24,7 +24,7 @@ import {
 
 const host = process.env.STORY_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
-const generationKinds = new Set(['continue-section', 'regenerate-block', 'rewrite-selection', 'summarize-section']);
+const generationKinds = new Set(['continue-section', 'regenerate-block', 'respond-to-input', 'rewrite-selection', 'summarize-section']);
 
 type HostAuthority = {
   hostname: string;
@@ -299,10 +299,15 @@ export const createStoryServer = (
               draft: body.generationKind === 'summarize-section'
                 ? normalizeSectionMemoryResponse(generated)
                 : generated,
+              sourceSignature: plan.sourceSignature,
             });
           }
           responseStarted = true;
-          return sendJson(response, 200, { draft: fakeGenerate(book, body, limits).draft });
+          const fake = fakeGenerate(book, body, limits);
+          return sendJson(response, 200, {
+            draft: fake.draft,
+            sourceSignature: fake.sourceSignature,
+          });
         } finally {
           responseStarted = true;
           request.off('aborted', abortOnClientDisconnect);

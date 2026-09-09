@@ -532,6 +532,88 @@ describe('story store', () => {
     expect(loaded.chapters[0]?.sections[0]?.blocks).toBeUndefined();
   });
 
+  it('round-trips answer candidates while manuscript storage keeps adopted content', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book: Book = {
+      id: 'candidate-book',
+      title: 'Candidate Book',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{
+        id: 'candidate-chapter',
+        title: 'Chapter',
+        sections: [{
+          id: 'candidate-section',
+          title: 'Section',
+          content: '用户输入\n\n采用答案',
+          blocks: [
+            { id: 'candidate-user', kind: 'user', content: '用户输入' },
+            {
+              id: 'candidate-answer',
+              kind: 'assistant',
+              content: '采用答案',
+              adoptedCandidateId: 'candidate-1',
+              candidates: [
+                { id: 'candidate-1', content: '采用答案', sourceSignature: '0123456789abcdef' },
+                { id: 'candidate-2', content: '备选答案', sourceSignature: '0123456789abcdef' },
+              ],
+            },
+          ],
+        }],
+      }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    await store.saveBook(book);
+    const loaded = await store.loadBook(book.id);
+    const section = loaded.chapters[0]?.sections[0];
+    expect(section?.content).toBe('用户输入\n\n采用答案');
+    expect(section?.blocks?.[1]?.adoptedCandidateId).toBe('candidate-1');
+    expect(section?.blocks?.[1]?.candidates?.[1]?.content).toBe('备选答案');
+    expect(await readFile(path.join(root, 'books', book.id, 'manuscript', 'candidate-chapter', 'candidate-section.md'), 'utf8'))
+      .toBe('用户输入\n\n采用答案');
+    const manifest = JSON.parse(await readFile(path.join(root, 'books', book.id, 'book.json'), 'utf8')) as {
+      chapters: Array<{ sections: Array<{ blocks?: Array<{ candidates?: unknown[] }> }> }>;
+    };
+    expect(manifest.chapters[0]?.sections[0]?.blocks?.[1]?.candidates).toHaveLength(2);
+  });
+
+  it('rejects an answer block whose content is not the adopted candidate mirror', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = makeIntegrityBook();
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('integrity section missing');
+    section.content = 'mismatch';
+    section.blocks = [{
+      id: 'answer-block',
+      kind: 'assistant',
+      content: 'adopted',
+      adoptedCandidateId: 'candidate-1',
+      candidates: [{ id: 'candidate-1', content: 'adopted' }],
+    }];
+    await expect(store.saveBook(book)).rejects.toThrow('Section 正文必须镜像');
+  });
+
+  it('rejects candidate metadata with content but no adopted candidate', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = makeIntegrityBook();
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('integrity section missing');
+    section.content = 'candidate text';
+    section.blocks = [{ id: 'answer-block', kind: 'assistant', content: 'candidate text', candidates: [] }];
+    await expect(store.saveBook(book)).rejects.toThrow('没有 adopted candidate');
+  });
+
   it('upgrades present legacy fixtures without restoring a deliberately deleted example', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
     temporaryRoots.push(root);

@@ -216,7 +216,9 @@ describe('local server entry', () => {
         }),
       });
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ draft: 'Synthetic generated text.' });
+      const generated = await response.json() as { draft: string; sourceSignature?: string };
+      expect(generated.draft).toBe('Synthetic generated text.');
+      expect(generated.sourceSignature).toMatch(/^[0-9a-f]{16}$/);
       expect(providerStore.getContextLimits).toHaveBeenCalledWith('synthetic-provider');
       expect(providerStore.generate).toHaveBeenCalledOnce();
     } finally {
@@ -298,7 +300,9 @@ describe('local server entry', () => {
         body,
       });
       expect(first.status).toBe(200);
-      await expect(first.json()).resolves.toEqual({ draft: validDraft });
+      const firstBody = await first.json() as { draft: string; sourceSignature?: string };
+      expect(firstBody.draft).toBe(validDraft);
+      expect(firstBody.sourceSignature).toMatch(/^[0-9a-f]{16}$/);
       const messages = providerStore.generate.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
       expect(messages[1]?.content).toContain('Only this text is summarized.');
       expect(messages[1]?.content).not.toContain('Should not enter summary input.');

@@ -422,7 +422,7 @@ describe('context plan', () => {
     expect(promptText(plan)).not.toContain('Future goal');
   });
 
-  it('builds regenerate-block context around only the selected assistant block', () => {
+  it('builds regenerate-block context from the selected assistant block prefix only', () => {
     const book = makeBook('book-a', 'ALPHA');
     const section = book.chapters[0]?.sections[0];
     if (!section) throw new Error('fixture section missing');
@@ -443,24 +443,19 @@ describe('context plan', () => {
     });
 
     expect(plan.target).toMatchObject({ sectionId: section.id, sectionIndex: 0 });
-    expect(plan.included.map((item) => item.semanticRole)).toEqual(expect.arrayContaining([
-      'reference-manuscript',
-      'target',
-    ]));
+    expect(plan.included.map((item) => item.semanticRole)).toEqual(expect.arrayContaining(['reference-manuscript']));
     expect(plan.included.find((item) => item.semanticRole === 'reference-manuscript'))
       .not.toHaveProperty('transformedFrom');
     const packet = plan.messages[1]?.content ?? '';
-    expect(plan.messages[0]?.content).toContain('regenerate-block 只替换 TARGET block');
-    expect(packet.startsWith('TARGET：只处理 JSON packet 中的唯一目标；只输出 TARGET BLOCK 的替换正文。')).toBe(true);
-    expect(packet).toContain('prefix/suffix 仅用于衔接');
+    expect(plan.messages[0]?.content).toContain('regenerate-block 从 TARGET 之前的当前正文重新作答');
+    expect(packet.startsWith('TARGET：只处理 JSON packet 中的唯一目标；从 TARGET 之前的当前正文重新作答')).toBe(true);
     expect(packet).toContain('Prefix synthetic text.');
-    expect(packet).toContain('Target synthetic text.');
-    expect(packet).toContain('Suffix synthetic text.');
+    expect(packet).not.toContain('Target synthetic text.');
+    expect(packet).not.toContain('Suffix synthetic text.');
     const prefixIndex = plan.included.findIndex((item) => item.title === 'TARGET prefix');
-    const targetBlockIndex = plan.included.findIndex((item) => item.title === 'TARGET target');
-    const suffixIndex = plan.included.findIndex((item) => item.title === 'TARGET suffix');
-    expect(prefixIndex).toBeLessThan(targetBlockIndex);
-    expect(targetBlockIndex).toBeLessThan(suffixIndex);
+    const targetBlockIndex = plan.included.findIndex((item) => item.title === 'TARGET input');
+    expect(prefixIndex).toBeGreaterThanOrEqual(0);
+    expect(targetBlockIndex).toBe(-1);
     expect(plan.included.some((item) => item.layer === 'note')).toBe(true);
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
     expect(packet).toContain('Synthetic persistent section guidance.');
@@ -480,6 +475,128 @@ describe('context plan', () => {
       generationKind: 'regenerate-block',
       targetBlockId: 'missing-block',
     })).toThrow('当前 Section');
+  });
+
+  it('answers only the末尾 user block for respond-to-input', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.blocks = [
+      { id: 'block-before', kind: 'assistant', content: 'Prefix synthetic text.' },
+      { id: 'block-input', kind: 'user', content: 'Current input synthetic text.' },
+    ];
+    section.content = 'Prefix synthetic text.\n\nCurrent input synthetic text.';
+
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: '底部草稿不应进入请求。',
+      generationKind: 'respond-to-input',
+      targetBlockId: 'block-input',
+    });
+    const packet = plan.messages[1]?.content ?? '';
+    expect(packet).toContain('Prefix synthetic text.');
+    expect(packet).toContain('Current input synthetic text.');
+    expect(packet).not.toContain('底部草稿不应进入请求。');
+    expect(plan.included.filter((item) => item.title === 'TARGET input')).toHaveLength(1);
+    expect(() => buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: '',
+      generationKind: 'respond-to-input',
+      targetBlockId: 'block-before',
+    })).toThrow('user block');
+  });
+
+  it('keeps source signatures stable when continue and re-answer use the same material', () => {
+    const initial = makeBook('book-a', 'ALPHA');
+    const initialSection = initial.chapters[0]?.sections[0];
+    if (!initialSection) throw new Error('initial section missing');
+    initialSection.blocks = [{ id: 'prefix', kind: 'assistant', content: 'Prefix text.' }];
+    initialSection.content = 'Prefix text.';
+    const continued = buildContextPlan(initial, {
+      sectionId: initialSection.id,
+      mode: 'author',
+      instruction: 'Current input.',
+      generationKind: 'continue-section',
+    });
+
+    const answered = makeBook('book-a', 'ALPHA');
+    const answeredSection = answered.chapters[0]?.sections[0];
+    if (!answeredSection) throw new Error('answered section missing');
+    answeredSection.blocks = [
+      { id: 'prefix', kind: 'assistant', content: 'Prefix text.' },
+      { id: 'input', kind: 'user', content: 'Current input.' },
+      { id: 'answer', kind: 'assistant', content: 'First answer.' },
+    ];
+    answeredSection.content = 'Prefix text.\n\nCurrent input.\n\nFirst answer.';
+    const regenerated = buildContextPlan(answered, {
+      sectionId: answeredSection.id,
+      mode: 'author',
+      instruction: '',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'answer',
+    });
+    expect(continued.sourceSignature).toBe(regenerated.sourceSignature);
+
+    const responseBook = makeBook('book-a', 'ALPHA');
+    const responseSection = responseBook.chapters[0]?.sections[0];
+    if (!responseSection) throw new Error('response section missing');
+    responseSection.blocks = [
+      { id: 'prefix', kind: 'assistant', content: 'Prefix text.' },
+      { id: 'input', kind: 'user', content: 'Current input.' },
+    ];
+    responseSection.content = 'Prefix text.\n\nCurrent input.';
+    const responded = buildContextPlan(responseBook, {
+      sectionId: responseSection.id,
+      mode: 'author',
+      instruction: '',
+      generationKind: 'respond-to-input',
+      targetBlockId: 'input',
+    });
+    expect(responded.sourceSignature).toBe(regenerated.sourceSignature);
+  });
+
+  it('excludes unadopted candidates and suffix content from a re-answer prompt', () => {
+    const book = makeBook('book-a', 'ALPHA');
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('fixture section missing');
+    section.blocks = [
+      {
+        id: 'prefix',
+        kind: 'assistant',
+        content: 'Adopted prefix.',
+        adoptedCandidateId: 'prefix-1',
+        candidates: [
+          { id: 'prefix-1', content: 'Adopted prefix.' },
+          { id: 'prefix-2', content: 'HIDDEN PREFIX VARIANT.' },
+        ],
+      },
+      {
+        id: 'target',
+        kind: 'assistant',
+        content: 'Adopted target.',
+        adoptedCandidateId: 'target-1',
+        candidates: [
+          { id: 'target-1', content: 'Adopted target.' },
+          { id: 'target-2', content: 'HIDDEN TARGET VARIANT.' },
+        ],
+      },
+      { id: 'suffix', kind: 'user', content: 'HIDDEN SUFFIX.' },
+    ];
+    section.content = 'Adopted prefix.\n\nAdopted target.\n\nHIDDEN SUFFIX.';
+    const plan = buildContextPlan(book, {
+      sectionId: section.id,
+      mode: 'author',
+      instruction: '',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'target',
+    });
+    const packet = plan.messages[1]?.content ?? '';
+    expect(packet).toContain('Adopted prefix.');
+    expect(packet).not.toContain('HIDDEN PREFIX VARIANT.');
+    expect(packet).not.toContain('HIDDEN TARGET VARIANT.');
+    expect(packet).not.toContain('HIDDEN SUFFIX.');
   });
 
   it('executes summary contract without mixing other story context and keeps rewrite unsupported', () => {

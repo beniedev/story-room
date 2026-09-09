@@ -458,7 +458,8 @@ describe('writing UI contract', () => {
     expect(source).toContain('authorNote: noteSnapshot || undefined');
     expect(source).not.toContain('setAuthorNote(');
     expect(source).toContain("setInstruction((current) => current === inputSnapshot ? '' : current)");
-    expect(source).toContain("{ id: makeId('block'), kind: 'assistant', content: result.draft }");
+    expect(source).toContain("appendCandidate(");
+    expect(source).toContain('sourceSignature: result.sourceSignature');
     expect(source).toContain('续写已加入当前小节。');
     expect(source).toContain("aria-label={props.busy ? '正在续写' : '发送并续写'}");
     expect(source).not.toContain('className="draft-preview"');

@@ -119,7 +119,7 @@ describe('device-local library', () => {
     expect(JSON.stringify(preview)).not.toContain(section.content);
 
     const result = await deviceLibrary.generate(request);
-    expect(result).toEqual({ draft: expect.any(String) });
+    expect(result).toEqual({ draft: expect.any(String), sourceSignature: expect.stringMatching(/^[0-9a-f]{16}$/) });
     expect(result).not.toHaveProperty('plan');
   });
 });

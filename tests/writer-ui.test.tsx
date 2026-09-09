@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Bookshelf } from '../src/components/Bookshelf';
 import { Writer } from '../src/components/Writer';
+import { buildContextPlan } from '../src/contextPlan';
 import type { Book, SectionBlock } from '../src/types';
 
 const makeBook = (id: string, blocks: SectionBlock[] = []): Book => ({
@@ -193,6 +194,168 @@ describe('section writing guidance', () => {
     await setControlValue(note!, '让雨声逐渐靠近。');
     expect(onAuthorNoteChange).toHaveBeenCalledWith('让雨声逐渐靠近。');
 
+    await act(async () => root.unmount());
+  });
+});
+
+describe('answer candidates and end-of-input response', () => {
+  const candidateBook = makeBook('book-candidates', [{
+    id: 'answer-block',
+    kind: 'assistant',
+    content: '采用的一版',
+    candidates: [
+      { id: 'candidate-one', content: '采用的一版', sourceSignature: 'source-a' },
+      { id: 'candidate-two', content: '正在预览的二版', sourceSignature: 'source-b' },
+    ],
+    adoptedCandidateId: 'candidate-one',
+  }]);
+
+  it('shows a response action only below the final non-empty user block', async () => {
+    const onGenerateForBlock = vi.fn();
+    const book = makeBook('book-respond', [{ id: 'last-input', kind: 'user', content: '已发送输入' }]);
+    const { container, root } = await render(<Writer {...writerProps(book)} instruction="下一轮草稿" onGenerateForBlock={onGenerateForBlock} />);
+
+    const responseButton = container.querySelector<HTMLButtonElement>('.respond-to-input-button');
+    expect(responseButton?.textContent).toBe('生成回答');
+    await act(async () => responseButton?.click());
+    expect(onGenerateForBlock).toHaveBeenCalledWith('last-input');
+    expect(container.querySelector<HTMLTextAreaElement>('#writing-instruction')?.value).toBe('下一轮草稿');
+
+    await rerender(root, <Writer {...writerProps(makeBook('book-respond', [
+      { id: 'last-input', kind: 'user', content: '已发送输入' },
+      { id: 'answer', kind: 'assistant', content: '回答' },
+    ]))} onGenerateForBlock={onGenerateForBlock} />);
+    expect(container.querySelector('.respond-to-input-button')).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it('keeps candidate preview in the manuscript position and separates adoption', async () => {
+    const onAdoptCandidate = vi.fn(async () => undefined);
+    const { container, root } = await render(<Writer {...writerProps(candidateBook)} onAdoptCandidate={onAdoptCandidate} />);
+    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
+    const next = container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]');
+    expect(next).not.toBeNull();
+    await act(async () => next?.click());
+
+    const manuscriptBlock = container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block');
+    expect(manuscriptBlock?.textContent).toContain('正在预览的二版');
+    expect(manuscriptBlock?.textContent).not.toContain('采用的一版');
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="编辑所选片段"]')?.disabled).toBe(true);
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('2 / 2');
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('来源条件已变化');
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('正在预览的二版');
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-adopt')?.click());
+    expect(onAdoptCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two');
+    await act(async () => root.unmount());
+  });
+
+  it('marks a candidate stale when the current preceding material changes', async () => {
+    const sourceBook = makeBook('book-source-status', [
+      { id: 'source-input', kind: 'user', content: '原来的前文' },
+      {
+        id: 'answer-block',
+        kind: 'assistant',
+        content: '采用的一版',
+        candidates: [
+          { id: 'candidate-one', content: '采用的一版' },
+          { id: 'candidate-two', content: '备选回答' },
+        ],
+        adoptedCandidateId: 'candidate-one',
+      },
+    ]);
+    const sourceSignature = buildContextPlan(sourceBook, {
+      sectionId: 'section-one',
+      mode: 'author',
+      instruction: '',
+      generationKind: 'regenerate-block',
+      targetBlockId: 'answer-block',
+    }).sourceSignature;
+    const initialBook = makeBook('book-source-status', [
+      { id: 'source-input', kind: 'user', content: '原来的前文' },
+      {
+        id: 'answer-block',
+        kind: 'assistant',
+        content: '采用的一版',
+        candidates: [
+          { id: 'candidate-one', content: '采用的一版', sourceSignature },
+          { id: 'candidate-two', content: '备选回答', sourceSignature },
+        ],
+        adoptedCandidateId: 'candidate-one',
+      },
+    ]);
+    const { container, root } = await render(<Writer {...writerProps(initialBook)} />);
+    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('来源条件已变化');
+
+    const changedBook = makeBook('book-source-status', [
+      { id: 'source-input', kind: 'user', content: '已经改过的前文' },
+      ...initialBook.chapters[0]!.sections[0]!.blocks!.slice(1),
+    ]);
+    await rerender(root, <Writer {...writerProps(changedBook)} />);
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('来源条件已变化');
+    await act(async () => root.unmount());
+  });
+
+  it('reports adoption failure and leaves the old adopted version recoverable', async () => {
+    const onAdoptCandidate = vi.fn(async () => { throw new Error('保存失败'); });
+    const { container, root } = await render(<Writer {...writerProps(candidateBook)} onAdoptCandidate={onAdoptCandidate} />);
+    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-adopt')?.click());
+    expect(container.querySelector('.answer-candidate-error')?.textContent).toContain('保存失败');
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="上一版回答候选"]')?.click());
+    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent).toContain('采用的一版');
+    await act(async () => root.unmount());
+  });
+
+  it('edits and deletes an unadopted candidate through explicit callbacks', async () => {
+    const onEditCandidate = vi.fn(async () => undefined);
+    const onDeleteCandidate = vi.fn(async () => undefined);
+    const { container, root } = await render(<Writer
+      {...writerProps(candidateBook)}
+      onEditCandidate={onEditCandidate}
+      onDeleteCandidate={onDeleteCandidate}
+    />);
+    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-edit')?.click());
+    const editor = container.querySelector<HTMLTextAreaElement>('.answer-candidate-editor textarea');
+    expect(editor?.value).toBe('正在预览的二版');
+    await setControlValue(editor!, '编辑后的二版');
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-editor-actions .primary-action')?.click());
+    expect(onEditCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two', '编辑后的二版');
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-delete')?.click());
+    expect(container.querySelector('.confirm-dialog')?.textContent).toContain('未采用候选');
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('删除这一版候选'))?.click());
+    expect(onDeleteCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two');
+    await act(async () => root.unmount());
+  });
+
+  it('keeps an unsaved candidate edit in place until it is saved or cancelled', async () => {
+    const onEditCandidate = vi.fn(async () => undefined);
+    const { container, root } = await render(<Writer
+      {...writerProps(candidateBook)}
+      onEditCandidate={onEditCandidate}
+    />);
+    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-edit')?.click());
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="上一版回答候选"]')?.disabled).toBe(true);
+
+    const instruction = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+    await act(async () => instruction.focus());
+    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent)
+      .toContain('正在预览的二版');
+    expect(container.querySelector('.answer-candidate-editor')).not.toBeNull();
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-editor-actions .quiet-action')?.click());
+    await act(async () => { instruction.blur(); instruction.focus(); });
+    expect(container.querySelector('.answer-candidate-strip')).toBeNull();
+    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent)
+      .toContain('采用的一版');
     await act(async () => root.unmount());
   });
 });
