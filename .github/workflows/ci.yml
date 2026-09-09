@@ -39,6 +39,24 @@ jobs:
     name: Security checks
     runs-on: ubuntu-latest
     steps:
+      - name: Check out source
+        uses: actions/checkout@v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+      - name: Check direct dependency licenses
+        run: npm run license:check
+
+  privacy:
+    name: Privacy checks
+    runs-on: ubuntu-latest
+    steps:
       - name: Check out full history
         uses: actions/checkout@v6.0.2
         with:
@@ -47,16 +65,9 @@ jobs:
         uses: actions/setup-node@v6.4.0
         with:
           node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
       - name: Scan repository history with Gitleaks
         uses: gitleaks/gitleaks-action@v3.0.0
         env:
           GITLEAKS_VERSION: 8.28.0
-      - name: Audit dependencies
-        run: npm audit --audit-level=high
       - name: Scan privacy-sensitive content
         run: npm run privacy:scan
-      - name: Check direct dependency licenses
-        run: npm run license:check

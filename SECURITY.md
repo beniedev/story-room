@@ -27,6 +27,12 @@ The prompt view is limited to a compact Provider-input preview: it shows categor
 - Provider DNS preflight and the subsequent network connection are separate operations, so a theoretical DNS or routing TOCTOU remains.
 - A compromised browser, same-origin script, operating system, filesystem, or configured Provider endpoint is outside the guarantees of this demo.
 - The local HTTP host is not a hardened production service. Do not use it as a public internet endpoint.
-- Full Book `PUT` requests are limited to 1 MB and current autosave writes the whole Book. See [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md) for an unimplemented future design.
+- Full Book `PUT` requests have no application-defined size cap. Saves still transfer and validate the whole Book; unchanged source and manuscript files are not rewritten. See [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md) for an unimplemented future API design.
+
+## Repository checks
+
+CI runs dependency auditing and license checks separately from full-history secret scanning and the repository privacy scan. A failed dependency audit does not prevent the privacy job from running. Each job reports its own failure without suppressing findings.
+
+Temporary mitigation: `package.json` overrides only Miniflare's `sharp` dependency to `0.35.4`, which fixes [GHSA-rgj7-g3m4-5g8c](https://github.com/lovell/sharp/security/advisories/GHSA-rgj7-g3m4-5g8c). Miniflare currently pins an affected version. This uses the upstream patch release without changing the rest of the toolchain. Because it selects a native package, verify platform compatibility when changing the override. Remove it when the selected Miniflare version brings in a patched `sharp` itself, then rerun installation, dependency auditing, tests and both builds.
 
 Security checks in CI are evidence about the repository and test environment. They are not a production certification or a promise of deployment safety.
