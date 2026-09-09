@@ -621,7 +621,7 @@ describe('writing UI contract', () => {
     const feedback = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
 
     expect(app).toContain('const commitBookChange = async');
-    expect(app).toContain('await queueBookSave(candidate)');
+    expect(app).toContain('await queueBookSave(candidate, revision)');
     expect(shelf).toContain('await props.onAddSection');
     expect(shelf).toContain("setNameOperation({ phase: 'pending'");
     expect(shelf).toContain("setDeleteOperation({ phase: 'pending', title: '正在删除…' })");

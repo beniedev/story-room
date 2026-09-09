@@ -339,6 +339,8 @@ describe('App generation save and cancellation boundaries', () => {
       await act(async () => {
         if (instruction) setControlValue(instruction, '继续写下一段。');
       });
+      const note = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+      await act(async () => setControlValue(note, '双击提交前的已保存注释。'));
       const send = container.querySelector<HTMLButtonElement>('.writer-send-button');
       expect(send).not.toBeNull();
       await act(async () => {
@@ -432,6 +434,8 @@ describe('App generation save and cancellation boundaries', () => {
     });
     const { container, root } = await renderApp(book);
     try {
+      const note = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+      await act(async () => setControlValue(note, '生成前已保存的注释。'));
       const respond = await waitForElement(() => container.querySelector<HTMLButtonElement>('.respond-to-input-button'));
       await act(async () => respond.click());
       await flushMicrotasks();
@@ -464,6 +468,8 @@ describe('App generation save and cancellation boundaries', () => {
     });
     const { container, root } = await renderApp(book);
     try {
+      const note = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+      await act(async () => setControlValue(note, '底部回答前已保存的注释。'));
       const instruction = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
       await act(async () => setControlValue(instruction, '底部输入保存失败。'));
       await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
@@ -597,6 +603,8 @@ describe('App generation save and cancellation boundaries', () => {
     });
     const failedSaveApp = await renderApp(failedSaveBook);
     try {
+      const note = await waitForElement(() => failedSaveApp.container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+      await act(async () => setControlValue(note, '保存前必须先落盘的注释。'));
       const instruction = await waitForElement(() => failedSaveApp.container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
       await act(async () => setControlValue(instruction, '保存失败的下一条回答。'));
       await act(async () => failedSaveApp.container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
@@ -697,6 +705,8 @@ describe('App generation save and cancellation boundaries', () => {
       const second = await renderApp(failingBook);
       try {
         const secondInstruction = second.container.querySelector<HTMLTextAreaElement>('#writing-instruction');
+        const secondNote = await waitForElement(() => second.container.querySelector<HTMLTextAreaElement>('#author-note-input'));
+        await act(async () => { if (secondNote) setControlValue(secondNote, '取消前保存失败的注释。'); });
         await act(async () => { if (secondInstruction) setControlValue(secondInstruction, '保存失败时的续写。'); });
         await act(async () => second.container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
         await flushMicrotasks();

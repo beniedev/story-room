@@ -85,6 +85,7 @@ const bookCacheKey = (bookId: string) => `${bookCachePrefix}${bookId}`;
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
+const streamingOutputKey = 'story-native:streaming-output';
 type ManuscriptFontFamily = 'sans' | 'wenkai';
 const minManuscriptFontSize = 12;
 const maxManuscriptFontSize = 24;
@@ -96,6 +97,22 @@ const clampManuscriptFontSize = (value: number) => Math.min(
 type SectionDraft = {
   instruction: string;
 };
+
+type StreamingDraftStatus = 'streaming' | 'stopped' | 'failed';
+type StreamingDraft = {
+  key: string;
+  bookId: string;
+  sectionId: string;
+  targetBlockId?: string;
+  replaceTarget: boolean;
+  content: string;
+  status: StreamingDraftStatus;
+  message: string;
+};
+
+const streamingDraftKey = (request: Pick<GenerationRequest, 'bookId' | 'sectionId' | 'targetBlockId'>) => (
+  `${request.bookId}:${request.sectionId}:${request.targetBlockId ?? 'section'}`
+);
 
 const sectionDraftKey = (bookId: string, sectionId: string) => `${bookId}:${sectionId}`;
 const emptySectionDraft = (): SectionDraft => ({ instruction: '' });
@@ -181,14 +198,12 @@ const clearHostBookCaches = () => {
 };
 
 const newerBook = (stored: Book, cached: Book | null) => {
-  const normalizedStored = normalizeBook(stored);
-  if (!cached) return normalizedStored;
-  const normalizedCached = normalizeBook(cached);
-  const storedTime = Date.parse(normalizedStored.updatedAt);
-  const cachedTime = Date.parse(normalizedCached.updatedAt);
+  if (!cached) return stored;
+  const storedTime = Date.parse(stored.updatedAt);
+  const cachedTime = Date.parse(cached.updatedAt);
   return Number.isFinite(cachedTime) && (!Number.isFinite(storedTime) || cachedTime > storedTime)
-    ? normalizedCached
-    : normalizedStored;
+    ? cached
+    : stored;
 };
 
 function App() {
@@ -211,6 +226,7 @@ function App() {
     const parsed = Number(stored);
     return Number.isFinite(parsed) ? clampManuscriptFontSize(parsed) : defaultManuscriptFontSize;
   });
+  const [streamingOutput, setStreamingOutput] = useState(() => localStorage.getItem(streamingOutputKey) === 'true');
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>(() => api.runtime === 'device'
     ? readProviderProfiles(localStorage.getItem(PROVIDER_PROFILES_STORAGE_KEY))
     : []);
@@ -238,11 +254,38 @@ function App() {
   const bookRef = useRef<Book | null>(null);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const saveFlights = useRef(new Map<number, Promise<Book>>());
+  const persistedRevision = useRef<number | null>(null);
   const busyRef = useRef(false);
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
   const generationAbort = useRef<AbortController | null>(null);
   const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
+  const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
+  const streamingDraftRef = useRef<StreamingDraft | null>(null);
+  const streamingControllerRef = useRef<AbortController | null>(null);
+  const streamingPending = useRef<{ controller: AbortController; key: string; content: string } | null>(null);
+  const streamingFrame = useRef<number | null>(null);
   const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
+
+  const cancelStreamingFrame = () => {
+    if (streamingFrame.current === null) return;
+    window.cancelAnimationFrame?.(streamingFrame.current);
+    window.clearTimeout(streamingFrame.current);
+    streamingFrame.current = null;
+  };
+
+  useEffect(() => () => {
+    generationAbort.current?.abort();
+    cancelStreamingFrame();
+    streamingPending.current = null;
+  }, []);
+
+  const advanceSaveRevision = () => {
+    saveRevision.current += 1;
+    saveFlights.current.clear();
+    persistedRevision.current = null;
+    return saveRevision.current;
+  };
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
@@ -303,14 +346,23 @@ function App() {
   }, [manuscriptFontFamily]);
 
   useEffect(() => {
-    if (api.runtime !== 'device') return;
     try {
-      localStorage.setItem(PROVIDER_PROFILES_STORAGE_KEY, JSON.stringify(providerProfiles));
+      if (api.runtime === 'device') {
+        localStorage.setItem(PROVIDER_PROFILES_STORAGE_KEY, JSON.stringify(providerProfiles));
+      }
       localStorage.setItem(activeProviderProfileKey, activeProviderProfileId);
     } catch {
       // Settings still work for the current page when browser persistence is unavailable.
     }
   }, [activeProviderProfileId, providerProfiles]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(streamingOutputKey, String(streamingOutput));
+    } catch {
+      // Streaming remains available for the current page when browser persistence is unavailable.
+    }
+  }, [streamingOutput]);
 
   useEffect(() => {
     sectionDraftsRef.current = sectionDrafts;
@@ -391,9 +443,11 @@ function App() {
           api.listProviderProfiles(),
         ]);
         setProviderProfiles(profiles);
-        setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
-          ? current
-          : profiles[0]?.id ?? '');
+        if (profiles.length > 0) {
+          setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
+            ? current
+            : profiles[0]?.id ?? current);
+        }
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
         setStatus('');
@@ -415,11 +469,12 @@ function App() {
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
-      const task = queueBookSave(candidate, revision);
+      const task = queueBookSave(candidate, revision, revision);
       void task.then((saved) => {
         if (saveRevision.current !== revision) return;
         const normalizedSaved = normalizeBook(saved);
         if (api.runtime === 'device') cacheBook(normalizedSaved);
+        bookRef.current = normalizedSaved;
         setBook((current) => current?.id === normalizedSaved.id ? normalizedSaved : current);
         setLibrary((items) => [{ id: normalizedSaved.id, title: normalizedSaved.title, updatedAt: normalizedSaved.updatedAt },
           ...items.filter((item) => item.id !== saved.id)]);
@@ -445,20 +500,22 @@ function App() {
     rememberCurrentSectionDraft();
     const stored = normalizeBook(await api.loadBook(bookId));
     const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
-    const loaded = normalizeBook(newerBook(stored, cached));
+    const loaded = newerBook(stored, cached);
     if (api.runtime === 'device') cacheBook(loaded);
-    saveRevision.current += 1;
+    const revision = advanceSaveRevision();
     bookRef.current = loaded;
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     restoreSectionDraft(loaded.id, '');
-    setDirty(Boolean(cached && loaded.updatedAt !== stored.updatedAt));
+    const loadedDirty = Boolean(cached && loaded.updatedAt !== stored.updatedAt);
+    persistedRevision.current = loadedDirty ? null : revision;
+    setDirty(loadedDirty);
     setView('shelf');
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
-    saveRevision.current += 1;
+    advanceSaveRevision();
     const current = bookRef.current ?? book;
     if (!current) return;
     const next = normalizeBook({ ...recipe(current), updatedAt: new Date().toISOString() });
@@ -467,7 +524,10 @@ function App() {
     setDirty(true);
   };
 
-  const queueBookSave = (candidate: Book, autosaveRevision?: number) => {
+  const queueBookSave = (candidate: Book, revision: number, autosaveRevision?: number): Promise<Book> => {
+    const existing = saveFlights.current.get(revision);
+    if (existing) return existing;
+    let persisted = false;
     const task = saveQueue.current.catch(() => undefined).then(() => {
       // A delayed autosave may already be behind a slow PUT. Skip its stale
       // snapshot before starting another full-book write; an already-started
@@ -475,10 +535,19 @@ function App() {
       if (autosaveRevision !== undefined && saveRevision.current !== autosaveRevision) {
         return candidate;
       }
+      persisted = true;
       return api.saveBook(candidate);
     });
-    saveQueue.current = task.then(() => undefined, () => undefined);
-    return task;
+    const tracked: Promise<Book> = task.then((saved) => {
+      if (persisted && saveRevision.current === revision) persistedRevision.current = revision;
+      return saved;
+    }, (error) => {
+      if (saveFlights.current.get(revision) === tracked) saveFlights.current.delete(revision);
+      throw error;
+    });
+    saveFlights.current.set(revision, tracked);
+    saveQueue.current = tracked.then(() => undefined, () => undefined);
+    return tracked;
   };
 
   const saveCurrent = async (candidateOverride?: Book) => {
@@ -486,14 +555,19 @@ function App() {
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook(currentBook);
     const revision = saveRevision.current;
+    if (!candidateOverride
+      && !dirty
+      && persistedRevision.current === revision) return currentBook;
+    const saveRevisionForCandidate = candidateOverride ? advanceSaveRevision() : revision;
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     if (api.runtime === 'device') cacheBook(candidate);
-    const saved = normalizeBook(await queueBookSave(candidate));
-    if (saveRevision.current !== revision) throw staleSaveError();
+    const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
+    if (saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
     if (api.runtime === 'device') cacheBook(saved);
     bookRef.current = saved;
     setBook(saved);
     setDirty(false);
+    persistedRevision.current = saveRevisionForCandidate;
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
     setStatus(api.runtime === 'device'
@@ -509,15 +583,16 @@ function App() {
       ...recipe(currentBook),
       updatedAt: new Date().toISOString(),
     });
-    const revision = ++saveRevision.current;
+    const revision = advanceSaveRevision();
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
-      const saved = normalizeBook(await queueBookSave(candidate));
+      const saved = normalizeBook(await queueBookSave(candidate, revision));
       if (saveRevision.current !== revision) throw staleSaveError();
       if (api.runtime === 'device') cacheBook(saved);
       bookRef.current = saved;
       setBook(saved);
       setDirty(false);
+      persistedRevision.current = revision;
       setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
         ...items.filter((item) => item.id !== saved.id)]);
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
@@ -568,6 +643,87 @@ function App() {
     }
   };
 
+  const setStreamingDraftState = (next: StreamingDraft | null) => {
+    streamingDraftRef.current = next;
+    setStreamingDraft(next);
+  };
+
+  const flushStreamingDraft = (controller: AbortController) => {
+    const pending = streamingPending.current;
+    if (!pending || pending.controller !== controller) return;
+    streamingPending.current = null;
+    const current = streamingDraftRef.current;
+    if (!current || current.key !== pending.key || current.status !== 'streaming') return;
+    setStreamingDraftState({ ...current, content: pending.content });
+  };
+
+  const scheduleStreamingDelta = (
+    controller: AbortController,
+    key: string,
+    delta: string,
+  ) => {
+    if (!delta || streamingControllerRef.current !== controller) return;
+    const current = streamingDraftRef.current;
+    if (!current || current.key !== key || current.status !== 'streaming') return;
+    const pending = streamingPending.current;
+    streamingPending.current = {
+      controller,
+      key,
+      content: (pending?.controller === controller && pending.key === key ? pending.content : current.content) + delta,
+    };
+    if (streamingFrame.current !== null) return;
+    const flush = () => {
+      streamingFrame.current = null;
+      flushStreamingDraft(controller);
+    };
+    streamingFrame.current = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame(flush)
+      : window.setTimeout(flush, 0);
+  };
+
+  const beginStreamingDraft = (request: GenerationRequest, controller: AbortController) => {
+    const draft: StreamingDraft = {
+      key: streamingDraftKey(request),
+      bookId: request.bookId,
+      sectionId: request.sectionId,
+      ...(request.targetBlockId ? { targetBlockId: request.targetBlockId } : {}),
+      replaceTarget: request.generationKind === 'regenerate-block',
+      content: '',
+      status: 'streaming',
+      message: '正在逐步生成，尚未写入正文。',
+    };
+    cancelStreamingFrame();
+    streamingControllerRef.current = controller;
+    streamingPending.current = null;
+    setStreamingDraftState(draft);
+  };
+
+  const finishStreamingDraft = (
+    controller: AbortController,
+    status: Exclude<StreamingDraftStatus, 'streaming'>,
+  ) => {
+    if (streamingControllerRef.current !== controller) return;
+    flushStreamingDraft(controller);
+    cancelStreamingFrame();
+    const current = streamingDraftRef.current;
+    if (!current) return;
+    setStreamingDraftState({
+      ...current,
+      status,
+      message: status === 'stopped'
+        ? '已停止，生成草稿未写入正文。'
+        : '生成失败，草稿未写入正文。',
+    });
+  };
+
+  const clearStreamingDraft = (controller?: AbortController) => {
+    if (controller && streamingControllerRef.current !== controller) return;
+    cancelStreamingFrame();
+    streamingControllerRef.current = null;
+    streamingPending.current = null;
+    setStreamingDraftState(null);
+  };
+
   const withBusy = async (action: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -594,14 +750,26 @@ function App() {
     };
     generationAbort.current = controller;
     generationTarget.current = target;
+    if (request.stream) beginStreamingDraft(request, controller);
+    else clearStreamingDraft();
     setGenerationState('generating');
     setStatus(label);
     try {
-      const result = await api.generate(request, controller.signal);
+      const result = await api.generate(
+        request,
+        controller.signal,
+        request.stream ? (delta) => scheduleStreamingDelta(controller, streamingDraftKey(request), delta) : undefined,
+      );
       if (controller.signal.aborted
         || generationAbort.current !== controller
         || generationTarget.current !== target) throw abortGenerationError();
+      if (request.stream) clearStreamingDraft(controller);
       return result;
+    } catch (error) {
+      if (request.stream && streamingControllerRef.current === controller) {
+        finishStreamingDraft(controller, isAbortError(error) ? 'stopped' : 'failed');
+      }
+      throw error;
     } finally {
       if (generationAbort.current === controller) {
         generationAbort.current = null;
@@ -631,6 +799,7 @@ function App() {
     const modeSnapshot = mode;
     const characterSnapshot = selectedCharacterId;
     const providerProfileIdSnapshot = activeProviderProfile?.id;
+    const streamingOutputSnapshot = streamingOutput;
     const generationRevision = saveRevision.current;
     const saved = await saveCurrent();
     if (saveRevision.current !== generationRevision) throw staleSaveError();
@@ -643,6 +812,7 @@ function App() {
       authorNote: noteSnapshot || undefined,
       instruction: inputSnapshot,
       generationKind: 'continue-section',
+      stream: streamingOutputSnapshot,
     } satisfies GenerationRequest;
     const result = await runGeneration(generation, '正在生成当前小节…');
     if (bookRef.current?.id !== saved.id || saveRevision.current !== generationRevision) {
@@ -729,27 +899,35 @@ function App() {
     }));
   };
 
+  const previousAnswerWithCandidates = (
+    savedBook: Book,
+    targetSectionId: string,
+    targetBlockId: string,
+  ): string | undefined => {
+    if (bookRef.current?.id !== savedBook.id) return undefined;
+    const savedSection = savedBook.chapters.flatMap((chapter) => chapter.sections)
+      .find((item) => item.id === targetSectionId);
+    const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
+    const targetIndex = savedBlocks.findIndex((item) => item.id === targetBlockId);
+    if (targetIndex < 0) return undefined;
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+      const candidate = savedBlocks[index];
+      if (candidate?.kind === 'assistant') {
+        if (candidate.candidates && candidate.candidates.length > 1 && candidate.adoptedCandidateId) {
+          return candidate.id;
+        }
+        break;
+      }
+    }
+    return undefined;
+  };
+
   const finalizePreviousAnswerCandidates = (
     savedBook: Book,
     targetSectionId: string,
     targetBlockId: string,
   ) => {
-    if (bookRef.current?.id !== savedBook.id) return;
-    const savedSection = savedBook.chapters.flatMap((chapter) => chapter.sections)
-      .find((item) => item.id === targetSectionId);
-    const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
-    const targetIndex = savedBlocks.findIndex((item) => item.id === targetBlockId);
-    if (targetIndex < 0) return;
-    let previousAnswerId: string | undefined;
-    for (let index = targetIndex - 1; index >= 0; index -= 1) {
-      const candidate = savedBlocks[index];
-      if (candidate?.kind === 'assistant') {
-        if (candidate.candidates && candidate.candidates.length > 1 && candidate.adoptedCandidateId) {
-          previousAnswerId = candidate.id;
-        }
-        break;
-      }
-    }
+    const previousAnswerId = previousAnswerWithCandidates(savedBook, targetSectionId, targetBlockId);
     if (!previousAnswerId) return;
     changeBook((current) => ({
       ...current,
@@ -782,6 +960,7 @@ function App() {
       const modeSnapshot = mode;
       const characterSnapshot = selectedCharacterId;
       const providerProfileIdSnapshot = activeProviderProfile?.id;
+      const streamingOutputSnapshot = streamingOutput;
       const generationRevision = saveRevision.current;
       const saved = await saveCurrent();
       if (saveRevision.current !== generationRevision) throw staleSaveError();
@@ -800,14 +979,17 @@ function App() {
         setStatus('当前输入已变化，回答未写入正文。');
         return;
       }
-      const generation = makeRespondToInputRequest({
-        bookId: saved.id,
-        sectionId: targetSectionId,
-        providerProfileId: providerProfileIdSnapshot,
-        mode: modeSnapshot,
-        selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-        targetBlockId: blockId,
-      });
+      const generation = {
+        ...makeRespondToInputRequest({
+          bookId: saved.id,
+          sectionId: targetSectionId,
+          providerProfileId: providerProfileIdSnapshot,
+          mode: modeSnapshot,
+          selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
+          targetBlockId: blockId,
+        }),
+        stream: streamingOutputSnapshot,
+      } satisfies GenerationRequest;
       const result = await runGeneration(generation, '正在生成这条输入的回答…');
       const currentBook = bookRef.current;
       const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
@@ -846,9 +1028,8 @@ function App() {
         })),
       }));
       // Persist the new answer before collapsing the candidate set belonging
-      // to the immediately preceding AI answer.  If this save fails, the
-      // newly generated text and the older candidates both remain dirty and
-      // recoverable for the normal autosave retry path.
+      // to the immediately preceding AI answer. If this save fails, the new
+      // text and older candidates remain available for an autosave retry.
       const responseRevision = saveRevision.current;
       const savedResponse = await saveCurrent();
       if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
@@ -876,6 +1057,7 @@ function App() {
       const modeSnapshot = mode;
       const characterSnapshot = selectedCharacterId;
       const providerProfileIdSnapshot = activeProviderProfile?.id;
+      const streamingOutputSnapshot = streamingOutput;
       const generationRevision = saveRevision.current;
       const saved = await saveCurrent();
       if (saveRevision.current !== generationRevision) throw staleSaveError();
@@ -892,14 +1074,17 @@ function App() {
         setStatus('当前 AI 正文已变化，候选未写入。');
         return;
       }
-      const generation = makeRegenerateBlockRequest({
-        bookId: saved.id,
-        sectionId: targetSectionId,
-        providerProfileId: providerProfileIdSnapshot,
-        mode: modeSnapshot,
-        selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-        targetBlockId: blockId,
-      });
+      const generation = {
+        ...makeRegenerateBlockRequest({
+          bookId: saved.id,
+          sectionId: targetSectionId,
+          providerProfileId: providerProfileIdSnapshot,
+          mode: modeSnapshot,
+          selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
+          targetBlockId: blockId,
+        }),
+        stream: streamingOutputSnapshot,
+      } satisfies GenerationRequest;
       const result = await runGeneration(generation, '正在生成新的候选回答…');
       const resultSection = bookRef.current?.chapters.flatMap((chapter) => chapter.sections)
         .find((item) => item.id === targetSectionId);
@@ -933,6 +1118,14 @@ function App() {
           }),
         })),
       }));
+      if (streamingOutputSnapshot) {
+        const responseRevision = saveRevision.current;
+        const savedResponse = await saveCurrent();
+        if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
+          setStatus('当前正文已变化，候选未写入。');
+          return;
+        }
+      }
       setStatus('已生成新的回答，并已切换到当前版本。');
     });
   };
@@ -994,10 +1187,11 @@ function App() {
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
       setBook(normalizedCreated);
       if (api.runtime === 'device') cacheBook(normalizedCreated);
-      saveRevision.current += 1;
+      const revision = advanceSaveRevision();
       setSectionId('');
       setSelectedCharacterId('');
       restoreSectionDraft(normalizedCreated.id, '');
+      persistedRevision.current = revision;
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
@@ -1023,8 +1217,8 @@ function App() {
       await ensureCurrentBookSaved();
       const storedNextBook = nextBook ? normalizeBook(await api.loadBook(nextBook.id)) : null;
       const cachedNextBook = nextBook && api.runtime === 'device' ? readCachedBook(nextBook.id) : null;
-      const loadedNextBook = storedNextBook ? normalizeBook(newerBook(storedNextBook, cachedNextBook)) : null;
-      saveRevision.current += 1;
+      const loadedNextBook = storedNextBook ? newerBook(storedNextBook, cachedNextBook) : null;
+      const revision = advanceSaveRevision();
       setDirty(false);
       await saveQueue.current.catch(() => undefined);
       await api.deleteBook(deletedBook.id);
@@ -1036,7 +1230,9 @@ function App() {
         setSectionId('');
         setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
         restoreSectionDraft(loadedNextBook.id, '');
-        setDirty(Boolean(cachedNextBook && loadedNextBook.updatedAt !== storedNextBook?.updatedAt));
+        const loadedNextBookDirty = Boolean(cachedNextBook && loadedNextBook.updatedAt !== storedNextBook?.updatedAt);
+        persistedRevision.current = loadedNextBookDirty ? null : revision;
+        setDirty(loadedNextBookDirty);
         setView('shelf');
       }
       setStatus(`已删除《${deletedBook.title}》。`);
@@ -1166,6 +1362,7 @@ function App() {
         mode: 'author',
         instruction: '',
         generationKind: 'summarize-section',
+        stream: false,
       } satisfies GenerationRequest;
       const result = await runGeneration(generation, '正在生成前文梗概…');
       const draft = parseSectionMemoryDraft(result.draft);
@@ -1212,7 +1409,6 @@ function App() {
           : item),
       })),
     });
-    saveRevision.current += 1;
     setBook(candidate);
     setDirty(true);
     await saveCurrent(candidate);
@@ -1239,7 +1435,6 @@ function App() {
           : item),
       })),
     });
-    saveRevision.current += 1;
     setBook(candidate);
     setDirty(true);
     await saveCurrent(candidate);
@@ -1260,7 +1455,6 @@ function App() {
           : item),
       })),
     });
-    saveRevision.current += 1;
     setBook(candidate);
     setDirty(true);
     await saveCurrent(candidate);
@@ -1413,6 +1607,9 @@ function App() {
             busy={busy}
             status={status}
             generationState={generationState}
+            streamingDraft={streamingDraft && streamingDraft.bookId === book.id && streamingDraft.sectionId === section.id
+              ? streamingDraft
+              : null}
             contextPlanError={promptPreviewError}
             contextPlan={promptPreview}
             contextPlanPending={deferredContextInput !== contextPreviewInput}
@@ -1501,6 +1698,8 @@ function App() {
         onManuscriptFontFamilyChange={setManuscriptFontFamily}
         manuscriptFontSize={manuscriptFontSize}
         onManuscriptFontSizeChange={setManuscriptFontSize}
+        streamingOutput={streamingOutput}
+        onStreamingOutputChange={setStreamingOutput}
         providerProfiles={providerProfiles}
         activeProviderProfileId={activeProviderProfileId}
         onSelectProviderProfile={setActiveProviderProfileId}
@@ -1609,6 +1808,8 @@ function SettingsDrawer({
   onManuscriptFontFamilyChange,
   manuscriptFontSize,
   onManuscriptFontSizeChange,
+  streamingOutput,
+  onStreamingOutputChange,
   providerProfiles,
   activeProviderProfileId,
   onSelectProviderProfile,
@@ -1624,6 +1825,8 @@ function SettingsDrawer({
   onManuscriptFontFamilyChange: (font: ManuscriptFontFamily) => void;
   manuscriptFontSize: number;
   onManuscriptFontSizeChange: (size: number) => void;
+  streamingOutput: boolean;
+  onStreamingOutputChange: (enabled: boolean) => void;
   providerProfiles: ProviderProfile[];
   activeProviderProfileId: string;
   onSelectProviderProfile: (id: string) => void;
@@ -1864,6 +2067,21 @@ function SettingsDrawer({
           </div>
         </div>
         <p className="compact-setting-note">正文 12–24 px；手机编辑器最低保持 16 px。</p>
+      </section>
+      <section className="settings-section" aria-labelledby="generation-settings-heading">
+        <h3 id="generation-settings-heading">生成</h3>
+        <label className="streaming-output-setting" htmlFor="streaming-output-toggle">
+          <span>
+            <strong>流式输出</strong>
+            <small>生成正文时逐步显示内容。</small>
+          </span>
+          <input
+            id="streaming-output-toggle"
+            type="checkbox"
+            checked={streamingOutput}
+            onChange={(event) => onStreamingOutputChange(event.target.checked)}
+          />
+        </label>
       </section>
       <ProviderSettings
         currentProfile={currentProfile}

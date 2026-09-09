@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { createStoryServer } from '../server/main.ts';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -307,6 +307,67 @@ describe('story store', () => {
     expect((await store.listBooks()).map((item) => item.id)).toEqual(expect.arrayContaining(['book-one', 'book-two']));
     expect((await store.loadBook('book-one')).chapters[0]?.sections[0]?.content).toBe('One');
     expect((await store.loadBook('book-two')).chapters[0]?.sections[0]?.content).toBe('Two');
+  });
+
+  it('skips unchanged managed files while still publishing updated metadata', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = makeIntegrityBook();
+    const first = await store.saveBook(book);
+    const bookRoot = path.join(root, 'books', book.id);
+    const characterFile = path.join(bookRoot, 'characters', 'integrity-character.json');
+    const manuscriptFile = path.join(bookRoot, 'manuscript', 'integrity-chapter', 'integrity-source.md');
+    const fixedMtime = new Date('2020-01-01T00:00:00.000Z');
+    await utimes(characterFile, fixedMtime, fixedMtime);
+    await utimes(manuscriptFile, fixedMtime, fixedMtime);
+    const firstCharacterStat = await stat(characterFile);
+    const firstManuscriptStat = await stat(manuscriptFile);
+    const firstManifest = await readFile(path.join(bookRoot, 'book.json'), 'utf8');
+
+    await store.saveBook({ ...first, title: 'Changed title' });
+
+    expect((await stat(characterFile)).mtimeMs).toBe(firstCharacterStat.mtimeMs);
+    expect((await stat(manuscriptFile)).mtimeMs).toBe(firstManuscriptStat.mtimeMs);
+    const secondManifest = await readFile(path.join(bookRoot, 'book.json'), 'utf8');
+    expect(secondManifest).not.toBe(firstManifest);
+    expect(secondManifest).toContain('Changed title');
+    expect((await readFile(path.join(root, 'library.json'), 'utf8'))).toContain('Changed title');
+    expect((await store.loadBook(book.id)).title).toBe('Changed title');
+  });
+
+  it('persists title and manuscript changes and repairs external managed file edits', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = makeIntegrityBook();
+    await store.saveBook(book);
+
+    const bookRoot = path.join(root, 'books', book.id);
+    const characterFile = path.join(bookRoot, 'characters', 'integrity-character.json');
+    const manuscriptFile = path.join(bookRoot, 'manuscript', 'integrity-chapter', 'integrity-source.md');
+    await writeFile(characterFile, 'external character edit', 'utf8');
+    await writeFile(manuscriptFile, Buffer.from([0xff]));
+
+    const next = {
+      ...book,
+      title: 'Changed title',
+      characters: book.characters.map((item) => ({ ...item, content: 'Changed character context.' })),
+      chapters: book.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((section) => section.id === 'integrity-source'
+          ? { ...section, content: '\uFFFD' }
+          : section),
+      })),
+    };
+    const saved = await store.saveBook(next);
+
+    expect(await readFile(characterFile, 'utf8')).toBe(`${JSON.stringify(saved.characters[0], null, 2)}\n`);
+    expect(await readFile(manuscriptFile)).toEqual(Buffer.from('\uFFFD', 'utf8'));
+    const loaded = await store.loadBook(book.id);
+    expect(loaded.title).toBe('Changed title');
+    expect(loaded.characters[0]?.content).toBe('Changed character context.');
+    expect(loaded.chapters[0]?.sections[0]?.content).toBe('\uFFFD');
   });
 
   it('removes stale managed files while preserving user files', async () => {

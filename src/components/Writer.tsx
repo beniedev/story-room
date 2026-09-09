@@ -50,6 +50,7 @@ interface WriterProps {
   contextPlanPending?: boolean;
   contextCompositionOpen: boolean;
   contextToolsOpen: boolean;
+  streamingDraft?: StreamingDraftView | null;
   providerName: string;
   modelId: string;
   onBack: () => void;
@@ -72,6 +73,14 @@ interface WriterProps {
   onSectionTitleChange: (value: string) => Promise<void>;
   onGenerate: () => void;
 }
+
+type StreamingDraftView = {
+  content: string;
+  status: 'streaming' | 'stopped' | 'failed';
+  message: string;
+  targetBlockId?: string;
+  replaceTarget: boolean;
+};
 
 const manuscriptScrollPositions = new Map<string, number>();
 const manuscriptTailTargets = new Map<string, string>();
@@ -120,6 +129,60 @@ const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelec
   );
 });
 
+const StreamingDraftBlock = memo(function StreamingDraftBlock({ draft }: { draft: StreamingDraftView }) {
+  const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
+  const copyFeedbackTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+  }, []);
+  const copyDraft = async () => {
+    if (!draft.content) return;
+    let success = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(draft.content);
+        success = true;
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = draft.content;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        try {
+          textarea.select();
+          success = document.execCommand('copy');
+        } finally {
+          textarea.remove();
+        }
+      }
+    } catch {
+      success = false;
+    }
+    setCopyState(success ? 'success' : 'error');
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = window.setTimeout(() => setCopyState('idle'), 2_000);
+  };
+  return (
+    <div className="streaming-draft-block" data-streaming-status={draft.status}>
+      {draft.content ? (
+        <div className="streaming-draft-text" role="textbox" aria-readonly="true" aria-label="临时生成草稿" tabIndex={0}>
+          {draft.content}
+        </div>
+      ) : (
+        <p className="streaming-draft-empty">{draft.status === 'streaming' ? '正在生成…' : '没有可保留的临时草稿。'}</p>
+      )}
+      <div className="streaming-draft-footer">
+        <p role="status" aria-live="polite">{draft.message}</p>
+        {draft.content && draft.status !== 'streaming' && (
+          <button type="button" className="quiet-action" onClick={() => void copyDraft()}>
+            {copyState === 'success' ? '已复制' : copyState === 'error' ? '未能复制，请选中文字复制' : '复制临时草稿'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export function Writer(props: WriterProps) {
   const selectedCharacter = props.book.characters.find((character) => character.id === props.selectedCharacterId);
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
@@ -150,6 +213,12 @@ export function Writer(props: WriterProps) {
   const [isResizingInstruction, setIsResizingInstruction] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const generationStart = useRef<{ scrollKey: string; blockCount: number } | null>(null);
+  const streamingScrollState = useRef<{
+    key: string;
+    wasAtBottom: boolean;
+    userScrolledUp: boolean;
+    autoScrolled: boolean;
+  } | null>(null);
   const selectedBlock = blocks.find((item) => item.id === selectedBlockId);
   const editingBlock = blocks.find((item) => item.id === editingBlockId);
   const lastNonEmptyBlockId = useMemo(() => [...blocks].reverse().find((block) => block.content.trim())?.id ?? '', [blocks]);
@@ -181,6 +250,9 @@ export function Writer(props: WriterProps) {
   const manuscriptWordCount = useMemo(() => countWords(manuscriptText), [manuscriptText]);
   const manuscriptTokenCount = useMemo(() => estimateTokens(manuscriptText), [manuscriptText]);
   const manuscriptScrollKey = `${props.book.id}:${props.section?.id ?? ''}`;
+  const streamingDraftKey = props.streamingDraft
+    ? `${props.book.id}:${props.section?.id ?? ''}:${props.streamingDraft.targetBlockId ?? 'section'}`
+    : '';
 
   useEffect(() => {
     props.onEditorOpenChange?.(editorOpen);
@@ -209,8 +281,13 @@ export function Writer(props: WriterProps) {
   const updateManuscriptScrollState = () => {
     const container = manuscriptWrapRef.current;
     if (!container) return;
+    const remaining = container.scrollHeight - container.clientHeight - container.scrollTop;
     manuscriptScrollPositions.set(manuscriptScrollKey, container.scrollTop);
-    setShowScrollToBottom(container.scrollHeight - container.clientHeight - container.scrollTop > 12);
+    setShowScrollToBottom(remaining > 12);
+    const streaming = streamingScrollState.current;
+    if (streaming?.key === streamingDraftKey && remaining > 96 && !streaming.autoScrolled) {
+      streaming.userScrolledUp = true;
+    }
   };
 
   const scrollManuscriptToBottom = () => {
@@ -279,6 +356,30 @@ export function Writer(props: WriterProps) {
     prepareManuscriptTail();
     updateManuscriptScrollState();
   }, [instructionDockHeight, manuscriptText, manuscriptScrollKey]);
+
+  useLayoutEffect(() => {
+    const container = manuscriptWrapRef.current;
+    const draft = props.streamingDraft;
+    if (!container || !draft || !streamingDraftKey) {
+      if (!draft) streamingScrollState.current = null;
+      return;
+    }
+    const remaining = container.scrollHeight - container.clientHeight - container.scrollTop;
+    const current = streamingScrollState.current;
+    if (!current || current.key !== streamingDraftKey) {
+      streamingScrollState.current = {
+        key: streamingDraftKey,
+        wasAtBottom: remaining <= 96,
+        userScrolledUp: false,
+        autoScrolled: false,
+      };
+    }
+    const state = streamingScrollState.current;
+    if (!draft.content || !state || state.autoScrolled || state.userScrolledUp || !state.wasAtBottom) return;
+    container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    state.autoScrolled = true;
+    updateManuscriptScrollState();
+  }, [props.streamingDraft, streamingDraftKey]);
 
   useEffect(() => {
     const update = () => {
@@ -633,6 +734,10 @@ export function Writer(props: WriterProps) {
                     </div>
                   )}
                 </ManuscriptBlock>
+                {props.streamingDraft?.replaceTarget
+                  && props.streamingDraft.targetBlockId === block.id && (
+                  <StreamingDraftBlock draft={props.streamingDraft} />
+                )}
                 {selectedBlockId === block.id && block.kind === 'assistant' && selectedCandidates.length > 1 && candidateNavigation(block)}
                 {block.id === lastNonEmptyBlockId && block.kind === 'user' && (
                   <button
@@ -644,6 +749,9 @@ export function Writer(props: WriterProps) {
                 )}
               </Fragment>
             ))}
+            {props.streamingDraft && !props.streamingDraft.replaceTarget && (
+              <StreamingDraftBlock draft={props.streamingDraft} />
+            )}
             {blocks.length === 0 && <p className="empty-manuscript">本节还没有正文。</p>}
             <div className="manuscript-tail-space" ref={manuscriptTailRef} aria-hidden="true" />
           </div>

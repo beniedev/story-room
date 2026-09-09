@@ -122,4 +122,23 @@ describe('device-local library', () => {
     expect(result).toEqual({ draft: expect.any(String), sourceSignature: expect.stringMatching(/^[0-9a-f]{16}$/) });
     expect(result).not.toHaveProperty('plan');
   });
+
+  it('emits one immediate delta for a streamed fake generation', async () => {
+    const entry = (await deviceLibrary.listBooks())[0];
+    if (!entry) throw new Error('device fixture book missing');
+    const book = await deviceLibrary.loadBook(entry.id);
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('device fixture section missing');
+    const deltas: string[] = [];
+
+    const result = await deviceLibrary.generate({
+      bookId: book.id,
+      sectionId: section.id,
+      mode: 'author',
+      instruction: 'Synthetic streamed continuation.',
+      stream: true,
+    }, undefined, (delta) => deltas.push(delta));
+
+    expect(deltas).toEqual([result.draft]);
+  });
 });

@@ -153,14 +153,23 @@ export const deviceLibrary = {
   contextPlan: async (request: GenerationRequest): Promise<ContextPlanPreview> => (
     toContextPlanPreview(buildContextPlan(loadBook(request.bookId), request))
   ),
-  generate: async (request: GenerationRequest, signal?: AbortSignal): Promise<GenerationResult> => {
+  generate: async (
+    request: GenerationRequest,
+    signal?: AbortSignal,
+    onDelta?: (delta: string) => void,
+  ): Promise<GenerationResult> => {
     if (signal?.aborted) throw new DOMException('生成已取消。', 'AbortError');
     const plan = buildContextPlan(loadBook(request.bookId), request);
-    return {
+    const result = {
       draft: request.generationKind === 'summarize-section'
         ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
         : fakeDraft(request.mode),
       sourceSignature: plan.sourceSignature,
     };
+    if (request.stream) {
+      if (signal?.aborted) throw new DOMException('生成已取消。', 'AbortError');
+      onDelta?.(result.draft);
+    }
+    return result;
   },
 };

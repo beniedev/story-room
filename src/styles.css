@@ -793,7 +793,7 @@ h4 {
 
 .writer-cancel-button {
   flex: 0 0 auto;
-  min-height: 32px;
+  min-height: 44px;
   padding-block: 0.25rem;
   color: var(--accent-strong);
   font-size: 0.72rem;
@@ -967,6 +967,46 @@ h4 {
 
 .manuscript-dialogue {
   color: var(--manuscript-dialogue);
+}
+
+.streaming-draft-block {
+  grid-column: 1;
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.35rem 0.25rem 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-inline-start: 2px solid var(--accent);
+  background: var(--surface-soft);
+  color: var(--manuscript-ai);
+}
+
+.streaming-draft-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+
+.streaming-draft-empty,
+.streaming-draft-footer p {
+  margin: 0;
+}
+
+.streaming-draft-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.streaming-draft-footer .quiet-action {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding-inline: 0.65rem;
 }
 
 .empty-manuscript {
@@ -2791,6 +2831,37 @@ h4 {
   font-size: 0.76rem;
   font-weight: 500;
   line-height: 1.45;
+}
+
+.streaming-output-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 44px;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.streaming-output-setting > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.streaming-output-setting small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.streaming-output-setting input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  accent-color: var(--accent-strong);
 }
 
 .font-family-setting {

@@ -11,6 +11,7 @@ import {
   type ProviderProfile,
 } from '../src/providerProfiles.ts';
 import type { PromptMessage, ProviderLimits } from '../src/types.ts';
+import { readProviderSse, ProviderStreamProtocolError } from './providerStream.ts';
 
 type StoredProviderProfile = ProviderProfile & {
   apiKey?: string;
@@ -51,6 +52,11 @@ export class ProviderCancelledError extends ProviderConnectionError {
     this.name = 'ProviderCancelledError';
   }
 }
+
+export type ProviderGenerationOptions = {
+  stream?: boolean;
+  onDelta?: (delta: string) => void;
+};
 
 type ParsedProviderUrl = {
   url: URL;
@@ -371,12 +377,14 @@ export class ProviderStore {
     profileId: string,
     messages: PromptMessage[],
     externalSignal?: AbortSignal,
+    options: ProviderGenerationOptions = {},
   ): Promise<string | null> {
     const profile = await this.resolve(profileId);
     if (externalSignal?.aborted) throw new ProviderCancelledError();
     if (profile.kind === 'fake') return null;
     const apiKey = normalizeApiKey(profile.apiKey);
     if (!apiKey) throw new ProviderInputError('所选连接方案没有本机 API Key。');
+    const stream = options.stream === true;
     const body = {
       model: profile.modelId,
       messages: messages.map(({ role, content }) => ({ role, content })),
@@ -385,6 +393,7 @@ export class ProviderStore {
       top_p: profile.topP ?? 1,
       frequency_penalty: profile.frequencyPenalty ?? 0,
       presence_penalty: profile.presencePenalty ?? 0,
+      ...(stream ? { stream: true } : {}),
       ...(profile.reasoningEffort ? { reasoning_effort: profile.reasoningEffort } : {}),
       ...(profile.verbosity ? { verbosity: profile.verbosity } : {}),
     };
@@ -399,7 +408,7 @@ export class ProviderStore {
         response = await fetch(endpoint(parsed.url, 'chat/completions'), {
           method: 'POST',
           headers: {
-            Accept: 'application/json',
+            Accept: stream ? 'text/event-stream, application/json' : 'application/json',
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
           },
@@ -417,6 +426,18 @@ export class ProviderStore {
       }
       if (!response.ok) throw new ProviderConnectionError(readErrorStatus(response.status));
 
+      if (stream && response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+        try {
+          return await readProviderSse(response, signal, options.onDelta);
+        } catch (error) {
+          if (signal.aborted) throw new ProviderCancelledError();
+          if (error instanceof ProviderStreamProtocolError) {
+            throw new ProviderConnectionError(error.message);
+          }
+          throw error;
+        }
+      }
+
       let payload: {
         choices?: Array<{ message?: { content?: unknown } }>;
       };
@@ -428,12 +449,18 @@ export class ProviderStore {
       }
       if (signal.aborted) throw new ProviderCancelledError();
       const content = payload.choices?.[0]?.message?.content;
-      if (typeof content === 'string' && content.trim()) return content.trim();
+      if (typeof content === 'string' && content.trim()) {
+        if (stream) options.onDelta?.(content);
+        return content.trim();
+      }
       if (Array.isArray(content)) {
         const joined = content.map((item) => (
           item && typeof item === 'object' && 'text' in item && typeof item.text === 'string' ? item.text : ''
         )).join('').trim();
-        if (joined) return joined;
+        if (joined) {
+          if (stream) options.onDelta?.(joined);
+          return joined;
+        }
       }
       throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
     } catch (error) {

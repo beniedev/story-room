@@ -46,6 +46,8 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 
 ### Generating and comparing answers
 
+The selected model profile is remembered in the current browser and origin. If that profile has been removed, the app selects an available profile. Local-host connection settings and keys remain on the host.
+
 After editing an already-sent user passage, use “再生成一版” on its answer to generate a new candidate from the latest adopted text before that answer. The old answer, its alternative candidates, and later passages are excluded from that request. If the manuscript ends with a user passage, “生成回答” beneath it generates an answer without duplicating the user passage or consuming the next draft in the bottom input.
 
 The candidate arrows switch the current manuscript version immediately and save the choice in the background; they do not start generation. The existing edit, delete, and “再生成一版” actions apply to the displayed answer. Generating another candidate selects it automatically. Subsequent generation, ordinary exports, statistics, and Section Memory freshness use the current version. Switching an answer in the middle of a section preserves later passages, which may need a continuity review.
@@ -53,6 +55,10 @@ The candidate arrows switch the current manuscript version immediately and save 
 Candidates remain available across refreshes until the next new input receives an answer that is successfully saved. At that point, only the current version of the preceding answer is retained; its other candidates are removed. Failure or cancellation preserves those choices. Regenerating an answer or continuing without a new input does not clear candidates. Complete JSON backups include the candidates still present in the Book.
 
 Candidate source signatures record changes in writing material without storing another full prompt snapshot. Existing Books remain readable without a bulk migration, and candidate counts have no application-defined cap.
+
+Settings includes “流式输出”, off by default and remembered in the current browser. When enabled, manuscript generation displays incoming text progressively. A complete result uses the same manuscript and candidate-saving flow as a non-streamed answer. If generation is cancelled or fails, the partial text remains available to select and copy on the page; it is not saved into the Book. Starting another generation replaces that temporary preview, and reloading the page clears it. Section Memory generation still waits for its complete structured result. Hosted/device mode remains Fake.
+
+For local API clients, `POST /api/generate` accepts an optional boolean `stream`. A streamed response uses `application/x-ndjson` with `delta` events containing `text`, followed by a `result` event containing the ordinary generation result, or an `error` event. Only the final `result` means generation completed; an interrupted connection is not a completed answer. Requests without streaming retain the JSON response format.
 
 ### Context planning
 
@@ -66,7 +72,7 @@ Model-generated memory is never inserted into ordinary continuation until it is 
 
 ## Current limits
 
-- API requests, Provider responses, and Section Memory have no application-defined size or item-count caps. Autosave currently writes the whole Book, so large Books require more memory and I/O. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); it is not implemented.
+- API requests, Provider responses, and Section Memory have no application-defined size or item-count caps. Saves still transfer and validate the whole Book. The app reuses saves of the same unchanged revision, and the host skips rewriting identical source and manuscript files. Large Books still require more memory and I/O. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); that API is not implemented.
 - Context estimates are advisory and do not block generation. Model context and output settings accept positive safe integers; the configured Provider determines its actual supported limits.
 - Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books.
 - The local host and Provider endpoint are not a production deployment. Browser, operating-system, or configured endpoint compromise is outside this demo's guarantees.

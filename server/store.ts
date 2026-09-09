@@ -389,6 +389,17 @@ const ensureSafeFile = async (file: string) => {
   }
 };
 
+const atomicWriteIfChanged = async (file: string, content: string) => {
+  try {
+    const stat = await lstat(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw unsafeBookTree();
+    if (Buffer.from(await readFile(file)).equals(Buffer.from(content, 'utf8'))) return;
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  await atomicWrite(file, content);
+};
+
 const managedId = (name: string, extension: '.json' | '.md') => {
   if (!name.endsWith(extension)) return undefined;
   const id = name.slice(0, -extension.length);
@@ -710,15 +721,15 @@ export class StoryStore {
       // Publish the manifest last so an interrupted save keeps the previous
       // manifest pointing at a complete set of source files.
       await Promise.all(saved.characters.map((item) =>
-        atomicWrite(path.join(root, 'characters', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+        atomicWriteIfChanged(path.join(root, 'characters', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
       await Promise.all(saved.worldRules.map((item) =>
-        atomicWrite(path.join(root, 'world', `${validId(item.id)}.md`), item.content)));
+        atomicWriteIfChanged(path.join(root, 'world', `${validId(item.id)}.md`), item.content)));
       await Promise.all(saved.canonFacts.map((item) =>
-        atomicWrite(path.join(root, 'canon', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+        atomicWriteIfChanged(path.join(root, 'canon', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
       await Promise.all(saved.summaries.map((item) =>
-        atomicWrite(path.join(root, 'summaries', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+        atomicWriteIfChanged(path.join(root, 'summaries', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
       await Promise.all(saved.chapters.flatMap((chapter) => chapter.sections.map((section) =>
-        atomicWrite(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
+        atomicWriteIfChanged(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
       await atomicWrite(path.join(root, 'book.json'), `${JSON.stringify(meta, null, 2)}\n`);
 
       // Stale managed files are removed only after the new manifest is

@@ -1,6 +1,6 @@
 # Incremental save design (future work)
 
-This is a design note, not an implemented API. The current host accepts a whole-Book `PUT` without an application-defined size cap and autosaves the whole Book. Large Books still cost more memory and I/O to save; pending edits can be lost before a save succeeds.
+This is a design note, not an implemented API. The current host accepts a whole-Book `PUT` without an application-defined size cap. The client reuses saves of the same unchanged revision, and the host compares managed source and manuscript files before writing them; metadata is still published through the existing write queue. Requests and validation still cover the whole Book. Large Books still cost more memory and I/O to save; pending edits can be lost before a save succeeds.
 
 ## Goal
 

@@ -101,6 +101,31 @@ const sendJson = (response: ServerResponse, status: number, value: unknown) => {
   response.end(body);
 };
 
+type GenerationStreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'result'; result: { draft: string; sourceSignature?: string } }
+  | { type: 'error'; error: string };
+
+const writeGenerationStreamEvent = (response: ServerResponse, event: GenerationStreamEvent) => {
+  if (response.destroyed || response.writableEnded) throw new ProviderCancelledError();
+  if (!response.headersSent) {
+    response.writeHead(200, {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+  }
+  try {
+    response.write(`${JSON.stringify(event)}\n`);
+  } catch {
+    throw new ProviderCancelledError();
+  }
+};
+
+const finishGenerationStream = (response: ServerResponse) => {
+  if (!response.destroyed && !response.writableEnded) response.end();
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null
 );
@@ -125,6 +150,7 @@ const readGenerationRequest = async (request: IncomingMessage): Promise<Generati
     || typeof body.sectionId !== 'string'
     || typeof body.instruction !== 'string'
     || (body.providerProfileId !== undefined && typeof body.providerProfileId !== 'string')
+    || (body.stream !== undefined && typeof body.stream !== 'boolean')
     || (body.mode !== 'author' && body.mode !== 'character')
     || (body.authorNote !== undefined && typeof body.authorNote !== 'string')
     || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')
@@ -209,6 +235,7 @@ export const createStoryServer = (
 ) => {
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
     let generationSignal: AbortSignal | undefined;
+    let streamingGeneration = false;
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const actualHost = requestHost(request);
@@ -273,15 +300,16 @@ export const createStoryServer = (
       }
       if (request.method === 'POST' && url.pathname === '/api/generate') {
         const generationController = new AbortController();
-        let responseStarted = false;
+        let generationFinished = false;
         generationSignal = generationController.signal;
         const abortOnClientDisconnect = () => {
-          if (!responseStarted && !generationController.signal.aborted) generationController.abort();
+          if (!generationFinished && !generationController.signal.aborted) generationController.abort();
         };
         request.once('aborted', abortOnClientDisconnect);
         response.once('close', abortOnClientDisconnect);
         try {
           const body = await readGenerationRequest(request);
+          streamingGeneration = body.stream === true;
           if (generationController.signal.aborted) return;
           const book = await storyStore.loadBook(body.bookId);
           if (generationController.signal.aborted) return;
@@ -289,27 +317,53 @@ export const createStoryServer = (
           if (generationController.signal.aborted) return;
           const plan = buildContextPlan(book, body, limits);
           assertGenerationExecutable(body);
+          const emitDelta = streamingGeneration
+            ? (delta: string) => {
+                if (generationController.signal.aborted || response.destroyed) {
+                  throw new ProviderCancelledError();
+                }
+                writeGenerationStreamEvent(response, { type: 'delta', text: delta });
+              }
+            : undefined;
           const generated = body.providerProfileId
-            ? await providerStore.generate(body.providerProfileId, plan.messages, generationController.signal)
+            ? await providerStore.generate(body.providerProfileId, plan.messages, generationController.signal, {
+                stream: streamingGeneration,
+                onDelta: emitDelta,
+              })
             : null;
           if (generationController.signal.aborted) return;
           if (generated !== null) {
-            responseStarted = true;
-            return sendJson(response, 200, {
+            const result = {
               draft: body.generationKind === 'summarize-section'
                 ? normalizeSectionMemoryResponse(generated)
                 : generated,
               sourceSignature: plan.sourceSignature,
-            });
+            };
+            if (streamingGeneration) {
+              writeGenerationStreamEvent(response, { type: 'result', result });
+              generationFinished = true;
+              finishGenerationStream(response);
+              return;
+            }
+            generationFinished = true;
+            return sendJson(response, 200, result);
           }
-          responseStarted = true;
-          const fake = fakeGenerate(book, body, limits);
-          return sendJson(response, 200, {
+          const fake = fakeGenerate(book, body, limits, plan);
+          const result = {
             draft: fake.draft,
             sourceSignature: fake.sourceSignature,
-          });
+          };
+          if (streamingGeneration) {
+            if (emitDelta) emitDelta(result.draft);
+            writeGenerationStreamEvent(response, { type: 'result', result });
+            generationFinished = true;
+            finishGenerationStream(response);
+            return;
+          }
+          generationFinished = true;
+          return sendJson(response, 200, result);
         } finally {
-          responseStarted = true;
+          generationFinished = true;
           request.off('aborted', abortOnClientDisconnect);
           response.off('close', abortOnClientDisconnect);
         }
@@ -345,6 +399,24 @@ export const createStoryServer = (
         || error instanceof ProviderConnectionError
         ? error.message
         : '服务器内部错误。';
+      if (streamingGeneration && response.headersSent
+        && !response.destroyed && !response.writableEnded && !generationSignal?.aborted) {
+        const message = error instanceof BookNotFoundError
+          || error instanceof RequestValidationError
+          || error instanceof StoreInputError
+          || error instanceof ProviderResponseError
+          || error instanceof ProviderInputError
+          || error instanceof ProviderConnectionError
+          ? error.message
+          : '服务器内部错误。';
+        try {
+          writeGenerationStreamEvent(response, { type: 'error', error: message });
+          finishGenerationStream(response);
+        } catch {
+          // The client disconnected while the error event was being written.
+        }
+        return;
+      }
       if (statusCode >= 500) console.error('Story host request failed:', error);
       return sendJson(response, statusCode, { error: message });
     }

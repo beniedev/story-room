@@ -70,8 +70,9 @@ export function fakeGenerate(
   book: Book,
   request: Omit<GenerationRequest, 'bookId'>,
   limits?: ProviderLimits,
+  existingPlan?: ContextPlan,
 ): { plan: ContextPlan; draft: string; sourceSignature?: string } {
-  const plan = buildContextPlan(book, request, limits);
+  const plan = existingPlan ?? buildContextPlan(book, request, limits);
   assertGenerationExecutable(request);
   if (request.generationKind === 'summarize-section') {
     return {

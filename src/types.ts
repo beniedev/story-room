@@ -248,6 +248,7 @@ export interface GenerationRequest {
   sectionId: string;
   providerProfileId?: string;
   mode: GenerationMode;
+  stream?: boolean;
   selectedCharacterId?: string;
   authorNote?: string;
   instruction: string;
