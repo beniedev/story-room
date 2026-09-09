@@ -124,8 +124,6 @@ const makeToolProps = (book: Book, section = book.chapters[0]!.sections[4]!) => 
   open: true,
   book,
   section,
-  onContextReferenceChange: vi.fn<(sourceSectionId: string, selected: boolean) => void>(),
-  onContextReferencesChange: vi.fn<(references: Book['chapters'][number]['sections'][number]['contextReferences']) => void>(),
   onGenerateMemory: vi.fn(async () => memoryDraft),
   onSaveMemoriesAndLoad: vi.fn(async () => undefined),
   busy: false,
@@ -216,25 +214,29 @@ describe('context drawers real interactions', () => {
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
     await flushAnimation();
 
-    expect(container.textContent).toContain('已选 1/2 小节');
+    expect(container.textContent).toContain('待确认 1/2 小节');
+    expect(container.textContent).toContain('当前设置仍含 1 节全文引用');
     expect(container.querySelector('select')).toBeNull();
     expect(container.textContent).not.toContain('清空全部');
     expect(container.querySelectorAll('.context-reference-checkbox')).toHaveLength(4);
     const globalSave = container.querySelector<HTMLButtonElement>('.source-load-tab > .context-summary-save');
-    expect(globalSave?.disabled).toBe(true);
+    expect(globalSave?.disabled).toBe(false);
 
     const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
     const row = disclosure?.closest('.context-reference-row');
     const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(checkbox?.checked).toBe(true);
     await act(async () => checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(props.onContextReferenceChange).toHaveBeenCalledWith('source-ready', false);
+    expect(checkbox?.checked).toBe(false);
+    expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
     expect(container.querySelector('textarea')).toBeNull();
 
     await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(memoryDraft.synopsis);
     expect(globalSave?.disabled).toBe(false);
     expect(disclosure?.getAttribute('aria-expanded')).toBe('true');
+    expect(checkbox?.checked).toBe(false);
+    await act(async () => checkbox?.click());
     await act(async () => globalSave?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     const saveConfirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent?.includes('确认保存并加载'));
@@ -259,10 +261,11 @@ describe('context drawers real interactions', () => {
     expect(blankCheckbox?.disabled).toBe(true);
 
     await act(async () => selectAll?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(props.onContextReferencesChange).toHaveBeenCalledWith([
-      { sectionId: 'source-ready', mode: 'full', reason: 'manual' },
-      { sectionId: 'source-no-memory', mode: 'full', reason: 'manual' },
-    ]);
+    expect(container.textContent).toContain('待确认 2/2 小节');
+    expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    expect(container.textContent).toContain('请先填写或生成梗概，或取消勾选；不会加载原文。');
+    expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
     await unmount(root);
   });
 
@@ -274,6 +277,7 @@ describe('context drawers real interactions', () => {
       resolveGeneration = resolve;
     }));
     const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    await act(async () => container.querySelector<HTMLButtonElement>('.source-scope-all')?.click());
     const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
     await act(async () => disclosure?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await flushAnimation();
@@ -508,6 +512,12 @@ describe('context drawers real interactions', () => {
     const dialog = container.querySelector<HTMLDialogElement>('#context-tools-drawer');
     expect(dialog?.open).toBe(true);
     expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭前文选择');
+    vi.spyOn(dialog!, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 512, top: 0, bottom: 800 } as DOMRect);
+    await act(async () => dialog?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 200, clientY: 200 })));
+    expect(props.onClose).not.toHaveBeenCalled();
+    await act(async () => dialog?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 700, clientY: 200 })));
+    expect(props.onClose).toHaveBeenCalledOnce();
+    props.onClose.mockClear();
     await act(async () => dialog?.dispatchEvent(new Event('cancel', { bubbles: true, cancelable: true })));
     expect(props.onClose).toHaveBeenCalled();
     props.onClose.mockClear();

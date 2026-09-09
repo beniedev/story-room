@@ -428,6 +428,7 @@ function MissingSettingsItem({ label }: { label: string }) {
 }
 
 interface BookshelfProps {
+  settingsOnly?: boolean;
   book: Book;
   library: BookIndexEntry[];
   selectedSectionId: string;
@@ -805,8 +806,8 @@ export function Bookshelf(props: BookshelfProps) {
               ? '加载世界观设定'
           : '本书设定';
   return (
-    <div className="shelf-page">
-      <section className="shelf-content">
+    <div className={props.settingsOnly ? undefined : 'shelf-page'}>
+      {!props.settingsOnly && <section className="shelf-content">
         <aside className="book-rail" aria-label="书目选择">
           <div className="book-library-controls">
             <details
@@ -998,7 +999,7 @@ export function Bookshelf(props: BookshelfProps) {
               })}
             </ol>
         </section>
-      </section>
+      </section>}
 
       <dialog
         className="name-dialog"

@@ -21,6 +21,7 @@ import {
   makeRegenerateBlockRequest,
 } from './generationRequests';
 import {
+  applySummaryReferenceSelection,
   reconcileReferencesAfterMemoryDeletion,
 } from './contextReferences';
 import {
@@ -38,7 +39,6 @@ import {
   type ProviderProfile,
 } from './providerProfiles';
 import {
-  commitSectionMemoryDraft,
   clearPreviousSectionMemory,
   deleteCurrentSectionMemory,
   normalizeBook,
@@ -219,10 +219,9 @@ function App() {
   const [contextToolsOpen, setContextToolsOpen] = useState(false);
   const mainContent = useRef<HTMLElement>(null);
   const restoreShelfFocus = useRef(false);
-  const restoreWriterFocus = useRef(false);
   const [bookSettingsRequest, setBookSettingsRequest] = useState(0);
   const [newBookRequest, setNewBookRequest] = useState(0);
-  const [returnToWriterAfterSettings, setReturnToWriterAfterSettings] = useState(false);
+  const [writerBookSettingsOpen, setWriterBookSettingsOpen] = useState(false);
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
@@ -311,12 +310,6 @@ function App() {
     if (view !== 'shelf' || !restoreShelfFocus.current) return;
     restoreShelfFocus.current = false;
     mainContent.current?.querySelector<HTMLElement>('button, summary, a[href], input, select, textarea')?.focus();
-  }, [view]);
-
-  useEffect(() => {
-    if (view !== 'write' || !restoreWriterFocus.current) return;
-    restoreWriterFocus.current = false;
-    mainContent.current?.querySelector<HTMLElement>('.writer-book-settings-button')?.focus();
   }, [view]);
 
   const rememberCurrentSectionDraft = () => {
@@ -843,26 +836,6 @@ function App() {
     return undefined;
   };
 
-  const updateContextReferences = (references: Book['chapters'][number]['sections'][number]['contextReferences']) => {
-    if (!section) return;
-    const targetSectionId = section.id;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => {
-          if (item.id !== targetSectionId) return item;
-          if (!references?.length) {
-            const { contextReferences: _removed, ...withoutReferences } = item;
-            return withoutReferences;
-          }
-          const unique = new Map(references.map((reference) => [reference.sectionId, reference] as const));
-          return { ...item, contextReferences: [...unique.values()] };
-        }),
-      })),
-    }));
-  };
-
   const deleteSectionBlock = async (blockId: string) => {
     if (!section) throw new Error('找不到当前小节。');
     const targetSectionId = section.id;
@@ -877,20 +850,6 @@ function App() {
         }),
       })),
     }));
-  };
-
-  const updateContextReference = (sourceSectionId: string, selected: boolean) => {
-    if (!book || !section) return;
-    const source = referenceLocation(book, sourceSectionId);
-    const targetOrdinal = book
-      ? book.chapters.flatMap((chapter) => chapter.sections).findIndex((item) => item.id === section.id)
-      : -1;
-    if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) return;
-    if (!source.section.content.trim() && selected) return;
-    const references = (section.contextReferences ?? [])
-      .filter((reference) => reference.sectionId !== sourceSectionId);
-    if (selected) references.push({ sectionId: sourceSectionId, mode: 'full', reason: 'manual' });
-    updateContextReferences(references);
   };
 
   const generateSectionMemory = async (sourceSectionId: string) => {
@@ -933,43 +892,10 @@ function App() {
   }>) => {
     if (!book || !section) throw new Error('请先选择一个小节。');
     const targetSectionId = section.id;
-    const targetOrdinal = book.chapters.flatMap((chapter) => chapter.sections)
-      .findIndex((item) => item.id === targetSectionId);
-    const committedSources = new Map<string, Book['chapters'][number]['sections'][number]>();
-    const sourceTitles: string[] = [];
-    for (const { sourceSectionId, draft, provenance } of entries) {
-      const source = referenceLocation(book, sourceSectionId);
-      if (!source || targetOrdinal < 0 || source.ordinal >= targetOrdinal) {
-        throw new Error('只能保存当前小节之前内容的梗概。');
-      }
-      sourceTitles.push(source.section.title);
-      committedSources.set(sourceSectionId, commitSectionMemoryDraft(source.section, draft, provenance));
-    }
-    const candidate = normalizeBook({
-      ...book,
-      updatedAt: new Date().toISOString(),
-      chapters: book.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => {
-          const committedSource = committedSources.get(item.id);
-          if (committedSource) return committedSource;
-          if (item.id !== targetSectionId) return item;
-          const references = (item.contextReferences ?? [])
-            .filter((reference) => !committedSources.has(reference.sectionId));
-          for (const sourceSectionId of committedSources.keys()) {
-            references.push({ sectionId: sourceSectionId, mode: 'summary', reason: 'manual' });
-          }
-          return { ...item, contextReferences: references };
-        }),
-      })),
-    });
-    saveRevision.current += 1;
-    setBook(candidate);
-    setDirty(true);
-    await saveCurrent(candidate);
-    setStatus(sourceTitles.length === 1
-      ? `已保存并加载「${sourceTitles[0]}」的梗概。`
-      : `已保存并加载 ${sourceTitles.length} 节梗概。`);
+    await commitBookChange((current) => applySummaryReferenceSelection(current, targetSectionId, entries));
+    setStatus(entries.length
+      ? `已保存并加载 ${entries.length} 节前文梗概。`
+      : '已取消加载前文梗概。');
   };
 
   const deleteSectionMemory = async (sourceSectionId: string) => {
@@ -1179,7 +1105,7 @@ function App() {
       </header>}
 
       <main id="main-content" ref={mainContent}>
-        {book && view === 'write' && section ? (
+        {book && view === 'write' && section && (
           <Writer
             book={book}
             section={section}
@@ -1199,8 +1125,7 @@ function App() {
             modelId={activeProviderProfile?.modelId ?? '未选择模型'}
             onBack={navigateFromHeader}
             onOpenBookSettings={() => {
-              setReturnToWriterAfterSettings(true);
-              setView('shelf');
+              setWriterBookSettingsOpen(true);
               setBookSettingsRequest((current) => current + 1);
             }}
             onOpenSettings={openSettings}
@@ -1220,8 +1145,10 @@ function App() {
             }}
             onGenerate={() => void generateContinuation()}
           />
-        ) : book ? (
+        )}
+        {book && (view !== 'write' || writerBookSettingsOpen) && (
           <Bookshelf
+            settingsOnly={view === 'write'}
             book={book}
             library={library}
             selectedSectionId={sectionId}
@@ -1230,10 +1157,11 @@ function App() {
             openBookSettingsRequest={bookSettingsRequest}
             onBookSettingsOpened={() => setBookSettingsRequest(0)}
             onBookSettingsClose={() => {
-              if (!returnToWriterAfterSettings || !sectionId) return;
-              setReturnToWriterAfterSettings(false);
-              restoreWriterFocus.current = true;
-              setView('write');
+              if (!writerBookSettingsOpen) return;
+              setWriterBookSettingsOpen(false);
+              window.requestAnimationFrame(() => {
+                mainContent.current?.querySelector<HTMLElement>('.writer-book-settings-button')?.focus();
+              });
             }}
             onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
             onOpenSection={(id) => {
@@ -1256,7 +1184,8 @@ function App() {
             onDeleteSelection={deleteSelection}
             onDeleteSources={deleteSources}
           />
-        ) : (
+        )}
+        {!book && (
           <p className="loading-copy">正在打开此设备的书库…</p>
         )}
       </main>
@@ -1285,8 +1214,6 @@ function App() {
           open={contextToolsOpen}
           book={book}
           section={section}
-          onContextReferenceChange={updateContextReference}
-          onContextReferencesChange={updateContextReferences}
           onGenerateMemory={generateSectionMemory}
           onSaveMemoriesAndLoad={saveSectionMemoriesAndLoad}
           busy={busy}

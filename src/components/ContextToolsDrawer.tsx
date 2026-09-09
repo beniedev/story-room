@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Sparkles, X } from 'lucide-react';
-import { selectAllUnsetReferences } from '../contextReferences';
 import {
   draftFromSectionMemory,
   sectionMemoryProvenanceAfterReview,
@@ -18,8 +17,6 @@ export function ContextToolsDrawer({
   open,
   book,
   section,
-  onContextReferenceChange,
-  onContextReferencesChange,
   onGenerateMemory,
   onSaveMemoriesAndLoad,
   busy,
@@ -29,8 +26,6 @@ export function ContextToolsDrawer({
   open: boolean;
   book: Book;
   section: Book['chapters'][number]['sections'][number];
-  onContextReferenceChange: (sourceSectionId: string, selected: boolean) => void;
-  onContextReferencesChange: (references: Book['chapters'][number]['sections'][number]['contextReferences']) => void;
   onGenerateMemory: (sourceSectionId: string) => Promise<SectionMemoryDraft>;
   onSaveMemoriesAndLoad: (items: Array<{
     sourceSectionId: string;
@@ -48,6 +43,7 @@ export function ContextToolsDrawer({
   const summaryActionTrigger = useRef<HTMLElement | null>(null);
   const summaryActionAccepted = useRef(false);
   const summaryGenerationRequest = useRef(0);
+  const [selectedSectionIds, setSelectedSectionIds] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [memoryDrafts, setMemoryDrafts] = useState<Record<string, SectionMemoryDraft>>({});
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, SectionMemoryDraft>>({});
@@ -71,6 +67,7 @@ export function ContextToolsDrawer({
 
   useEffect(() => {
     summaryGenerationRequest.current += 1;
+    setSelectedSectionIds(new Set((section.contextReferences ?? []).map((reference) => reference.sectionId)));
     setExpandedSections(new Set());
     setMemoryDrafts({});
     setGeneratedDrafts({});
@@ -81,7 +78,7 @@ export function ContextToolsDrawer({
     setPendingSummaryAction('');
     setSummaryFeedback(idleDialogOperation);
     return undefined;
-  }, [open, section.id]);
+  }, [open, book.id, section.id]);
 
   const currentReferences = new Map((section.contextReferences ?? [])
     .map((reference) => [reference.sectionId, reference.mode] as const));
@@ -109,9 +106,9 @@ export function ContextToolsDrawer({
   })).filter((item) => item.sections.length > 0);
   const selectableReferenceSections = referenceSections.filter((item) => item.section.content.trim());
   const selectedReferenceCount = selectableReferenceSections
-    .filter((item) => currentReferences.has(item.section.id)).length;
+    .filter((item) => selectedSectionIds.has(item.section.id)).length;
   const allSelected = selectableReferenceSections.length > 0
-    && selectableReferenceSections.every((item) => currentReferences.has(item.section.id));
+    && selectableReferenceSections.every((item) => selectedSectionIds.has(item.section.id));
   const someSelected = selectedReferenceCount > 0 && !allSelected;
 
   useEffect(() => {
@@ -119,14 +116,15 @@ export function ContextToolsDrawer({
   }, [someSelected]);
 
   const toggleAll = () => {
-    if (allSelected) {
-      onContextReferencesChange(undefined);
-      return;
-    }
-    onContextReferencesChange(selectAllUnsetReferences(
-      section.contextReferences,
-      referenceSections.map((item) => item.section),
-    ));
+    setSelectedSectionIds(allSelected ? new Set() : new Set(selectableReferenceSections.map((item) => item.section.id)));
+  };
+  const toggleSelection = (sourceSectionId: string) => {
+    setSelectedSectionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sourceSectionId)) next.delete(sourceSectionId);
+      else next.add(sourceSectionId);
+      return next;
+    });
   };
   const toggleSection = (sourceSectionId: string) => {
     setExpandedSections((current) => {
@@ -184,11 +182,18 @@ export function ContextToolsDrawer({
     setSummaryFeedback(idleDialogOperation);
     summaryConfirmDialog.current?.showModal();
   };
-  const saveableSummaryItems = referenceSections.filter((item) => Boolean(
-    memoryDrafts[item.section.id]?.synopsis.trim()
-      || (expandedSections.has(item.section.id) && summaryValue(item).trim()),
-  ));
+  const saveableSummaryItems = referenceSections.filter((item) => selectedSectionIds.has(item.section.id));
+  const legacyFullCount = [...currentReferences.values()].filter((mode) => mode !== 'summary').length;
   const requestSummarySave = () => {
+    const missing = saveableSummaryItems.filter((item) => !summaryValue(item).trim());
+    if (missing.length) {
+      setSummaryErrors((current) => ({
+        ...current,
+        ...Object.fromEntries(missing.map((item) => [item.section.id, '请先填写或生成梗概，或取消勾选；不会加载原文。'])),
+      }));
+      setExpandedSections((current) => new Set([...current, ...missing.map((item) => item.section.id)]));
+      return;
+    }
     summaryActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setPendingSummarySectionId('');
     setPendingSummaryAction('save');
@@ -270,7 +275,6 @@ export function ContextToolsDrawer({
       return;
     }
     if (action === 'save') {
-      if (!saveableSummaryItems.length) return;
       summaryActionAccepted.current = true;
       setSummaryFeedback({ phase: 'pending', title: '正在保存并加载梗概…' });
       void saveSummariesAndLoad(saveableSummaryItems)
@@ -303,6 +307,12 @@ export function ContextToolsDrawer({
       aria-hidden={!open}
       inert={!open}
       aria-modal="true"
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX >= bounds.right
+          || event.clientY < bounds.top || event.clientY >= bounds.bottom) onClose();
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || summaryConfirmDialog.current?.open) return;
         event.preventDefault();
@@ -323,7 +333,9 @@ export function ContextToolsDrawer({
           </button>
         </header>
 
-        <section className="context-reference-section" aria-label="加载前文">
+        <section className="context-reference-section" aria-label="加载前文梗概">
+          <p className="helper-copy">勾选只作待确认选择；确认保存后才加载梗概，不加载前文原文。关闭后未确认的修改不生效。</p>
+          {legacyFullCount > 0 && <p className="helper-copy">当前设置仍含 {legacyFullCount} 节全文引用；确认后将按勾选结果改为梗概引用。</p>}
           {referenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
             <div className="source-scope-drawer context-reference-scope" data-open>
               <div className="source-load-tab">
@@ -339,7 +351,7 @@ export function ContextToolsDrawer({
                 </label>
                 <div className="context-reference-scope-title">
                   <strong>加载前文</strong>
-                  <small>已选 {selectedReferenceCount}/{selectableReferenceSections.length} 小节</small>
+                  <small>待确认 {selectedReferenceCount}/{selectableReferenceSections.length} 小节</small>
                 </div>
                 <button
                   type="button"
@@ -354,10 +366,10 @@ export function ContextToolsDrawer({
                 <button
                   type="button"
                   className="primary-action icon-button context-summary-save"
-                  disabled={busy || saveableSummaryItems.length === 0}
+                  disabled={busy || (selectedSectionIds.size === 0 && currentReferences.size === 0)}
                   onClick={requestSummarySave}
                   aria-label="保存并加载梗概"
-                  title={saveableSummaryItems.length ? '保存并加载梗概' : '请先填写或生成梗概'}
+                  title={saveableSummaryItems.length ? '保存并加载勾选的梗概' : '确认取消加载前文'}
                 >
                   <Check aria-hidden="true" />
                 </button>
@@ -368,7 +380,7 @@ export function ContextToolsDrawer({
                     <fieldset key={chapterItem.chapter.id}>
                       <legend>{chapterItem.chapter.title}</legend>
                       {chapterItem.sections.map((item) => {
-                        const selected = currentReferences.has(item.section.id);
+                        const selected = selectedSectionIds.has(item.section.id);
                         const expanded = expandedSections.has(item.section.id);
                         const panelId = `context-summary-${item.section.id}`;
                         const value = summaryValue(item);
@@ -381,10 +393,10 @@ export function ContextToolsDrawer({
                                 <input
                                   type="checkbox"
                                   checked={selected}
-                                  onChange={() => onContextReferenceChange(item.section.id, !selected)}
+                                  onChange={() => toggleSelection(item.section.id)}
                                   disabled={busy || (!hasContent && !selected)}
                                 />
-                                <span className="sr-only">加载{item.section.title}前文</span>
+                                <span className="sr-only">选择{item.section.title}梗概</span>
                               </label>
                               <button
                                 type="button"
@@ -394,7 +406,7 @@ export function ContextToolsDrawer({
                                 aria-label={expanded ? `收起${item.section.title}梗概` : `展开${item.section.title}梗概`}
                                 onClick={() => toggleSection(item.section.id)}
                               >
-                                <span>{item.section.title}</span>
+                                <span>{item.section.title}{!value.trim() && <small> · 尚无梗概</small>}</span>
                                 <ChevronRight aria-hidden="true" />
                               </button>
                             </div>
@@ -499,7 +511,9 @@ export function ContextToolsDrawer({
           <div className="confirm-dialog-body">
             <p id="summary-confirm-dialog-description">
               {pendingSummaryAction === 'save'
-                ? `会保存 ${saveableSummaryItems.length} 节编辑框里的梗概，并作为前文加载到当前小节。`
+                ? (saveableSummaryItems.length
+                    ? `只保存并加载勾选的 ${saveableSummaryItems.length} 节梗概；未勾选的前文引用将移除，原文和已有梗概均保留。`
+                    : '会取消当前小节的全部前文引用；前文原文和已有梗概均保留。')
                 : `会用 AI 生成的内容替换「${pendingSummarySection?.section.title ?? ''}」编辑框里的梗概；确认保存前不会写入书目。`}
             </p>
             <div className="dialog-actions">

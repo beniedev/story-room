@@ -7,6 +7,7 @@ import App from '../src/App';
 import { makeId } from '../src/components/shared/id';
 import { deviceLibrary } from '../src/deviceLibrary';
 import { createExampleBooks } from '../src/fixtures';
+import { createSectionMemory } from '../src/sectionMemory';
 
 const browserCrypto = globalThis.crypto;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -188,6 +189,94 @@ describe('browser IDs without crypto.randomUUID', () => {
       .find((section) => section.id === book.chapters[0]?.sections[0]?.id)?.note).toBe('让钟声贯穿本节。');
     expect(container.querySelector<HTMLTextAreaElement>('#author-note-input')?.value).toBe('让钟声贯穿本节。');
     await act(async () => root.unmount());
+  });
+
+  it('changes actual context only after the confirmed summary selection saves successfully', async () => {
+    const book = createExampleBooks()[0]!;
+    const content = 'SYNTHETIC_PREVIOUS_PROSE '.repeat(5_000);
+    const draft = { synopsis: 'Brief synthetic summary.', beats: [], continuityFacts: [], characterStateChanges: [], foreshadowingCandidates: [] };
+    book.chapters = [{ id: 'flow-chapter', title: 'Flow chapter', sections: [
+      { id: 'flow-source', title: 'Previous section', content, memory: createSectionMemory(draft, content) },
+      { id: 'flow-target', title: 'Current section', content: 'Current text.', contextReferences: [
+        { sectionId: 'flow-source', mode: 'full', reason: 'manual' },
+      ] },
+    ] }];
+    book.characters = [];
+    book.worldRules = [];
+    book.canonFacts = [];
+    book.summaries = [];
+    book.branches = [];
+    let persisted = structuredClone(book);
+    let saves = 0;
+    let rejectSave = true;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url === '/api/library') return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(persisted);
+      if (url === `/api/books/${book.id}` && method === 'PUT') {
+        saves += 1;
+        if (rejectSave) return new Response(JSON.stringify({ error: 'Synthetic save failure' }), { status: 503 });
+        persisted = JSON.parse(String(init?.body)) as typeof book;
+        return jsonResponse(persisted);
+      }
+      throw new Error(`Unexpected test request: ${method} ${url}`);
+    }));
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      const target = await waitForElement(() => container.querySelectorAll<HTMLButtonElement>('.section-open')[1] ?? null);
+      await act(async () => target.click());
+      const writerInput = container.querySelector<HTMLTextAreaElement>('#writing-instruction');
+      const settingsTrigger = container.querySelector<HTMLButtonElement>('.writer-book-settings-button');
+      await act(async () => settingsTrigger?.click());
+      const settings = container.querySelector<HTMLDialogElement>('.book-settings-drawer');
+      expect(settings?.open).toBe(true);
+      expect(container.querySelector('.shelf-content')).toBeNull();
+      expect(container.querySelector('#writing-instruction')).toBe(writerInput);
+      await act(async () => settings?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 900 })));
+      expect(container.querySelector('.book-settings-drawer')).toBeNull();
+      expect(container.querySelector('.shelf-content')).toBeNull();
+      expect(container.querySelector('#writing-instruction')).toBe(writerInput);
+      expect(saves).toBe(0);
+      const counter = () => container.querySelector('.writer-context-count')?.textContent;
+      const before = counter();
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-context-tools-button')?.click());
+      const checkbox = container.querySelector<HTMLInputElement>('.context-reference-checkbox input');
+      await act(async () => checkbox?.click());
+      expect(saves).toBe(0);
+      expect(counter()).toBe(before);
+      await act(async () => container.querySelector<HTMLDialogElement>('#context-tools-drawer')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 900 })));
+      expect(container.querySelector<HTMLDialogElement>('#context-tools-drawer')?.open).toBe(false);
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-context-tools-button')?.click());
+      expect(container.querySelector<HTMLInputElement>('.context-reference-checkbox input')?.checked).toBe(true);
+      expect(saves).toBe(0);
+
+      const confirm = async () => {
+        await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+        await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.includes('确认保存并加载'))?.click());
+      };
+      await confirm();
+      expect(saves).toBe(1);
+      expect(counter()).toBe(before);
+      expect(persisted.chapters[0].sections[1].contextReferences?.[0].mode).toBe('full');
+      expect(container.textContent).toContain('Synthetic save failure');
+      await act(async () => container.querySelector<HTMLButtonElement>('.confirm-dialog [aria-label="关闭确认"]')?.click());
+      rejectSave = false;
+      await confirm();
+      expect(saves).toBe(2);
+      expect(persisted.chapters[0].sections[1].contextReferences?.[0].mode).toBe('summary');
+      expect(persisted.chapters[0].sections[0].content).toBe(content);
+      expect(counter()).not.toBe(before);
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it('creates a device-runtime Book with compatible IDs', async () => {
