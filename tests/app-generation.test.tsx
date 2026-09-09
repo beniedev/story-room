@@ -2,7 +2,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 import type { Book, GenerationRequest, SectionBlock } from '../src/types';
 
@@ -11,6 +11,17 @@ type Deferred<T> = {
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
 };
+
+class MemoryStorage implements Storage {
+  private values = new Map<string, string>();
+
+  get length() { return this.values.size; }
+  clear() { this.values.clear(); }
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string) { this.values.delete(key); }
+  setItem(key: string, value: string) { this.values.set(key, value); }
+}
 
 const deferred = <T,>(): Deferred<T> => {
   let resolve!: (value: T) => void;
@@ -176,6 +187,10 @@ beforeAll(() => {
     configurable: true,
     value: (id: number) => window.clearTimeout(id),
   });
+});
+
+beforeEach(() => {
+  vi.stubGlobal('localStorage', new MemoryStorage());
 });
 
 afterEach(() => {
