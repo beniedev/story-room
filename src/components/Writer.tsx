@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -15,14 +15,12 @@ import {
   RefreshCw,
   Send,
   Settings,
-  Sparkles,
   Trash2,
   UsersRound,
   X,
 } from 'lucide-react';
 import { parseProseFormatting } from '../proseFormatting';
 import { countWords, estimateTokens } from '../textMetrics';
-import { buildContextPlan } from '../contextPlan';
 import { ContextCompositionDrawer } from './ContextCompositionDrawer';
 import {
   DialogOperationStatus,
@@ -69,9 +67,7 @@ interface WriterProps {
   onDeleteSectionBlock: (blockId: string) => Promise<void>;
   onRegenerateBlock: (blockId: string) => void;
   onGenerateForBlock?: (blockId: string) => void;
-  onAdoptCandidate?: (blockId: string, candidateId: string) => Promise<void>;
-  onEditCandidate?: (blockId: string, candidateId: string, content: string) => Promise<void>;
-  onDeleteCandidate?: (blockId: string, candidateId: string) => Promise<void>;
+  onSelectCandidate?: (blockId: string, candidateId: string) => void;
   onDeleteAdoptedCandidate?: (blockId: string, candidateId: string, replacementId: string) => Promise<void>;
   onSectionTitleChange: (value: string) => Promise<void>;
   onGenerate: () => void;
@@ -132,14 +128,6 @@ export function Writer(props: WriterProps) {
   const [sectionTitle, setSectionTitle] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
   const [editingBlockId, setEditingBlockId] = useState('');
-  const [candidateIndexes, setCandidateIndexes] = useState<Record<string, number>>({});
-  const [candidateEditKey, setCandidateEditKey] = useState('');
-  const [candidateEditDraft, setCandidateEditDraft] = useState('');
-  const [candidateEditError, setCandidateEditError] = useState('');
-  const [candidateEditSaving, setCandidateEditSaving] = useState(false);
-  const [candidateAdoptKey, setCandidateAdoptKey] = useState('');
-  const [candidateAdoptError, setCandidateAdoptError] = useState('');
-  const [candidateAdoptSaving, setCandidateAdoptSaving] = useState(false);
   const [candidateDeleteId, setCandidateDeleteId] = useState('');
   const [deleteOperation, setDeleteOperation] = useState<DialogOperationState>(idleDialogOperation);
   const [titleOperation, setTitleOperation] = useState<DialogOperationState>(idleDialogOperation);
@@ -170,81 +158,29 @@ export function Writer(props: WriterProps) {
   const selectedCandidates = useMemo(() => selectedBlock?.kind === 'assistant'
     ? getAnswerCandidates(selectedBlock)
     : [], [selectedBlock]);
-  const candidateSourceInput = useMemo(() => {
-    if (!selectedBlock || selectedBlock.kind !== 'assistant' || selectedCandidates.length < 2
-      || editingBlockId || !props.section) return null;
-    return {
-      book: props.book,
-      section: props.section,
-      mode: props.mode,
-      selectedCharacterId: props.mode === 'character' ? props.selectedCharacterId : undefined,
-      targetBlockId: selectedBlock.id,
-    };
-  }, [editingBlockId, props.book, props.mode, props.selectedCharacterId, props.section, selectedBlock, selectedCandidates.length]);
-  const deferredCandidateSourceInput = useDeferredValue(candidateSourceInput);
-  const currentCandidateSourceSignature = useMemo(() => {
-    if (!deferredCandidateSourceInput) return undefined;
-    try {
-      return buildContextPlan(deferredCandidateSourceInput.book, {
-        sectionId: deferredCandidateSourceInput.section.id,
-        mode: deferredCandidateSourceInput.mode,
-        selectedCharacterId: deferredCandidateSourceInput.selectedCharacterId,
-        instruction: '',
-        generationKind: 'regenerate-block',
-        targetBlockId: deferredCandidateSourceInput.targetBlockId,
-      }).sourceSignature;
-    } catch {
-      return undefined;
-    }
-  }, [deferredCandidateSourceInput]);
-  const selectedAdoptedCandidateIndex = (() => {
-    if (!selectedBlock || !selectedCandidates.length) return undefined;
-    if (!selectedBlock.candidates?.length) return 0;
-    const index = selectedCandidates.findIndex((candidate) => candidate.id === selectedBlock.adoptedCandidateId);
-    return index >= 0 ? index : undefined;
-  })();
-  const selectedPreviewIndex = selectedBlock?.kind === 'assistant' && selectedCandidates.length > 1
-    ? Math.min(candidateIndexes[selectedBlock.id] ?? selectedAdoptedCandidateIndex ?? 0, selectedCandidates.length - 1)
+  const selectedCandidateIndex = selectedBlock?.kind === 'assistant' && selectedCandidates.length
+    ? Math.max(0, selectedCandidates.findIndex((candidate) => candidate.id === selectedBlock.adoptedCandidateId))
     : undefined;
-  const selectedPreviewIsUnadopted = Boolean(
-    selectedBlock?.kind === 'assistant'
-      && selectedCandidates.length > 1
-      && (selectedAdoptedCandidateIndex === undefined || selectedPreviewIndex !== selectedAdoptedCandidateIndex),
-  );
+  const selectedCandidate = selectedCandidateIndex === undefined
+    ? undefined
+    : selectedCandidates[selectedCandidateIndex];
   const deletingCandidate = candidateDeleteId
     ? selectedCandidates.find((candidate) => candidate.id === candidateDeleteId)
     : undefined;
   const deletingCandidateIndex = deletingCandidate
     ? selectedCandidates.findIndex((candidate) => candidate.id === deletingCandidate.id)
     : -1;
-  const deletingAdopted = Boolean(deletingCandidate && selectedBlock
-    && selectedAdoptedCandidateIndex !== undefined
-    && deletingCandidateIndex === selectedAdoptedCandidateIndex);
+  const deletingCurrent = Boolean(deletingCandidate && selectedBlock?.kind === 'assistant' && selectedCandidates.length > 1);
+  const deletingReplacementOriginalIndex = deletingCandidateIndex > 0 ? deletingCandidateIndex - 1 : 1;
+  const deletingReplacement = selectedCandidates[deletingReplacementOriginalIndex];
+  const deletingReplacementIndex = deletingReplacementOriginalIndex > deletingCandidateIndex
+    ? deletingReplacementOriginalIndex - 1
+    : deletingReplacementOriginalIndex;
   const editorOpen = Boolean(editingBlock);
   const manuscriptText = useMemo(() => editorOpen ? '' : blocksAsContent(blocks), [blocks, editorOpen]);
   const manuscriptWordCount = useMemo(() => countWords(manuscriptText), [manuscriptText]);
   const manuscriptTokenCount = useMemo(() => estimateTokens(manuscriptText), [manuscriptText]);
   const manuscriptScrollKey = `${props.book.id}:${props.section?.id ?? ''}`;
-
-  const candidateIds = selectedCandidates.map((candidate) => candidate.id).join('|');
-  const previousCandidateIds = useRef('');
-  useEffect(() => {
-    if (!selectedBlock || selectedBlock.kind !== 'assistant') {
-      previousCandidateIds.current = '';
-      return;
-    }
-    const previousCount = previousCandidateIds.current ? previousCandidateIds.current.split('|').length : selectedCandidates.length;
-    if (selectedCandidates.length > previousCount) {
-      setCandidateIndexes((current) => ({ ...current, [selectedBlock.id]: selectedCandidates.length - 1 }));
-    } else {
-      setCandidateIndexes((current) => {
-        const index = current[selectedBlock.id];
-        if (index === undefined || index < selectedCandidates.length) return current;
-        return { ...current, [selectedBlock.id]: Math.max(0, selectedCandidates.length - 1) };
-      });
-    }
-    previousCandidateIds.current = candidateIds;
-  }, [candidateIds, selectedBlock, selectedCandidates.length]);
 
   useEffect(() => {
     props.onEditorOpenChange?.(editorOpen);
@@ -436,15 +372,9 @@ export function Writer(props: WriterProps) {
   const openDeleteBlockDialog = () => {
     if (!selectedBlock) return;
     blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setCandidateDeleteId('');
-    setDeleteOperation(idleDialogOperation);
-    deleteBlockDialog.current?.showModal();
-  };
-
-  const openDeleteCandidateDialog = (candidateId: string) => {
-    if (!selectedBlock || selectedBlock.kind !== 'assistant') return;
-    blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setCandidateDeleteId(candidateId);
+    setCandidateDeleteId(selectedBlock.kind === 'assistant' && selectedCandidates.length > 1
+      ? selectedCandidate?.id ?? ''
+      : '');
     setDeleteOperation(idleDialogOperation);
     deleteBlockDialog.current?.showModal();
   };
@@ -467,83 +397,34 @@ export function Writer(props: WriterProps) {
   };
 
   const selectManuscriptBlock = useCallback((blockId: string) => {
-    if (candidateEditKey) return;
     actionMenu.current?.removeAttribute('open');
     setSelectedBlockId((current) => current === blockId ? '' : blockId);
-  }, [candidateEditKey]);
+  }, []);
+
+  const selectCandidate = (block: SectionBlock, index: number) => {
+    if (block.kind !== 'assistant') return;
+    const candidates = selectedBlock?.id === block.id ? selectedCandidates : getAnswerCandidates(block);
+    const candidate = candidates[index];
+    if (!candidate) return;
+    props.onSelectCandidate?.(block.id, candidate.id);
+  };
 
   const leaveCandidatePreview = () => {
-    if (candidateEditKey) return;
-    if (selectedBlock?.kind === 'assistant') {
-      setCandidateIndexes((current) => {
-        if (current[selectedBlock.id] === undefined) return current;
-        const next = { ...current };
-        delete next[selectedBlock.id];
-        return next;
-      });
-    }
     setSelectedBlockId('');
   };
 
-  const beginCandidateEdit = (blockId: string, candidateId: string, content: string) => {
-    if (candidateEditKey) return;
-    setCandidateEditKey(`${blockId}:${candidateId}`);
-    setCandidateEditDraft(content);
-    setCandidateEditError('');
-  };
-
-  const cancelCandidateEdit = () => {
-    if (candidateEditSaving) return;
-    setCandidateEditKey('');
-    setCandidateEditDraft('');
-    setCandidateEditError('');
-  };
-
-  const saveCandidateEdit = (blockId: string, candidateId: string) => {
-    if (!props.onEditCandidate || candidateEditSaving) return;
-    setCandidateEditSaving(true);
-    setCandidateEditError('');
-    void props.onEditCandidate(blockId, candidateId, candidateEditDraft)
-      .then(() => {
-        setCandidateEditKey('');
-        setCandidateEditDraft('');
-      })
-      .catch((error) => setCandidateEditError(error instanceof Error ? error.message : '候选保存失败，请稍后重试。'))
-      .finally(() => setCandidateEditSaving(false));
-  };
-
-  const candidatePreview = (block: SectionBlock) => {
+  const candidateNavigation = (block: SectionBlock) => {
     const candidates = selectedBlock?.id === block.id ? selectedCandidates : getAnswerCandidates(block);
-    if (!candidates.length) return null;
-    const adoptedCandidateIndex = block.candidates?.length
-      ? candidates.findIndex((candidate) => candidate.id === block.adoptedCandidateId)
-      : 0;
-    const adoptedIndex = adoptedCandidateIndex >= 0 ? adoptedCandidateIndex : undefined;
-    const index = Math.min(candidateIndexes[block.id] ?? adoptedIndex ?? 0, candidates.length - 1);
-    const candidate = candidates[index];
-    if (!candidate) return null;
-    const candidateKey = `${block.id}:${candidate.id}`;
-    const editing = candidateEditKey === candidateKey;
-    const adopted = adoptedIndex !== undefined && index === adoptedIndex;
-    const adopting = candidateAdoptKey === candidateKey;
-    const sourceStatus = !candidate.sourceSignature
-      ? '来源未记录'
-      : currentCandidateSourceSignature === undefined
-        ? '无法比较来源'
-        : candidate.sourceSignature !== currentCandidateSourceSignature
-          ? '来源条件已变化'
-          : '';
+    if (candidates.length < 2) return null;
+    const index = Math.min(Math.max(0, candidates.findIndex((candidate) => candidate.id === block.adoptedCandidateId)), candidates.length - 1);
     return (
-      <div className="answer-candidate-strip" data-block-id={block.id} aria-label="AI 回答候选">
-        {candidates.length > 1 && <div className="answer-candidate-navigation" role="group" aria-label="浏览回答候选">
+      <div className="answer-candidate-strip" data-block-id={block.id} aria-label="浏览 AI 回答候选">
+        <div className="answer-candidate-navigation" role="group" aria-label="浏览回答候选">
           <button
             type="button"
             className="icon-button"
-            onClick={() => setCandidateIndexes((current) => ({
-              ...current,
-              [block.id]: Math.max(0, index - 1),
-            }))}
-            disabled={props.busy || Boolean(candidateEditKey) || index <= 0}
+            onClick={() => selectCandidate(block, Math.max(0, index - 1))}
+            disabled={props.busy || index <= 0}
             aria-label="上一版回答候选"
             title="上一版"
           ><ChevronLeft aria-hidden="true" /></button>
@@ -551,90 +432,14 @@ export function Writer(props: WriterProps) {
           <button
             type="button"
             className="icon-button"
-            onClick={() => setCandidateIndexes((current) => ({
-              ...current,
-              [block.id]: Math.min(candidates.length - 1, index + 1),
-            }))}
-            disabled={props.busy || Boolean(candidateEditKey) || index >= candidates.length - 1}
+            onClick={() => selectCandidate(block, Math.min(candidates.length - 1, index + 1))}
+            disabled={props.busy || index >= candidates.length - 1}
             aria-label="下一版回答候选"
             title="下一版"
           ><ChevronRight aria-hidden="true" /></button>
-        </div>}
-        <div className="answer-candidate-meta">
-          <span>{adoptedIndex === undefined
-            ? `正在预览第 ${index + 1} 版 · 正文当前没有采用版本`
-            : `正在预览第 ${index + 1} 版 · 正文当前使用第 ${adoptedIndex + 1} 版`}</span>
-          {sourceStatus && <small>{sourceStatus}</small>}
         </div>
-        {!adopted && !editing && <button
-          type="button"
-          className="quiet-action answer-candidate-adopt"
-          onClick={() => {
-            if (!props.onAdoptCandidate || adopting) return;
-            setCandidateAdoptKey(candidateKey);
-            setCandidateAdoptError('');
-            setCandidateAdoptSaving(true);
-            void props.onAdoptCandidate(block.id, candidate.id)
-              .then(() => setCandidateAdoptKey(''))
-              .catch((error) => {
-                setCandidateAdoptKey('');
-                setCandidateAdoptError(error instanceof Error ? error.message : '采用失败，请稍后重试。');
-              })
-              .finally(() => setCandidateAdoptSaving(false));
-          }}
-          disabled={props.busy || !props.onAdoptCandidate || candidateAdoptSaving}
-          aria-busy={adopting || undefined}
-        >{adopting ? '正在保存…' : '采用这版'}</button>}
-        {!adopted && !editing && <button
-          type="button"
-          className="quiet-action answer-candidate-edit"
-          onClick={() => beginCandidateEdit(block.id, candidate.id, candidate.content)}
-          disabled={props.busy}
-        >编辑</button>}
-        {!editing && candidates.length > 1 && <button
-          type="button"
-          className="quiet-action answer-candidate-delete"
-          onClick={() => openDeleteCandidateDialog(candidate.id)}
-          disabled={props.busy}
-        >删除这一版</button>}
-        {!editing && <button
-          type="button"
-          className="quiet-action answer-candidate-regenerate"
-          onClick={() => props.onRegenerateBlock(block.id)}
-          disabled={props.busy}
-          aria-label="再生成一版"
-        >再生成一版</button>}
-        {editing && <div className="answer-candidate-editor">
-          <label htmlFor={`candidate-editor-${block.id}-${candidate.id}`}>编辑未采用候选</label>
-          <small>请先保存或取消编辑，再切换其他候选或正文片段。</small>
-          <TextArea
-            id={`candidate-editor-${block.id}-${candidate.id}`}
-            value={candidateEditDraft}
-            disabled={candidateEditSaving}
-            onChange={(event) => setCandidateEditDraft(event.target.value)}
-            spellCheck
-          />
-          {candidateEditError && <p className="answer-candidate-error" role="alert">{candidateEditError}</p>}
-          <div className="answer-candidate-editor-actions">
-            <button type="button" className="quiet-action" onClick={cancelCandidateEdit} disabled={candidateEditSaving}>取消</button>
-            <button type="button" className="primary-action button-with-icon" onClick={() => saveCandidateEdit(block.id, candidate.id)} disabled={candidateEditSaving}>保存候选</button>
-          </div>
-        </div>}
-        {candidateAdoptError && <p className="answer-candidate-error" role="alert">{candidateAdoptError}</p>}
       </div>
     );
-  };
-
-  const displayedBlock = (block: SectionBlock) => {
-    if (block.kind !== 'assistant' || selectedBlockId !== block.id) return block;
-    const candidates = selectedBlock?.id === block.id ? selectedCandidates : getAnswerCandidates(block);
-    if (candidates.length < 2) return block;
-    const adoptedIndex = block.candidates?.length
-      ? candidates.findIndex((candidate) => candidate.id === block.adoptedCandidateId)
-      : 0;
-    const index = Math.min(candidateIndexes[block.id] ?? adoptedIndex ?? 0, candidates.length - 1);
-    const candidate = candidates[index];
-    return candidate ? { ...block, content: candidate.content } : block;
   };
 
   if (editingBlock) {
@@ -690,7 +495,7 @@ export function Writer(props: WriterProps) {
             type="button"
             className="icon-button writer-back-button"
             onClick={props.onBack}
-            disabled={props.busy || Boolean(candidateEditKey)}
+            disabled={props.busy}
             aria-label="返回故事书架"
             title="返回故事书架"
           ><ArrowLeft aria-hidden="true" /></button>
@@ -698,7 +503,7 @@ export function Writer(props: WriterProps) {
             type="button"
             className="writer-context-trigger"
             onClick={props.onOpenContextComposition}
-            disabled={props.busy || Boolean(candidateEditKey)}
+            disabled={props.busy}
             aria-expanded={props.contextCompositionOpen}
             aria-controls="context-composition-drawer"
             aria-busy={props.contextPlanPending || undefined}
@@ -742,7 +547,7 @@ export function Writer(props: WriterProps) {
               type="button"
               className="book-settings-button icon-button writer-book-settings-button"
               onClick={props.onOpenBookSettings}
-              disabled={props.busy || Boolean(candidateEditKey)}
+              disabled={props.busy}
               aria-label="打开本书设定"
               title="本书设定"
             ><BookMarked aria-hidden="true" /></button>
@@ -750,7 +555,7 @@ export function Writer(props: WriterProps) {
               type="button"
               className="icon-button writer-context-tools-button"
               onClick={props.onOpenContextTools}
-              disabled={props.busy || Boolean(candidateEditKey)}
+              disabled={props.busy}
               aria-expanded={props.contextToolsOpen}
               aria-controls="context-tools-drawer"
               aria-label="选择前文"
@@ -762,7 +567,7 @@ export function Writer(props: WriterProps) {
               type="button"
               className="icon-button"
               onClick={openTitleDialog}
-              disabled={!props.section || props.busy || Boolean(candidateEditKey)}
+              disabled={!props.section || props.busy}
               aria-label="修改小节名称"
               title="修改小节名称"
             ><Pencil aria-hidden="true" /></button>
@@ -770,7 +575,7 @@ export function Writer(props: WriterProps) {
               type="button"
               className="icon-button"
               onClick={props.onOpenSettings}
-              disabled={props.busy || Boolean(candidateEditKey)}
+              disabled={props.busy}
               aria-label="打开设置"
               title="设置"
             ><Settings aria-hidden="true" /></button>
@@ -797,14 +602,14 @@ export function Writer(props: WriterProps) {
           <div className="manuscript" aria-label="连续小说正文">
             {blocks.map((block) => (
               <Fragment key={block.id}>
-                <ManuscriptBlock block={displayedBlock(block)} selected={selectedBlockId === block.id} onSelect={selectManuscriptBlock}>
+                <ManuscriptBlock block={block} selected={selectedBlockId === block.id} onSelect={selectManuscriptBlock}>
                   {selectedBlockId === block.id && (
                     <div className="manuscript-block-actions" data-block-id={block.id} role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
                       {block.kind === 'assistant' && <button
                         type="button"
                         className="icon-button"
                         onClick={() => props.onRegenerateBlock(block.id)}
-                        disabled={props.busy || Boolean(candidateEditKey)}
+                        disabled={props.busy}
                         aria-label="再生成一版：重新生成所选 AI 输出"
                         title="再生成一版"
                       ><RefreshCw aria-hidden="true" /><span className="sr-only">再生成一版</span></button>}
@@ -812,15 +617,15 @@ export function Writer(props: WriterProps) {
                         type="button"
                         className="icon-button"
                         onClick={openBlockEditor}
-                        disabled={props.busy || Boolean(candidateEditKey) || selectedPreviewIsUnadopted}
+                        disabled={props.busy}
                         aria-label="编辑所选片段"
-                        title={selectedPreviewIsUnadopted ? '请先采用当前候选或使用候选编辑' : '编辑'}
+                        title="编辑"
                       ><Pencil aria-hidden="true" /></button>
                       <button
                         type="button"
                         className="icon-button danger-icon"
                         onClick={openDeleteBlockDialog}
-                        disabled={props.busy || Boolean(candidateEditKey)}
+                        disabled={props.busy}
                         aria-haspopup="dialog"
                         aria-label="删除所选片段"
                         title="删除"
@@ -828,13 +633,13 @@ export function Writer(props: WriterProps) {
                     </div>
                   )}
                 </ManuscriptBlock>
-                {selectedBlockId === block.id && block.kind === 'assistant' && selectedCandidates.length > 1 && candidatePreview(block)}
+                {selectedBlockId === block.id && block.kind === 'assistant' && selectedCandidates.length > 1 && candidateNavigation(block)}
                 {block.id === lastNonEmptyBlockId && block.kind === 'user' && (
                   <button
                     type="button"
                     className="respond-to-input-button quiet-action"
                     onClick={() => props.onGenerateForBlock?.(block.id)}
-                    disabled={props.busy || Boolean(candidateEditKey) || !props.onGenerateForBlock}
+                    disabled={props.busy || !props.onGenerateForBlock}
                   >生成回答</button>
                 )}
               </Fragment>
@@ -856,11 +661,7 @@ export function Writer(props: WriterProps) {
         )}
       </div>
 
-      <form ref={instructionDockRef} className="instruction-dock" onSubmit={(event) => {
-        event.preventDefault();
-        if (candidateEditKey) return;
-        props.onGenerate();
-      }}>
+      <form ref={instructionDockRef} className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
         <details
           ref={actionMenu}
           className="writer-action-menu"
@@ -870,7 +671,7 @@ export function Writer(props: WriterProps) {
             closeActionMenu(true);
           }}
         >
-          <summary className="icon-button writer-menu-trigger" title="写作操作" aria-disabled={props.busy || Boolean(candidateEditKey) || undefined} onClick={(event) => { if (props.busy || candidateEditKey) { event.preventDefault(); return; } setSelectedBlockId(''); }}>
+          <summary className="icon-button writer-menu-trigger" title="写作操作" aria-disabled={props.busy || undefined} onClick={(event) => { if (props.busy) { event.preventDefault(); return; } setSelectedBlockId(''); }}>
             <Menu aria-hidden="true" />
             <span className="sr-only">打开写作操作</span>
           </summary>
@@ -879,14 +680,14 @@ export function Writer(props: WriterProps) {
               <button
                 type="button"
                 className="writer-menu-action"
-                disabled={props.busy || Boolean(candidateEditKey)}
+                disabled={props.busy}
                 aria-pressed={props.mode === 'author'}
                 onClick={() => props.onModeChange('author')}
               ><BookOpenText aria-hidden="true" />作者模式 · 写作接龙</button>
               <button
                 type="button"
                 className="writer-menu-action"
-                disabled={props.busy || Boolean(candidateEditKey)}
+                disabled={props.busy}
                 aria-pressed={props.mode === 'character'}
                 onClick={() => props.onModeChange('character')}
               ><UsersRound aria-hidden="true" />角色模式 · 第一视角</button>
@@ -897,7 +698,7 @@ export function Writer(props: WriterProps) {
                 <select
                   id="character-select"
                   value={props.selectedCharacterId}
-                  disabled={props.busy || Boolean(candidateEditKey)}
+                  disabled={props.busy}
                   onChange={(event) => props.onCharacterChange(event.target.value)}
                   required
                   aria-invalid={characterModeNeedsSelection ? 'true' : undefined}
@@ -919,7 +720,7 @@ export function Writer(props: WriterProps) {
                 id="author-note-input"
                 rows={4}
                 value={props.authorNote}
-                disabled={props.busy || Boolean(candidateEditKey)}
+                disabled={props.busy}
                 onChange={(event) => props.onAuthorNoteChange(event.target.value)}
                 placeholder="例如：跳过路程，直接写抵达后的重逢……"
                 spellCheck
@@ -984,13 +785,7 @@ export function Writer(props: WriterProps) {
             rows={1}
             value={props.instruction}
             style={instructionInputHeight === null ? undefined : { height: instructionInputHeight }}
-            onPointerDown={(event) => {
-              if (candidateEditKey) {
-                event.preventDefault();
-                return;
-              }
-              leaveCandidatePreview();
-            }}
+            onPointerDown={leaveCandidatePreview}
             onFocus={leaveCandidatePreview}
             onChange={(event) => props.onInstructionChange(event.target.value)}
             placeholder={props.mode === 'author' ? '写下一段正文，让 AI 从这里接着写……' : '以当前角色输入行动、台词或选择……'}
@@ -1004,7 +799,7 @@ export function Writer(props: WriterProps) {
         <button
             type="submit"
             className="primary-action icon-button writer-send-button"
-            disabled={props.busy || Boolean(candidateEditKey) || characterModeNeedsSelection || requiresInputResponse}
+            disabled={props.busy || characterModeNeedsSelection || requiresInputResponse}
             aria-busy={props.busy || undefined}
             aria-label={props.busy ? '正在续写' : '发送并续写'}
             title={props.busy ? '正在续写…' : '发送并续写'}
@@ -1026,39 +821,33 @@ export function Writer(props: WriterProps) {
         aria-busy={deleteOperation.phase === 'pending' || undefined}
       >
         <header className="dialog-heading">
-          <h2 id="delete-block-dialog-heading">{candidateDeleteId ? (deletingAdopted ? '删除当前采用版本' : '删除候选版本') : '删除所选片段'}</h2>
+          <h2 id="delete-block-dialog-heading">{candidateDeleteId ? '删除当前回答候选' : '删除所选片段'}</h2>
           <button type="button" className="icon-button" disabled={deleteOperation.phase === 'pending'} onClick={closeDeleteBlockDialog} aria-label="取消删除片段" title="取消"><X aria-hidden="true" /></button>
         </header>
         <div className="confirm-dialog-body">
           {deleteOperation.phase === 'idle' ? (
-            candidateDeleteId && selectedBlock && deletingCandidate ? (
-              deletingAdopted ? (
+            candidateDeleteId && selectedBlock && deletingCandidate && deletingCurrent && deletingReplacement ? (
                 <>
-                  <p id="delete-block-dialog-description">当前采用版本正在支撑正文。请选择保留其他版本并采用，或删除整段正文及全部候选。</p>
+                  <p id="delete-block-dialog-description">删除当前第 {deletingCandidateIndex + 1} 版后，将保留第 {deletingReplacementIndex + 1} 版并继续作为正文。</p>
                   <div className="dialog-actions answer-candidate-delete-options">
-                    {selectedCandidates.map((candidate, index) => candidate.id === deletingCandidate.id ? null : (
-                      <button
-                        type="button"
-                        className="quiet-action"
-                        key={candidate.id}
-                        onClick={() => {
-                          if (!props.onDeleteAdoptedCandidate) return;
-                          setDeleteOperation({ phase: 'pending', title: '正在采用并删除当前版本…' });
-                          const replacementIndex = index > deletingCandidateIndex ? index - 1 : index;
-                          void props.onDeleteAdoptedCandidate(selectedBlock.id, deletingCandidate.id, candidate.id)
-                            .then(() => {
-                              setCandidateIndexes((current) => ({ ...current, [selectedBlock.id]: replacementIndex }));
-                              setDeleteOperation({ phase: 'success', title: '已保留其他版本' });
-                            })
-                            .catch((error) => setDeleteOperation({
-                              phase: 'error',
-                              title: '操作失败',
-                              detail: error instanceof Error ? error.message : '请稍后重试。',
-                            }));
-                        }}
-                        disabled={props.busy || !props.onDeleteAdoptedCandidate}
-                      >保留第 {index + 1} 版并采用</button>
-                    ))}
+                    <button
+                      type="button"
+                      className="quiet-action"
+                      onClick={() => {
+                        if (!props.onDeleteAdoptedCandidate) return;
+                        setDeleteOperation({ phase: 'pending', title: '正在保留相邻版本…' });
+                        void props.onDeleteAdoptedCandidate(selectedBlock.id, deletingCandidate.id, deletingReplacement.id)
+                          .then(() => {
+                            setDeleteOperation({ phase: 'success', title: '已保留相邻版本' });
+                          })
+                          .catch((error) => setDeleteOperation({
+                            phase: 'error',
+                            title: '操作失败',
+                            detail: error instanceof Error ? error.message : '请稍后重试。',
+                          }));
+                      }}
+                      disabled={props.busy || !props.onDeleteAdoptedCandidate}
+                    >保留第 {deletingReplacementIndex + 1} 版</button>
                     <button
                       type="button"
                       className="danger-action button-with-icon"
@@ -1079,30 +868,6 @@ export function Writer(props: WriterProps) {
                     ><Trash2 aria-hidden="true" />删除整段（含全部候选）</button>
                   </div>
                 </>
-              ) : (
-                <>
-                  <p id="delete-block-dialog-description">只删除这一版未采用候选，正文和其他候选保持不变。</p>
-                  <div className="dialog-actions">
-                    <button type="button" className="quiet-action" onClick={closeDeleteBlockDialog}>取消</button>
-                    <button
-                      type="button"
-                      className="danger-action button-with-icon"
-                      onClick={() => {
-                        if (!selectedBlock || !props.onDeleteCandidate) return;
-                        setDeleteOperation({ phase: 'pending', title: '正在删除候选…' });
-                        void props.onDeleteCandidate(selectedBlock.id, deletingCandidate.id)
-                          .then(() => setDeleteOperation({ phase: 'success', title: '候选已删除' }))
-                          .catch((error) => setDeleteOperation({
-                            phase: 'error',
-                            title: '删除失败',
-                            detail: error instanceof Error ? error.message : '请稍后重试。',
-                          }));
-                      }}
-                      disabled={props.busy || !props.onDeleteCandidate}
-                    ><Trash2 aria-hidden="true" />删除这一版候选</button>
-                  </div>
-                </>
-              )
             ) : (
               <>
                 <p id="delete-block-dialog-description">只会删除当前选中的这一块用户输入或 AI 输出，其他正文不会改变。</p>

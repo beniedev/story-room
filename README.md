@@ -48,9 +48,11 @@ In hosted/device mode, generation remains Fake. A Provider test sends a temporar
 
 After editing an already-sent user passage, use “再生成一版” on its answer to generate a new candidate from the latest adopted text before that answer. The old answer, its alternative candidates, and later passages are excluded from that request. If the manuscript ends with a user passage, “生成回答” beneath it generates an answer without duplicating the user passage or consuming the next draft in the bottom input.
 
-The candidate arrows only browse saved answers; they do not start generation. “采用这版” saves the chosen answer as the manuscript version. Until adoption succeeds, the previous adopted answer remains the source for subsequent generation, ordinary exports, statistics, and Section Memory freshness. Unadopted candidates remain in the Book and complete JSON backup. Adopting a different answer in the middle of a section preserves later passages, which may need a continuity review.
+The candidate arrows switch the current manuscript version immediately and save the choice in the background; they do not start generation. The existing edit, delete, and “再生成一版” actions apply to the displayed answer. Generating another candidate selects it automatically. Subsequent generation, ordinary exports, statistics, and Section Memory freshness use the current version. Switching an answer in the middle of a section preserves later passages, which may need a continuity review.
 
-Candidate source signatures distinguish changed writing material without storing another full prompt snapshot. Older answers whose source was not recorded are shown as unknown. Existing Books remain readable without a bulk migration, and candidate counts have no application-defined cap.
+Candidates remain available across refreshes until the next new input receives an answer that is successfully saved. At that point, only the current version of the preceding answer is retained; its other candidates are removed. Failure or cancellation preserves those choices. Regenerating an answer or continuing without a new input does not clear candidates. Complete JSON backups include the candidates still present in the Book.
+
+Candidate source signatures record changes in writing material without storing another full prompt snapshot. Existing Books remain readable without a bulk migration, and candidate counts have no application-defined cap.
 
 ### Context planning
 

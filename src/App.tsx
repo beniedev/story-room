@@ -26,6 +26,7 @@ import {
   appendCandidate,
   deleteCandidate,
   editCandidate,
+  finalizeAnswerCandidates,
 } from './answerCandidates';
 import {
   applySummaryReferenceSelection,
@@ -238,7 +239,6 @@ function App() {
   const saveRevision = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const busyRef = useRef(false);
-  const candidateOperationRef = useRef(false);
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
   const generationAbort = useRef<AbortController | null>(null);
   const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
@@ -415,8 +415,7 @@ function App() {
 
     const revision = saveRevision.current;
     const timer = window.setTimeout(() => {
-      const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(candidate));
-      saveQueue.current = task.then(() => undefined, () => undefined);
+      const task = queueBookSave(candidate, revision);
       void task.then((saved) => {
         if (saveRevision.current !== revision) return;
         const normalizedSaved = normalizeBook(saved);
@@ -468,8 +467,16 @@ function App() {
     setDirty(true);
   };
 
-  const queueBookSave = (candidate: Book) => {
-    const task = saveQueue.current.catch(() => undefined).then(() => api.saveBook(candidate));
+  const queueBookSave = (candidate: Book, autosaveRevision?: number) => {
+    const task = saveQueue.current.catch(() => undefined).then(() => {
+      // A delayed autosave may already be behind a slow PUT. Skip its stale
+      // snapshot before starting another full-book write; an already-started
+      // request remains untouched and its response is still revision-guarded.
+      if (autosaveRevision !== undefined && saveRevision.current !== autosaveRevision) {
+        return candidate;
+      }
+      return api.saveBook(candidate);
+    });
     saveQueue.current = task.then(() => undefined, () => undefined);
     return task;
   };
@@ -562,7 +569,7 @@ function App() {
   };
 
   const withBusy = async (action: () => Promise<void>) => {
-    if (busyRef.current || candidateOperationRef.current) return;
+    if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     try {
@@ -573,20 +580,6 @@ function App() {
         : error instanceof Error ? error.message : '操作失败。');
     } finally {
       busyRef.current = false;
-      setBusy(false);
-    }
-  };
-
-  const withCandidateBusy = async (action: () => Promise<void>) => {
-    if (busyRef.current || candidateOperationRef.current) {
-      throw new Error('当前正在保存或生成，请稍后再试。');
-    }
-    candidateOperationRef.current = true;
-    setBusy(true);
-    try {
-      await action();
-    } finally {
-      candidateOperationRef.current = false;
       setBusy(false);
     }
   };
@@ -656,9 +649,10 @@ function App() {
       setStatus('当前书目或正文已变化，生成结果未写入。');
       return;
     }
+    const inputBlockId = inputSnapshot.trim() ? makeId('block') : undefined;
     const additions: SectionBlock[] = [
-      ...(inputSnapshot.trim()
-        ? [{ id: makeId('block'), kind: 'user' as const, content: inputSnapshot.trim() }]
+      ...(inputBlockId
+        ? [{ id: inputBlockId, kind: 'user' as const, content: inputSnapshot.trim() }]
         : []),
       appendCandidate(
         { id: makeId('block'), kind: 'assistant', content: '' },
@@ -683,6 +677,15 @@ function App() {
     }));
     setInstruction((current) => current === inputSnapshot ? '' : current);
     clearSectionDraft(saved.id, targetSectionId, inputSnapshot);
+    if (inputBlockId) {
+      const responseRevision = saveRevision.current;
+      const savedResponse = await saveCurrent();
+      if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
+        setStatus('当前正文已变化，候选整理未写入。');
+        return;
+      }
+      finalizePreviousAnswerCandidates(savedResponse, targetSectionId, inputBlockId);
+    }
     setStatus('续写已加入当前小节。');
   });
 
@@ -722,6 +725,43 @@ function App() {
               return { ...item, blocks: nextBlocks, content: blocksAsContent(nextBlocks) };
             })()
           : item),
+      })),
+    }));
+  };
+
+  const finalizePreviousAnswerCandidates = (
+    savedBook: Book,
+    targetSectionId: string,
+    targetBlockId: string,
+  ) => {
+    if (bookRef.current?.id !== savedBook.id) return;
+    const savedSection = savedBook.chapters.flatMap((chapter) => chapter.sections)
+      .find((item) => item.id === targetSectionId);
+    const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
+    const targetIndex = savedBlocks.findIndex((item) => item.id === targetBlockId);
+    if (targetIndex < 0) return;
+    let previousAnswerId: string | undefined;
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+      const candidate = savedBlocks[index];
+      if (candidate?.kind === 'assistant') {
+        if (candidate.candidates && candidate.candidates.length > 1 && candidate.adoptedCandidateId) {
+          previousAnswerId = candidate.id;
+        }
+        break;
+      }
+    }
+    if (!previousAnswerId) return;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => {
+          if (item.id !== targetSectionId) return item;
+          const blocks = sectionBlocks(item).map((candidate) => candidate.id === previousAnswerId
+            ? finalizeAnswerCandidates(candidate)
+            : candidate);
+          return { ...item, blocks, content: blocksAsContent(blocks) };
+        }),
       })),
     }));
   };
@@ -805,6 +845,17 @@ function App() {
           }),
         })),
       }));
+      // Persist the new answer before collapsing the candidate set belonging
+      // to the immediately preceding AI answer.  If this save fails, the
+      // newly generated text and the older candidates both remain dirty and
+      // recoverable for the normal autosave retry path.
+      const responseRevision = saveRevision.current;
+      const savedResponse = await saveCurrent();
+      if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
+        setStatus('当前正文已变化，候选整理未写入。');
+        return;
+      }
+      finalizePreviousAnswerCandidates(savedResponse, targetSectionId, blockId);
       setStatus('已生成回答并加入正文。');
     });
   };
@@ -875,104 +926,62 @@ function App() {
           sections: chapter.sections.map((item) => {
             if (item.id !== targetSectionId) return item;
             const blocks = sectionBlocks(item).map((block) => block.id === blockId
-              ? appendCandidate(block, candidate)
+              ? adoptCandidate(appendCandidate(block, candidate), candidate.id)
               : block);
             if (!blocks.some((block) => block.id === blockId)) return item;
             return { ...item, blocks, content: blocksAsContent(blocks) };
           }),
         })),
       }));
-      setStatus('已生成新的候选回答，可浏览后采用。');
+      setStatus('已生成新的回答，并已切换到当前版本。');
     });
   };
 
-  const adoptBlockCandidate = async (blockId: string, candidateId: string): Promise<void> => {
-    return withCandidateBusy(async () => {
-      if (!section) throw new Error('找不到当前小节。');
-      const targetSectionId = section.id;
-      let hasLaterContent = false;
-      await commitBookChange((current) => {
-        const chapters = current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            const currentBlocks = sectionBlocks(item);
-            const targetIndex = currentBlocks.findIndex((block) => block.id === blockId);
-            hasLaterContent = targetIndex >= 0 && currentBlocks.slice(targetIndex + 1).some((block) => block.content.trim());
-            const blocks = currentBlocks.map((block) => block.id === blockId
-              ? adoptCandidate(block, candidateId)
-              : block);
-            return { ...item, blocks, content: blocksAsContent(blocks) };
-          }),
-        }));
-        return { ...current, chapters };
-      });
-      if (hasLaterContent) {
-        setStatus('已采用这版；后续正文已保留，请检查衔接。');
-      }
-    });
-  };
-
-  const editBlockCandidate = async (blockId: string, candidateId: string, content: string): Promise<void> => {
-    return withCandidateBusy(async () => {
-      if (!section) throw new Error('找不到当前小节。');
-      const targetSectionId = section.id;
-      await commitBookChange((current) => ({
-        ...current,
-        chapters: current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            const blocks = sectionBlocks(item).map((block) => block.id === blockId
-              ? editCandidate(block, candidateId, content)
-              : block);
-            return { ...item, blocks, content: blocksAsContent(blocks) };
-          }),
-        })),
-      }));
-    });
-  };
-
-  const removeBlockCandidate = async (blockId: string, candidateId: string): Promise<void> => {
-    return withCandidateBusy(async () => {
-      if (!section) throw new Error('找不到当前小节。');
-      const targetSectionId = section.id;
-      await commitBookChange((current) => ({
-        ...current,
-        chapters: current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            const blocks = sectionBlocks(item).map((block) => block.id === blockId
-              ? deleteCandidate(block, candidateId)
-              : block);
-            return { ...item, blocks, content: blocksAsContent(blocks) };
-          }),
-        })),
-      }));
-    });
+  const selectBlockCandidate = (blockId: string, candidateId: string) => {
+    const targetSectionId = section?.id;
+    if (!targetSectionId) return;
+    const currentBook = bookRef.current ?? book;
+    const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
+      .find((item) => item.id === targetSectionId);
+    const currentBlock = currentSection && sectionBlocks(currentSection).find((item) => item.id === blockId);
+    if (!currentBlock || currentBlock.kind !== 'assistant' || currentBlock.adoptedCandidateId === candidateId) return;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === targetSectionId
+          ? (() => {
+              const blocks = sectionBlocks(item).map((block) => block.id === blockId
+                ? adoptCandidate(block, candidateId)
+                : block);
+              return { ...item, blocks, content: blocksAsContent(blocks) };
+            })()
+          : item),
+      })),
+    }));
   };
 
   const removeAdoptedBlockCandidate = async (blockId: string, candidateId: string, replacementId: string): Promise<void> => {
-    return withCandidateBusy(async () => {
-      if (!section) throw new Error('找不到当前小节。');
-      const targetSectionId = section.id;
-      await commitBookChange((current) => ({
-        ...current,
-        chapters: current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            const blocks = sectionBlocks(item).map((block) => {
-              if (block.id !== blockId) return block;
-              const adopted = adoptCandidate(block, replacementId);
-              return deleteCandidate(adopted, candidateId);
-            });
-            return { ...item, blocks, content: blocksAsContent(blocks) };
-          }),
-        })),
-      }));
-    });
+    if (!section) throw new Error('找不到当前小节。');
+    const targetSectionId = section.id;
+    changeBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => {
+          if (item.id !== targetSectionId) return item;
+          const blocks = sectionBlocks(item).map((block) => {
+            if (block.id !== blockId) return block;
+            const adopted = adoptCandidate(block, replacementId);
+            return deleteCandidate(adopted, candidateId);
+          });
+          return { ...item, blocks, content: blocksAsContent(blocks) };
+        }),
+      })),
+    }));
+    // Candidate deletion follows the same autosave path as candidate
+    // selection.  The in-memory replacement is immediate; the ordinary
+    // queued save reports any persistence failure without locking the writer.
   };
 
   const createBook = async (title: string) => {
@@ -1429,9 +1438,7 @@ function App() {
             onDeleteSectionBlock={deleteSectionBlock}
             onRegenerateBlock={regenerateBlock}
             onGenerateForBlock={respondToInput}
-            onAdoptCandidate={adoptBlockCandidate}
-            onEditCandidate={editBlockCandidate}
-            onDeleteCandidate={removeBlockCandidate}
+            onSelectCandidate={selectBlockCandidate}
             onDeleteAdoptedCandidate={removeAdoptedBlockCandidate}
             onSectionTitleChange={async (title) => {
               if (!sectionChapter || !section) throw new Error('找不到当前小节。');

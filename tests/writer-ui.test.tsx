@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, type ComponentProps, type ReactNode } from 'react';
+import { act, useState, type ComponentProps, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Bookshelf } from '../src/components/Bookshelf';
 import { Writer } from '../src/components/Writer';
-import { buildContextPlan } from '../src/contextPlan';
+import { adoptCandidate, editCandidate } from '../src/answerCandidates';
+import { blocksAsContent, sectionBlocks } from '../src/components/shared/sectionContent';
 import type { Book, SectionBlock } from '../src/types';
 
 const makeBook = (id: string, blocks: SectionBlock[] = []): Book => ({
@@ -60,6 +61,67 @@ const writerProps = (book: Book): ComponentProps<typeof Writer> => ({
   onSectionTitleChange: vi.fn(async () => undefined),
   onGenerate: vi.fn(),
 });
+
+type ControlledWriterProps = {
+  initialBook: Book;
+  onCandidateSelect?: (blockId: string, candidateId: string) => void;
+} & Partial<Omit<ComponentProps<typeof Writer>,
+  'book' | 'section' | 'onSelectCandidate' | 'onSectionBlocksChange' | 'onDeleteSectionBlock'>>;
+
+const ControlledWriter = ({ initialBook, onCandidateSelect, ...overrides }: ControlledWriterProps) => {
+  const sectionId = initialBook.chapters[0]!.sections[0]!.id;
+  const [book, setBook] = useState(initialBook);
+
+  const updateSection = (current: Book, update: (section: Book['chapters'][number]['sections'][number]) => Book['chapters'][number]['sections'][number]) => ({
+    ...current,
+    chapters: current.chapters.map((chapter) => ({
+      ...chapter,
+      sections: chapter.sections.map((section) => section.id === sectionId ? update(section) : section),
+    })),
+  });
+
+  const onSelectCandidate = (blockId: string, candidateId: string) => {
+    setBook((current) => updateSection(current, (section) => {
+      const blocks = sectionBlocks(section).map((block) => block.id === blockId
+        ? adoptCandidate(block, candidateId)
+        : block);
+      return { ...section, blocks, content: blocksAsContent(blocks) };
+    }));
+    onCandidateSelect?.(blockId, candidateId);
+  };
+
+  const onSectionBlocksChange = (blocks: SectionBlock[]) => {
+    setBook((current) => updateSection(current, (section) => {
+      const previousBlocks = new Map(sectionBlocks(section).map((block) => [block.id, block]));
+      const nextBlocks = blocks.map((block) => {
+        const previous = previousBlocks.get(block.id);
+        if (block.kind !== 'assistant'
+          || !block.adoptedCandidateId
+          || !previous
+          || previous.content === block.content) return block;
+        return editCandidate(block, block.adoptedCandidateId, block.content);
+      });
+      return { ...section, blocks: nextBlocks, content: blocksAsContent(nextBlocks) };
+    }));
+  };
+
+  const onDeleteSectionBlock = async (blockId: string) => {
+    setBook((current) => updateSection(current, (section) => {
+      const blocks = sectionBlocks(section).filter((block) => block.id !== blockId);
+      return { ...section, blocks, content: blocksAsContent(blocks) };
+    }));
+  };
+
+  return (
+    <Writer
+      {...writerProps(book)}
+      {...overrides}
+      onSelectCandidate={onSelectCandidate}
+      onSectionBlocksChange={onSectionBlocksChange}
+      onDeleteSectionBlock={onDeleteSectionBlock}
+    />
+  );
+};
 
 const render = async (node: ReactNode) => {
   const container = document.createElement('div');
@@ -229,9 +291,11 @@ describe('answer candidates and end-of-input response', () => {
     await act(async () => root.unmount());
   });
 
-  it('keeps candidate preview in the manuscript position and separates adoption', async () => {
-    const onAdoptCandidate = vi.fn(async () => undefined);
-    const { container, root } = await render(<Writer {...writerProps(candidateBook)} onAdoptCandidate={onAdoptCandidate} />);
+  it('selects a candidate with the arrow and updates the current manuscript immediately', async () => {
+    const onCandidateSelect = vi.fn();
+    const { container, root } = await render(
+      <ControlledWriter initialBook={candidateBook} onCandidateSelect={onCandidateSelect} />,
+    );
     await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
     const next = container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]');
     expect(next).not.toBeNull();
@@ -240,122 +304,43 @@ describe('answer candidates and end-of-input response', () => {
     const manuscriptBlock = container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block');
     expect(manuscriptBlock?.textContent).toContain('正在预览的二版');
     expect(manuscriptBlock?.textContent).not.toContain('采用的一版');
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="编辑所选片段"]')?.disabled).toBe(true);
+    expect(onCandidateSelect).toHaveBeenCalledWith('answer-block', 'candidate-two');
     expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('2 / 2');
-    expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('来源条件已变化');
-    expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('正在预览的二版');
-
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-adopt')?.click());
-    expect(onAdoptCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two');
-    await act(async () => root.unmount());
-  });
-
-  it('marks a candidate stale when the current preceding material changes', async () => {
-    const sourceBook = makeBook('book-source-status', [
-      { id: 'source-input', kind: 'user', content: '原来的前文' },
-      {
-        id: 'answer-block',
-        kind: 'assistant',
-        content: '采用的一版',
-        candidates: [
-          { id: 'candidate-one', content: '采用的一版' },
-          { id: 'candidate-two', content: '备选回答' },
-        ],
-        adoptedCandidateId: 'candidate-one',
-      },
-    ]);
-    const sourceSignature = buildContextPlan(sourceBook, {
-      sectionId: 'section-one',
-      mode: 'author',
-      instruction: '',
-      generationKind: 'regenerate-block',
-      targetBlockId: 'answer-block',
-    }).sourceSignature;
-    const initialBook = makeBook('book-source-status', [
-      { id: 'source-input', kind: 'user', content: '原来的前文' },
-      {
-        id: 'answer-block',
-        kind: 'assistant',
-        content: '采用的一版',
-        candidates: [
-          { id: 'candidate-one', content: '采用的一版', sourceSignature },
-          { id: 'candidate-two', content: '备选回答', sourceSignature },
-        ],
-        adoptedCandidateId: 'candidate-one',
-      },
-    ]);
-    const { container, root } = await render(<Writer {...writerProps(initialBook)} />);
-    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
     expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('来源条件已变化');
-
-    const changedBook = makeBook('book-source-status', [
-      { id: 'source-input', kind: 'user', content: '已经改过的前文' },
-      ...initialBook.chapters[0]!.sections[0]!.blocks!.slice(1),
-    ]);
-    await rerender(root, <Writer {...writerProps(changedBook)} />);
-    expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('来源条件已变化');
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('source-a');
+    expect(container.querySelector('.answer-candidate-strip')?.textContent).not.toContain('source-b');
     await act(async () => root.unmount());
   });
 
-  it('reports adoption failure and leaves the old adopted version recoverable', async () => {
-    const onAdoptCandidate = vi.fn(async () => { throw new Error('保存失败'); });
-    const { container, root } = await render(<Writer {...writerProps(candidateBook)} onAdoptCandidate={onAdoptCandidate} />);
+  it('keeps candidate source metadata out of the navigation copy', async () => {
+    const { container, root } = await render(<Writer {...writerProps(candidateBook)} />);
     await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-adopt')?.click());
-    expect(container.querySelector('.answer-candidate-error')?.textContent).toContain('保存失败');
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="上一版回答候选"]')?.click());
-    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent).toContain('采用的一版');
+    const strip = container.querySelector('.answer-candidate-strip');
+    expect(strip?.textContent).toContain('1 / 2');
+    expect(strip?.textContent).not.toContain('来源条件已变化');
+    expect(strip?.textContent).not.toContain('source-a');
+    expect(strip?.textContent).not.toContain('source-b');
     await act(async () => root.unmount());
   });
 
-  it('edits and deletes an unadopted candidate through explicit callbacks', async () => {
-    const onEditCandidate = vi.fn(async () => undefined);
-    const onDeleteCandidate = vi.fn(async () => undefined);
-    const { container, root } = await render(<Writer
-      {...writerProps(candidateBook)}
-      onEditCandidate={onEditCandidate}
-      onDeleteCandidate={onDeleteCandidate}
-    />);
+  it('edits and deletes the current manuscript block through parent state', async () => {
+    const { container, root } = await render(<ControlledWriter initialBook={candidateBook} />);
     await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-edit')?.click());
-    const editor = container.querySelector<HTMLTextAreaElement>('.answer-candidate-editor textarea');
-    expect(editor?.value).toBe('正在预览的二版');
-    await setControlValue(editor!, '编辑后的二版');
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-editor-actions .primary-action')?.click());
-    expect(onEditCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two', '编辑后的二版');
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="编辑所选片段"]')?.click());
+    const editor = container.querySelector<HTMLTextAreaElement>('#block-editor-textarea');
+    expect(editor?.value).toBe('采用的一版');
+    await setControlValue(editor!, '编辑后的当前正文');
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="完成编辑并返回正文"]')?.click());
+    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent)
+      .toContain('编辑后的当前正文');
 
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-delete')?.click());
-    expect(container.querySelector('.confirm-dialog')?.textContent).toContain('未采用候选');
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="删除所选片段"]')?.click());
+    expect(container.querySelector('.confirm-dialog')?.textContent).toContain('删除当前回答候选');
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('删除这一版候选'))?.click());
-    expect(onDeleteCandidate).toHaveBeenCalledWith('answer-block', 'candidate-two');
-    await act(async () => root.unmount());
-  });
-
-  it('keeps an unsaved candidate edit in place until it is saved or cancelled', async () => {
-    const onEditCandidate = vi.fn(async () => undefined);
-    const { container, root } = await render(<Writer
-      {...writerProps(candidateBook)}
-      onEditCandidate={onEditCandidate}
-    />);
-    await act(async () => container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="下一版回答候选"]')?.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-edit')?.click());
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="上一版回答候选"]')?.disabled).toBe(true);
-
-    const instruction = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
-    await act(async () => instruction.focus());
-    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent)
-      .toContain('正在预览的二版');
-    expect(container.querySelector('.answer-candidate-editor')).not.toBeNull();
-
-    await act(async () => container.querySelector<HTMLButtonElement>('.answer-candidate-editor-actions .quiet-action')?.click());
-    await act(async () => { instruction.blur(); instruction.focus(); });
-    expect(container.querySelector('.answer-candidate-strip')).toBeNull();
-    expect(container.querySelector<HTMLElement>('[data-block-id="answer-block"] .manuscript-block')?.textContent)
-      .toContain('采用的一版');
+      .find((button) => button.textContent?.includes('删除整段（含全部候选）'))?.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(container.querySelector('[data-block-id="answer-block"]')).toBeNull();
+    expect(container.querySelector('.empty-manuscript')?.textContent).toContain('本节还没有正文');
     await act(async () => root.unmount());
   });
 });

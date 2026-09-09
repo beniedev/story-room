@@ -74,7 +74,7 @@ describe('generation request helpers', () => {
     });
   });
 
-  it('adds a first answer below a user block and keeps later candidates out of content', () => {
+  it('adds a first answer below a user block and makes each regenerated answer current', () => {
     const section = {
       id: 'section',
       title: 'Section',
@@ -99,6 +99,8 @@ describe('generation request helpers', () => {
     });
     expect(second.section.blocks).toHaveLength(2);
     expect(second.section.blocks?.[1]?.candidates?.map((candidate) => candidate.content)).toEqual(['第一版', '第二版']);
-    expect(second.section.content).toBe('用户输入\n\n第一版');
+    expect(second.section.blocks?.[1]?.content).toBe('第二版');
+    expect(second.section.blocks?.[1]?.adoptedCandidateId).toBe('candidate-2');
+    expect(second.section.content).toBe('用户输入\n\n第二版');
   });
 });

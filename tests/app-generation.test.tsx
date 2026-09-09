@@ -166,6 +166,31 @@ const makePromptAnswerBook = (note = '') => makeBook([
   { id: 'answer-block', kind: 'assistant', content: '原来的回答。' },
 ], note);
 
+const makeCandidateResponseBook = () => makeBook([
+  {
+    id: 'earlier-answer-block',
+    kind: 'assistant',
+    content: '更早的当前回答。',
+    candidates: [
+      { id: 'earlier-old', content: '更早的旧候选。', sourceSignature: 'sig-earlier-old' },
+      { id: 'earlier-current', content: '更早的当前回答。', sourceSignature: 'sig-earlier-current' },
+    ],
+    adoptedCandidateId: 'earlier-current',
+  },
+  { id: 'first-prompt', kind: 'user', content: '第一条已发送提示。' },
+  {
+    id: 'answer-block',
+    kind: 'assistant',
+    content: '当前候选回答。',
+    candidates: [
+      { id: 'candidate-old', content: '旧候选回答。', sourceSignature: 'sig-old' },
+      { id: 'candidate-current', content: '当前候选回答。', sourceSignature: 'sig-current' },
+    ],
+    adoptedCandidateId: 'candidate-current',
+  },
+  { id: 'next-prompt', kind: 'user', content: '下一条已发送提示。' },
+]);
+
 beforeAll(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
@@ -331,20 +356,263 @@ describe('App generation save and cancellation boundaries', () => {
     }
   });
 
-  it('does not let regeneration overwrite an adopted candidate while adoption is saving', async () => {
+  it('makes a new answer current and finalizes only the previous answer after saving the next response', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const book = makeCandidateResponseBook();
+    const apiState = installHostApi({ book, onGenerate: async () => jsonResponse({ draft: '下一条回答。' }) });
+    const { container, root } = await renderApp(book);
+    try {
+      const respond = await waitForElement(() => container.querySelector<HTMLButtonElement>('.respond-to-input-button'));
+      await act(async () => respond.click());
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      expect(apiState.generations).toHaveLength(1);
+      expect(apiState.generations[0]?.generationKind).toBe('respond-to-input');
+      const persistedBlocks = apiState.getPersisted().chapters[0]?.sections[0]?.blocks ?? [];
+      const previousAnswer = persistedBlocks.find((block) => block.id === 'answer-block');
+      expect(previousAnswer).toMatchObject({
+        content: '当前候选回答。',
+        adoptedCandidateId: 'candidate-current',
+        candidates: [{ id: 'candidate-current', content: '当前候选回答。', sourceSignature: 'sig-current' }],
+      });
+      const earlierAnswer = persistedBlocks.find((block) => block.id === 'earlier-answer-block');
+      expect(earlierAnswer?.candidates).toHaveLength(2);
+      expect(persistedBlocks.filter((block) => block.content === '下一条已发送提示。')).toHaveLength(1);
+      expect(persistedBlocks.some((block) => block.content === '下一条回答。')).toBe(true);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('finalizes the immediately previous answer after a nonempty bottom input is saved', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const book = makeCandidateResponseBook();
+    const apiState = installHostApi({ book, onGenerate: async () => jsonResponse({ draft: '底部输入后的回答。' }) });
+    const { container, root } = await renderApp(book);
+    try {
+      const instruction = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '底部的新输入。'));
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      expect(apiState.generations[0]?.generationKind).toBe('continue-section');
+      const persistedBlocks = apiState.getPersisted().chapters[0]?.sections[0]?.blocks ?? [];
+      expect(persistedBlocks.find((block) => block.id === 'answer-block')?.candidates).toEqual([
+        { id: 'candidate-current', content: '当前候选回答。', sourceSignature: 'sig-current' },
+      ]);
+      expect(persistedBlocks.find((block) => block.id === 'earlier-answer-block')?.candidates).toHaveLength(2);
+      expect(persistedBlocks.filter((block) => block.content === '底部的新输入。')).toHaveLength(1);
+      expect(persistedBlocks.some((block) => block.content === '底部输入后的回答。')).toBe(true);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps the new answer text and previous candidates when the final response save fails', async () => {
+    const book = makeCandidateResponseBook();
+    let saveCount = 0;
+    const apiState = installHostApi({
+      book,
+      onSave: async (candidate) => {
+        saveCount += 1;
+        return saveCount === 1
+          ? jsonResponse(candidate)
+          : new Response(JSON.stringify({ error: 'Synthetic response save failure' }), {
+              status: 503,
+              headers: { 'content-type': 'application/json' },
+            });
+      },
+      onGenerate: async () => jsonResponse({ draft: '保存失败但应留在编辑器里的回答。' }),
+    });
+    const { container, root } = await renderApp(book);
+    try {
+      const respond = await waitForElement(() => container.querySelector<HTMLButtonElement>('.respond-to-input-button'));
+      await act(async () => respond.click());
+      await flushMicrotasks();
+      expect(apiState.generations).toHaveLength(1);
+      expect(container.querySelector('.manuscript')?.textContent).toContain('保存失败但应留在编辑器里的回答。');
+      const persistedBlocks = apiState.getPersisted().chapters[0]?.sections[0]?.blocks ?? [];
+      expect(persistedBlocks.find((block) => block.id === 'answer-block')?.candidates).toHaveLength(2);
+      expect(persistedBlocks.some((block) => block.content === '保存失败但应留在编辑器里的回答。')).toBe(false);
+      expect(apiState.saves.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps a bottom-input answer and previous candidates when its final save fails', async () => {
+    const book = makeCandidateResponseBook();
+    let saveCount = 0;
+    const apiState = installHostApi({
+      book,
+      onSave: async (candidate) => {
+        saveCount += 1;
+        return saveCount === 1
+          ? jsonResponse(candidate)
+          : new Response(JSON.stringify({ error: 'Synthetic bottom response save failure' }), {
+              status: 503,
+              headers: { 'content-type': 'application/json' },
+            });
+      },
+      onGenerate: async () => jsonResponse({ draft: '底部保存失败但应留在编辑器里的回答。' }),
+    });
+    const { container, root } = await renderApp(book);
+    try {
+      const instruction = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '底部输入保存失败。'));
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await flushMicrotasks();
+      expect(apiState.generations[0]?.generationKind).toBe('continue-section');
+      expect(container.querySelector('.manuscript')?.textContent).toContain('底部保存失败但应留在编辑器里的回答。');
+      const persistedBlocks = apiState.getPersisted().chapters[0]?.sections[0]?.blocks ?? [];
+      expect(persistedBlocks.find((block) => block.id === 'answer-block')?.candidates).toHaveLength(2);
+      expect(persistedBlocks.some((block) => block.content === '底部保存失败但应留在编辑器里的回答。')).toBe(false);
+      expect(apiState.saves.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps previous candidates when the next answer is cancelled', async () => {
+    const book = makeCandidateResponseBook();
+    const apiState = installHostApi({
+      book,
+      onGenerate: async (_request, signal) => new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      }),
+    });
+    const { container, root } = await renderApp(book);
+    try {
+      const respond = await waitForElement(() => container.querySelector<HTMLButtonElement>('.respond-to-input-button'));
+      await act(async () => respond.click());
+      const cancel = await waitForElement(() => container.querySelector<HTMLButtonElement>('.writer-cancel-button'));
+      await act(async () => cancel.click());
+      await flushMicrotasks();
+      expect(apiState.generations).toHaveLength(1);
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block')?.candidates)
+        .toHaveLength(2);
+      expect(container.querySelector('.manuscript')?.textContent).not.toContain('保存失败但应留在编辑器里的回答。');
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('does not collapse candidates for an empty continue', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const book = makeBook([{
       id: 'answer-block',
       kind: 'assistant',
-      content: '采用旧版。',
+      content: '当前回答。',
       candidates: [
-        { id: 'candidate-old', content: '采用旧版。' },
-        { id: 'candidate-new', content: '准备采用的新版本。' },
+        { id: 'candidate-old', content: '旧候选。' },
+        { id: 'candidate-current', content: '当前回答。' },
       ],
-      adoptedCandidateId: 'candidate-old',
+      adoptedCandidateId: 'candidate-current',
     }]);
+    const apiState = installHostApi({ book, onGenerate: async () => jsonResponse({ draft: '空续写回答。' }) });
+    const { container, root } = await renderApp(book);
+    try {
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      expect(apiState.generations[0]?.generationKind).toBe('continue-section');
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block')?.candidates)
+        .toHaveLength(2);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('does not collapse candidates for an empty regenerate', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const book = makeBook([{
+      id: 'answer-block',
+      kind: 'assistant',
+      content: '当前回答。',
+      candidates: [
+        { id: 'candidate-old', content: '旧候选。' },
+        { id: 'candidate-current', content: '当前回答。' },
+      ],
+      adoptedCandidateId: 'candidate-current',
+    }]);
+    const apiState = installHostApi({ book, onGenerate: async () => jsonResponse({ draft: '重新生成回答。' }) });
+    const { container, root } = await renderApp(book);
+    try {
+      const select = await waitForElement(() => container.querySelector<HTMLButtonElement>(
+        '[data-block-id="answer-block"] .manuscript-block-select',
+      ));
+      await act(async () => select.click());
+      const regenerate = await waitForElement(() => container.querySelector<HTMLButtonElement>(
+        'button[aria-label="再生成一版：重新生成所选 AI 输出"]',
+      ));
+      await act(async () => regenerate.click());
+      await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      expect(apiState.generations[0]?.generationKind).toBe('regenerate-block');
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block')?.candidates)
+        .toHaveLength(3);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps previous candidates when the next generation fails or cannot be saved', async () => {
+    const failedGenerationBook = makeCandidateResponseBook();
+    const failedGenerationApi = installHostApi({
+      book: failedGenerationBook,
+      onGenerate: async () => new Response(JSON.stringify({ error: 'Synthetic generation failure' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      }),
+    });
+    const failedGenerationApp = await renderApp(failedGenerationBook);
+    try {
+      const instruction = await waitForElement(() => failedGenerationApp.container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '触发失败的下一条回答。'));
+      await act(async () => failedGenerationApp.container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await flushMicrotasks();
+      const previousAnswer = failedGenerationApi.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block');
+      expect(previousAnswer?.candidates).toHaveLength(2);
+      expect(failedGenerationApi.generations).toHaveLength(1);
+    } finally {
+      await unmount(failedGenerationApp.root);
+    }
+
+    const failedSaveBook = makeCandidateResponseBook();
+    const failedSaveApi = installHostApi({
+      book: failedSaveBook,
+      onGenerate: async () => jsonResponse({ draft: '不应保存的下一条回答。' }),
+      onSave: async () => new Response(JSON.stringify({ error: 'Synthetic save failure' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      }),
+    });
+    const failedSaveApp = await renderApp(failedSaveBook);
+    try {
+      const instruction = await waitForElement(() => failedSaveApp.container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '保存失败的下一条回答。'));
+      await act(async () => failedSaveApp.container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await flushMicrotasks();
+      const previousAnswer = failedSaveApi.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block');
+      expect(previousAnswer?.candidates).toHaveLength(2);
+      expect(failedSaveApi.generations).toHaveLength(0);
+    } finally {
+      await unmount(failedSaveApp.root);
+    }
+  });
+
+  it('edits the currently selected candidate without restoring the old candidate from a queued save', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const book = makeCandidateResponseBook();
     const firstSave = deferred<Response>();
-    const generation = deferred<Response>();
     let saveCount = 0;
     const apiState = installHostApi({
       book,
@@ -353,50 +621,44 @@ describe('App generation save and cancellation boundaries', () => {
         if (saveCount === 1) return firstSave.promise;
         return jsonResponse(candidate);
       },
-      onGenerate: async () => generation.promise,
     });
     const { container, root } = await renderApp(book);
     try {
-      const answerSelect = container.querySelector<HTMLButtonElement>(
+      const answerSelect = await waitForElement(() => container.querySelector<HTMLButtonElement>(
         '[data-block-id="answer-block"] .manuscript-block-select',
-      );
-      await act(async () => answerSelect?.click());
+      ));
+      await act(async () => answerSelect.click());
       const nextCandidate = await waitForElement(() => container.querySelector<HTMLButtonElement>(
         'button[aria-label="下一版回答候选"]',
       ));
-      await act(async () => nextCandidate.click());
-      const adopt = await waitForElement(() => container.querySelector<HTMLButtonElement>(
-        '.answer-candidate-adopt',
+      const previousCandidate = await waitForElement(() => container.querySelector<HTMLButtonElement>(
+        'button[aria-label="上一版回答候选"]',
       ));
-      await act(async () => adopt.click());
+      await act(async () => previousCandidate.click());
       await flushMicrotasks();
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
       expect(apiState.saves).toHaveLength(1);
-      expect(apiState.saves[0]?.chapters[0]?.sections[0]?.blocks?.[0]).toMatchObject({
-        content: '准备采用的新版本。',
-        adoptedCandidateId: 'candidate-new',
-      });
-
-      const regenerate = await waitForElement(() => container.querySelector<HTMLButtonElement>(
-        '.answer-candidate-regenerate',
-      ));
-      await act(async () => regenerate.click());
+      await act(async () => nextCandidate.click());
       await flushMicrotasks();
-      expect(apiState.generations).toHaveLength(0);
-
-      firstSave.resolve(jsonResponse(apiState.saves[0]));
+      const edit = await waitForElement(() => container.querySelector<HTMLButtonElement>('button[aria-label="编辑所选片段"]'));
+      await act(async () => edit.click());
+      const editor = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#block-editor-textarea'));
+      await act(async () => setControlValue(editor, '编辑后的当前回答。'));
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="完成编辑并返回正文"]')?.click());
+      firstSave.resolve(jsonResponse(apiState.saves[0]!));
       await flushMicrotasks();
-      if (apiState.generations.length > 0) {
-        generation.resolve(jsonResponse({ draft: '并发再生成结果。' }));
-        await flushMicrotasks();
-        await act(async () => { await vi.advanceTimersByTimeAsync(750); });
-      }
-
-      const persistedBlock = apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.[0];
-      expect(persistedBlock).toMatchObject({
-        content: '准备采用的新版本。',
-        adoptedCandidateId: 'candidate-new',
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      await flushMicrotasks();
+      expect(apiState.saves).toHaveLength(2);
+      const persisted = apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.find((block) => block.id === 'answer-block');
+      expect(persisted).toMatchObject({
+        content: '编辑后的当前回答。',
+        adoptedCandidateId: 'candidate-current',
+        candidates: [
+          { id: 'candidate-old', content: '旧候选回答。' },
+          { id: 'candidate-current', content: '编辑后的当前回答。', sourceSignature: 'sig-current' },
+        ],
       });
-      expect(container.querySelector('.manuscript')?.textContent).toContain('准备采用的新版本。');
     } finally {
       await unmount(root);
     }

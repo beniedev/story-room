@@ -109,7 +109,9 @@ export const applyAnswerCandidateOutcome = ({
   let nextBlocks: SectionBlock[];
   const target = blocks[targetIndex];
   if (target.kind === 'assistant') {
-    nextBlocks = blocks.map((block, index) => index === targetIndex ? appendCandidate(block, candidate) : block);
+    nextBlocks = blocks.map((block, index) => index === targetIndex
+      ? adoptCandidate(appendCandidate(block, candidate), candidate.id)
+      : block);
   } else {
     const answerBlock = appendCandidate({
       id: makeId('block'),

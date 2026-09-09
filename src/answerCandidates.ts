@@ -139,3 +139,25 @@ export const deleteCandidate = (block: SectionBlock, candidateId: string): Secti
     ...(deletedAdopted ? { adoptedCandidateId: undefined } : {}),
   };
 };
+
+/**
+ * Keep only the answer that is currently visible/adopted.
+ *
+ * Legacy assistant blocks have no persisted candidate set, and blocks whose
+ * adopted id no longer resolves to a candidate are ambiguous.  Both cases
+ * are left untouched so a caller can safely use this when a later answer has
+ * been saved successfully without deleting content it cannot identify.
+ */
+export const finalizeAnswerCandidates = (block: SectionBlock): SectionBlock => {
+  if (block.kind !== 'assistant' || !block.candidates?.length || !block.adoptedCandidateId) {
+    return block;
+  }
+  const adopted = block.candidates.find((candidate) => candidate.id === block.adoptedCandidateId);
+  if (!adopted) return block;
+  return {
+    ...block,
+    content: adopted.content,
+    candidates: [cloneCandidate(adopted)],
+    adoptedCandidateId: adopted.id,
+  };
+};

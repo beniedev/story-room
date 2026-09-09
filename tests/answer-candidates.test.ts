@@ -4,6 +4,7 @@ import {
   appendCandidate,
   deleteCandidate,
   editCandidate,
+  finalizeAnswerCandidates,
   getAnswerCandidates,
   materializeCandidate,
 } from '../src/answerCandidates';
@@ -48,5 +49,43 @@ describe('answer candidate helpers', () => {
     expect(deleted.adoptedCandidateId).toBeUndefined();
     expect(deleted.candidates).toEqual([{ id: 'candidate-1', content: '改过的一版' }]);
     expect(blocksAsContent([deleted])).toBe('');
+  });
+
+  it('finalizes only the valid adopted answer and preserves its identity metadata', () => {
+    const block = {
+      id: 'answer',
+      kind: 'assistant' as const,
+      content: '二版',
+      candidates: [
+        { id: 'candidate-1', content: '一版', sourceSignature: 'sig-1' },
+        { id: 'candidate-2', content: '二版', sourceSignature: 'sig-2' },
+      ],
+      adoptedCandidateId: 'candidate-2',
+    };
+    expect(finalizeAnswerCandidates(block)).toEqual({
+      ...block,
+      candidates: [{ id: 'candidate-2', content: '二版', sourceSignature: 'sig-2' }],
+    });
+  });
+
+  it('leaves legacy, user, and unresolved adopted blocks untouched', () => {
+    const legacy = { id: 'legacy', kind: 'assistant' as const, content: '旧正文' };
+    const user = {
+      id: 'input',
+      kind: 'user' as const,
+      content: '用户输入',
+      candidates: [{ id: 'candidate', content: '不应被处理' }],
+      adoptedCandidateId: 'candidate',
+    };
+    const unresolved = {
+      id: 'unresolved',
+      kind: 'assistant' as const,
+      content: '正文',
+      candidates: [{ id: 'candidate', content: '候选' }],
+      adoptedCandidateId: 'missing',
+    };
+    expect(finalizeAnswerCandidates(legacy)).toBe(legacy);
+    expect(finalizeAnswerCandidates(user)).toBe(user);
+    expect(finalizeAnswerCandidates(unresolved)).toBe(unresolved);
   });
 });

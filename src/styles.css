@@ -1098,10 +1098,9 @@ h4 {
 }
 
 .answer-candidate-strip {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 0.35rem 0.5rem;
+  justify-content: center;
   margin: 0.05rem 0.25rem 0.65rem;
   padding: 0.45rem 0.5rem 0.6rem;
   border: 1px solid color-mix(in srgb, var(--accent-strong) 22%, transparent);
@@ -1122,74 +1121,6 @@ h4 {
 .answer-candidate-navigation .icon-button {
   width: 44px;
   min-width: 44px;
-}
-
-.answer-candidate-meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.answer-candidate-meta small {
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.answer-candidate-adopt,
-.answer-candidate-edit,
-.answer-candidate-delete,
-.answer-candidate-regenerate {
-  min-height: 44px;
-  padding-inline: 0.65rem;
-  white-space: nowrap;
-}
-
-.answer-candidate-preview {
-  grid-column: 1 / -1;
-  width: 100%;
-  margin-block-start: 0.1rem;
-  padding: 0.55rem 0.65rem;
-  border-inline-start: 3px solid color-mix(in srgb, var(--manuscript-ai) 55%, transparent);
-  background: color-mix(in srgb, var(--surface) 74%, transparent);
-  color: var(--manuscript-ai);
-  font-family: var(--manuscript-font-family);
-  font-size: var(--manuscript-font-size, 16px);
-  line-height: 1.72;
-  white-space: pre-wrap;
-}
-
-.answer-candidate-editor {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 0.4rem;
-  width: 100%;
-}
-
-.answer-candidate-editor label {
-  color: var(--text);
-  font-weight: 650;
-}
-
-.answer-candidate-editor textarea {
-  min-height: 7rem;
-  font-family: var(--manuscript-font-family);
-  font-size: var(--manuscript-font-size, 16px);
-  line-height: 1.72;
-}
-
-.answer-candidate-editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.4rem;
-}
-
-.answer-candidate-error {
-  margin: 0;
-  color: var(--danger);
 }
 
 .answer-candidate-delete-options {
@@ -3425,36 +3356,6 @@ h4 {
 
   .block-editor-textarea {
     font-size: max(1rem, var(--manuscript-font-size, 16px));
-  }
-
-  .answer-candidate-strip {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .answer-candidate-meta {
-    grid-column: 1 / -1;
-    align-items: flex-start;
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    flex-wrap: wrap;
-  }
-
-  .answer-candidate-meta > span {
-    min-width: 0;
-  }
-
-  .answer-candidate-meta small {
-    flex: 1 1 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .answer-candidate-adopt,
-  .answer-candidate-edit,
-  .answer-candidate-delete,
-  .answer-candidate-regenerate {
-    justify-self: start;
   }
 
   .app-header {
