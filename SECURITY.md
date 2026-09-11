@@ -22,7 +22,7 @@ The hosted/device build keeps Books in unencrypted browser `localStorage`. Same-
 
 The prompt view is limited to a compact Provider-input preview: it shows categories, approximate budget, and any explicit exclusion or degradation. It does not expose raw Provider messages or hidden model reasoning, and stored Book summaries or Canon facts are not silently added as prompt material. The context-plan API returns preview metadata and the generation API returns the draft without echoing the full internal plan.
 
-Local-host Book saves use an expected `updatedAt` revision and reject stale updates with HTTP 409. Before publishing a save, the store snapshots its managed Book files and library index under a private transaction journal. Prepared transactions are rolled back and committed journals are cleaned on the next serialized store operation. JSON backup imports are validated and assigned a new Book ID rather than replacing an existing Book.
+Local-host Book saves use an expected `updatedAt` revision and reject stale updates with HTTP 409. Before publishing a save, the store snapshots its managed Book files and library index under a private transaction journal. Book deletion first moves the complete Book tree into that private recovery area, then updates the library and records the commit before physical cleanup. After an interruption, prepared saves and deletions are rolled back; committed saves are retained and committed deletions finish cleanup. JSON backup imports are validated and assigned a new Book ID rather than replacing an existing Book.
 
 ## Known limitations
 
@@ -30,7 +30,7 @@ Local-host Book saves use an expected `updatedAt` revision and reject stale upda
 - A compromised browser, same-origin script, operating system, filesystem, or configured Provider endpoint is outside the guarantees of this demo.
 - The local HTTP host is not a hardened production service. Do not use it as a public internet endpoint.
 - The storage queue and transaction recovery belong to one host process; there is no cross-process file lock. Do not run independent hosts against the same data directory.
-- Save recovery does not currently cover a process exit during Book deletion. An in-process deletion failure is rolled back, but an exit between quarantine, index update, and cleanup can leave the Book temporarily unlisted or unavailable until its files are recovered manually.
+- Transaction recovery handles host-process interruption after filesystem operations become visible; it does not `fsync` every file and directory and is not a guarantee against sudden power loss, storage failure, or disk corruption. Keep independent backups.
 - Browser `localStorage` does not provide the local host's multi-file transaction recovery. Same-origin storage events are best-effort conflict signals, not synchronization or merging.
 - Full Book `PUT` requests have no application-defined size cap. Saves still transfer and validate the whole Book; unchanged source and manuscript files are not rewritten. See [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md) for an unimplemented future API design.
 

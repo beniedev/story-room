@@ -71,17 +71,26 @@ export class StoreDataError extends Error {
   }
 }
 
+class TransactionCleanupPendingError extends Error {
+  constructor() {
+    super('已提交事务将在下一次存储操作继续清理。');
+    this.name = 'TransactionCleanupPendingError';
+  }
+}
+
 export type SaveBookOptions = {
   expectedUpdatedAt?: string;
   createOnly?: boolean;
 };
 
 type TransactionStatus = 'prepared' | 'committed';
+type TransactionOperation = 'save' | 'delete';
 
 type TransactionJournal = {
   schemaVersion: 1;
   id: string;
   bookId: string;
+  operation: TransactionOperation;
   status: TransactionStatus;
   snapshotReady: boolean;
   bookExists: boolean;
@@ -91,6 +100,7 @@ type TransactionJournal = {
 };
 
 export type StoreFaultStage = 'after-sources' | 'after-manifest' | 'after-library';
+export type StoreDeleteFaultStage = 'after-quarantine' | 'after-delete-library';
 
 export type StoreRecoveryStage = 'before-restore' | 'after-restore';
 
@@ -385,6 +395,9 @@ const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 
 const unsafeBookTree = () => new StoreDataError('Book 文件结构异常。');
 
 const transactionRootName = '.story-transactions';
+const deleteInitializationNamePattern = /^delete-initializing-tx-[a-z0-9-]+$/i;
+const deleteCleanupNamePattern = /^delete-cleanup-tx-[a-z0-9-]+$/i;
+const transactionJournalTemporaryNamePattern = /^journal\.json\.tmp-\d+-[0-9a-f-]+$/i;
 
 const transactionRelativePath = (relative: string) => relative.split(path.sep).join('/');
 
@@ -623,6 +636,7 @@ export class StoryStore {
       schemaVersion: 1,
       id: path.basename(root),
       bookId,
+      operation: 'save',
       status: 'prepared',
       snapshotReady: false,
       bookExists,
@@ -656,6 +670,40 @@ export class StoryStore {
     }
   }
 
+  private async beginDeleteTransaction(bookId: string) {
+    await this.ensureTransactionParent();
+    const id = `tx-${randomUUID()}`;
+    const root = path.join(this.transactionsRoot(), id);
+    const initializingRoot = path.join(this.transactionsRoot(), `delete-initializing-${id}`);
+    await mkdir(initializingRoot);
+    const journal: TransactionJournal = {
+      schemaVersion: 1,
+      id,
+      bookId,
+      operation: 'delete',
+      status: 'prepared',
+      snapshotReady: false,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: [],
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await this.writeTransactionJournal(initializingRoot, journal);
+      await ensureSafeFile(this.libraryFile());
+      await copyFile(this.libraryFile(), path.join(initializingRoot, 'library.json'));
+      journal.snapshotReady = true;
+      await this.writeTransactionJournal(initializingRoot, journal);
+      await this.readDeleteLibrarySnapshot(journal, initializingRoot);
+      await rename(initializingRoot, root);
+      return { root, journal };
+    } catch (error) {
+      // No Book path changes happen until the ready journal is durable.
+      await this.removeTransactionTree(initializingRoot).catch(() => undefined);
+      throw error;
+    }
+  }
+
   private async readTransactionJournal(transactionRoot: string): Promise<TransactionJournal> {
     let value: unknown;
     try {
@@ -670,6 +718,7 @@ export class StoryStore {
       || value.id !== path.basename(transactionRoot)
       || typeof value.bookId !== 'string'
       || !idPattern.test(value.bookId)
+      || (value.operation !== undefined && value.operation !== 'save' && value.operation !== 'delete')
       || (value.status !== 'prepared' && value.status !== 'committed')
       || typeof value.snapshotReady !== 'boolean'
       || typeof value.bookExists !== 'boolean'
@@ -677,13 +726,17 @@ export class StoryStore {
       || !Array.isArray(value.bookFiles)
       || value.bookFiles.some((file) => typeof file !== 'string'
         || !isSafeTransactionRelativePath(file)
-        || !this.isManagedBookRelative(fromTransactionRelativePath(file)))) {
+        || !this.isManagedBookRelative(fromTransactionRelativePath(file)))
+      || (value.operation === 'delete'
+        && (value.bookExists !== true || value.libraryExists !== true || value.bookFiles.length !== 0))) {
       throw new StoreDataError('事务记录损坏。');
     }
     return {
       schemaVersion: 1,
       id: value.id,
       bookId: value.bookId,
+      // Journals created before delete recovery existed were all save journals.
+      operation: value.operation === 'delete' ? 'delete' : 'save',
       status: value.status,
       snapshotReady: value.snapshotReady,
       bookExists: value.bookExists,
@@ -765,6 +818,151 @@ export class StoryStore {
     await this.recoveryCheckpoint('after-restore');
   }
 
+  private deleteQuarantineRoot(transactionRoot: string) {
+    return path.join(transactionRoot, 'book');
+  }
+
+  private deleteCleanupRoot(transactionRoot: string) {
+    return path.join(this.transactionsRoot(), `delete-cleanup-${path.basename(transactionRoot)}`);
+  }
+
+  private async readDeleteLibrarySnapshot(journal: TransactionJournal, transactionRoot: string) {
+    const snapshot = path.join(transactionRoot, 'library.json');
+    await ensureSafeFile(snapshot);
+    let value: unknown;
+    try {
+      value = await readJson<unknown>(snapshot);
+    } catch {
+      throw new StoreDataError('删除事务的 library 快照损坏。');
+    }
+    if (!Array.isArray(value)
+      || value.some((entry) => !isRecord(entry)
+        || typeof entry.id !== 'string'
+        || typeof entry.title !== 'string'
+        || typeof entry.updatedAt !== 'string')
+      || value.filter((entry) => (entry as BookIndexEntry).id === journal.bookId).length !== 1
+      || new Set(value.map((entry) => (entry as BookIndexEntry).id)).size !== value.length) {
+      throw new StoreDataError('删除事务的 library 快照损坏。');
+    }
+    return snapshot;
+  }
+
+  private async validateDeleteTransaction(journal: TransactionJournal, transactionRoot: string) {
+    if (journal.operation !== 'delete'
+      || !journal.snapshotReady
+      || !journal.bookExists
+      || !journal.libraryExists
+      || journal.bookFiles.length !== 0) {
+      throw new StoreDataError('删除事务记录损坏。');
+    }
+    await this.assertSafeTree(transactionRoot);
+    const entries = await readSafeDirectory(transactionRoot);
+    if (!entries) throw new StoreDataError('删除事务记录损坏。');
+    for (const entry of entries) {
+      if (entry.name === 'journal.json' || entry.name === 'library.json') {
+        if (!entry.isFile()) throw new StoreDataError('删除事务记录损坏。');
+        continue;
+      }
+      if (transactionJournalTemporaryNamePattern.test(entry.name) && entry.isFile()) continue;
+      if (entry.name === 'book' && entry.isDirectory()) continue;
+      throw new StoreDataError('删除事务目录包含未知内容。');
+    }
+    return this.readDeleteLibrarySnapshot(journal, transactionRoot);
+  }
+
+  private async restoreDeleteTransaction(journal: TransactionJournal, transactionRoot: string) {
+    const snapshot = await this.validateDeleteTransaction(journal, transactionRoot);
+    await this.ensureStorageLayout();
+    await this.recoveryCheckpoint('before-restore');
+    const bookRoot = this.bookRoot(journal.bookId);
+    const quarantineRoot = this.deleteQuarantineRoot(transactionRoot);
+    const bookExists = await safeDirectoryExists(bookRoot);
+    const quarantineExists = await safeDirectoryExists(quarantineRoot);
+    if (bookExists === quarantineExists) {
+      throw new StoreDataError('删除事务无法确定唯一的 Book 恢复来源。');
+    }
+    if (quarantineExists) {
+      await this.assertSafeTree(quarantineRoot);
+      await rename(quarantineRoot, bookRoot);
+    } else {
+      await this.assertSafeTree(bookRoot);
+    }
+    await atomicWrite(this.libraryFile(), await readFile(snapshot));
+    await this.recoveryCheckpoint('after-restore');
+  }
+
+  private async finishCommittedDelete(journal: TransactionJournal, transactionRoot: string) {
+    await this.validateDeleteTransaction(journal, transactionRoot);
+    const library = await readJson<unknown>(this.libraryFile());
+    if (!Array.isArray(library)
+      || library.some((entry) => !isRecord(entry) || typeof entry.id !== 'string')
+      || library.some((entry) => (entry as BookIndexEntry).id === journal.bookId)) {
+      throw new StoreDataError('已提交删除事务与当前书库索引不一致。');
+    }
+    const bookRoot = this.bookRoot(journal.bookId);
+    if (await safeDirectoryExists(bookRoot)) {
+      throw new StoreDataError('已提交删除事务仍存在原 Book 目录。');
+    }
+    const quarantineRoot = this.deleteQuarantineRoot(transactionRoot);
+    if (await safeDirectoryExists(quarantineRoot)) {
+      await this.assertSafeTree(quarantineRoot);
+      try {
+        await this.removeBookTree(quarantineRoot);
+      } catch {
+        throw new TransactionCleanupPendingError();
+      }
+    }
+  }
+
+  private async assertDeleteMetadataTree(directory: string, message: string) {
+    await this.assertSafeTree(directory);
+    const entries = await readSafeDirectory(directory);
+    if (!entries || entries.some((entry) => !entry.isFile()
+      || (entry.name !== 'journal.json'
+        && entry.name !== 'library.json'
+        && !transactionJournalTemporaryNamePattern.test(entry.name)))) {
+      throw new StoreDataError(message);
+    }
+  }
+
+  private async retireDeleteTransaction(transactionRoot: string) {
+    await this.assertDeleteMetadataTree(transactionRoot, '已收敛删除事务包含未知内容。');
+    const cleanupRoot = this.deleteCleanupRoot(transactionRoot);
+    if (await safeDirectoryExists(cleanupRoot)) {
+      throw new StoreDataError('删除事务清理目录发生冲突。');
+    }
+    try {
+      await rename(transactionRoot, cleanupRoot);
+    } catch {
+      throw new TransactionCleanupPendingError();
+    }
+    try {
+      await this.assertSafeTree(cleanupRoot);
+      await this.removeTransactionTree(cleanupRoot);
+    } catch (error) {
+      if (error instanceof StoreDataError) throw error;
+      throw new TransactionCleanupPendingError();
+    }
+  }
+
+  private async removeRetiredDeleteTransaction(cleanupRoot: string) {
+    await this.assertDeleteMetadataTree(cleanupRoot, '删除事务清理目录包含未知内容。');
+    try {
+      await this.removeTransactionTree(cleanupRoot);
+    } catch {
+      throw new StoreDataError('删除事务残留清理失败。');
+    }
+  }
+
+  private async removeInitializingDeleteTransaction(initializingRoot: string) {
+    await this.assertDeleteMetadataTree(initializingRoot, '未开始的删除事务包含未知内容。');
+    try {
+      await this.removeTransactionTree(initializingRoot);
+    } catch {
+      throw new StoreDataError('未开始的删除事务清理失败。');
+    }
+  }
+
   private async recoverTransactions() {
     await this.ensureTransactionParent();
     const entries = await readSafeDirectory(this.transactionsRoot());
@@ -772,7 +970,28 @@ export class StoryStore {
     for (const entry of entries) {
       if (!entry.isDirectory()) throw new StoreDataError('事务目录结构异常。');
       const transactionRoot = path.join(this.transactionsRoot(), entry.name);
+      if (deleteInitializationNamePattern.test(entry.name)) {
+        await this.removeInitializingDeleteTransaction(transactionRoot);
+        continue;
+      }
+      if (deleteCleanupNamePattern.test(entry.name)) {
+        await this.removeRetiredDeleteTransaction(transactionRoot);
+        continue;
+      }
       const journal = await this.readTransactionJournal(transactionRoot);
+      if (journal.operation === 'delete') {
+        if (!journal.snapshotReady) {
+          await this.retireDeleteTransaction(transactionRoot);
+          continue;
+        }
+        if (journal.status === 'committed') {
+          await this.finishCommittedDelete(journal, transactionRoot);
+        } else {
+          await this.restoreDeleteTransaction(journal, transactionRoot);
+        }
+        await this.retireDeleteTransaction(transactionRoot);
+        continue;
+      }
       if (journal.status === 'committed') {
         await this.assertSafeTree(transactionRoot);
         try {
@@ -803,6 +1022,10 @@ export class StoryStore {
 
   protected async transactionCheckpoint(_stage: StoreFaultStage): Promise<void> {
     // Narrow seam for storage fault-injection tests.
+  }
+
+  protected async deleteTransactionCheckpoint(_stage: StoreDeleteFaultStage): Promise<void> {
+    // Narrow seam for delete fault-injection tests.
   }
 
   protected async recoveryCheckpoint(_stage: StoreRecoveryStage): Promise<void> {
@@ -1282,40 +1505,38 @@ export class StoryStore {
       if (!library.some((entry) => entry.id === bookId)) throw new BookNotFoundError(bookId);
 
       const root = this.bookRoot(bookId);
-      const quarantine = `${root}.deleting-${randomUUID()}`;
+      if (!await safeDirectoryExists(root)) throw new BookNotFoundError(bookId);
+      await this.assertSafeTree(root);
+      const transaction = await this.beginDeleteTransaction(bookId);
+      const quarantine = this.deleteQuarantineRoot(transaction.root);
+      const committedJournal = { ...transaction.journal, status: 'committed' as const };
       try {
         await rename(root, quarantine);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new BookNotFoundError(bookId);
-        throw error;
-      }
-
-      try {
+        await this.deleteTransactionCheckpoint('after-quarantine');
         const remaining = library.filter((entry) => entry.id !== bookId);
         await atomicWrite(this.libraryFile(), `${JSON.stringify(remaining, null, 2)}\n`);
+        await this.deleteTransactionCheckpoint('after-delete-library');
+        await this.writeTransactionJournal(transaction.root, committedJournal);
       } catch (error) {
-        await rename(quarantine, root);
+        try {
+          await this.restoreDeleteTransaction(transaction.journal, transaction.root);
+        } catch {
+          throw new StoreDataError('删除 Book 失败，且无法恢复删除前的完整数据。恢复材料已保留。');
+        }
+        try {
+          await this.retireDeleteTransaction(transaction.root);
+        } catch {
+          throw new StoreDataError('删除 Book 失败；原数据已恢复，但删除事务记录清理失败。');
+        }
         throw error;
       }
-
       try {
-        await this.removeBookTree(quarantine);
+        await this.finishCommittedDelete(committedJournal, transaction.root);
+        await this.retireDeleteTransaction(transaction.root);
       } catch (error) {
-        // Keep deletion transactional: if the quarantined tree cannot be
-        // removed, put both the tree and its library entry back. In
-        // particular, never leave a private Book stranded under a hidden
-        // `.deleting-*` path with no index entry or recovery owner.
-        try {
-          await rename(quarantine, root);
-        } catch {
-          throw new StoreDataError('删除 Book 失败，且无法恢复原数据。');
-        }
-        try {
-          await atomicWrite(this.libraryFile(), `${JSON.stringify(library, null, 2)}\n`);
-        } catch {
-          throw new StoreDataError('删除 Book 失败，书库索引恢复失败。');
-        }
-        throw error;
+        if (!(error instanceof TransactionCleanupPendingError)) throw error;
+        // The logical deletion is durable. Its committed journal remains so
+        // the next store operation can finish physical cleanup safely.
       }
       return { id: bookId };
     };

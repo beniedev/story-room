@@ -1,10 +1,16 @@
 import type { AddressInfo } from 'node:net';
 import { createStoryServer } from '../server/main.ts';
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { StoreConflictError, StoryStore, type StoreFaultStage, type StoreRecoveryStage } from '../server/store.ts';
+import {
+  StoreConflictError,
+  StoryStore,
+  type StoreDeleteFaultStage,
+  type StoreFaultStage,
+  type StoreRecoveryStage,
+} from '../server/store.ts';
 import { createLegacyFixtureBook } from '../src/fixtures.ts';
 import { createSectionMemory } from '../src/sectionMemory';
 import type { Book, BookIndexEntry } from '../src/types.ts';
@@ -13,6 +19,33 @@ const temporaryRoots: string[] = [];
 
 const expectMissing = async (file: string) => {
   await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
+};
+
+const stageDeleteTransaction = async (
+  root: string,
+  bookId: string,
+  id: string,
+  status: 'prepared' | 'committed',
+) => {
+  const transactionRoot = path.join(root, '.story-transactions', id);
+  await mkdir(transactionRoot, { recursive: true });
+  await copyFile(path.join(root, 'library.json'), path.join(transactionRoot, 'library.json'));
+  await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    id,
+    bookId,
+    operation: 'delete',
+    status,
+    snapshotReady: true,
+    bookExists: true,
+    libraryExists: true,
+    bookFiles: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }, null, 2)}\n`, 'utf8');
+  return {
+    transactionRoot,
+    quarantineRoot: path.join(transactionRoot, 'book'),
+  };
 };
 
 const makeIntegrityBook = (): Book => ({
@@ -68,6 +101,16 @@ const makeIntegrityBook = (): Book => ({
 class FailingDeleteStore extends StoryStore {
   protected override async removeBookTree(_directory: string) {
     throw new Error('synthetic quarantine removal failure');
+  }
+}
+
+class FaultingDeleteStore extends StoryStore {
+  constructor(root: string, private readonly faultStage: StoreDeleteFaultStage) {
+    super(root);
+  }
+
+  protected override async deleteTransactionCheckpoint(stage: StoreDeleteFaultStage) {
+    if (stage === this.faultStage) throw new Error(`synthetic ${stage} failure`);
   }
 }
 
@@ -947,9 +990,156 @@ describe('story store', () => {
     }
 
     await expect(store.loadBook(book.id)).rejects.toThrow('结构异常');
+    await expect(store.deleteBook(book.id)).rejects.toThrow('结构异常');
+    expect(await readFile(path.join(outside, `${book.characters[0]!.id}.json`), 'utf8'))
+      .toBe(JSON.stringify(book.characters[0]));
+    expect((await JSON.parse(await readFile(path.join(root, 'library.json'), 'utf8')) as BookIndexEntry[])
+      .map((entry) => entry.id)).toContain(book.id);
   });
 
-  it('restores the Book and library when quarantine removal fails', async () => {
+  it('does not move a Book when its library cannot form a valid delete snapshot', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    await writeFile(path.join(root, 'library.json'), `${JSON.stringify([{ id: book.id }])}\n`, 'utf8');
+
+    await expect(store.deleteBook(book.id)).rejects.toThrow('library 快照损坏');
+    expect(await readFile(path.join(root, 'books', book.id, 'book.json'), 'utf8')).toContain(book.title);
+    expect(await readdir(path.join(root, '.story-transactions'))).toEqual([]);
+  });
+
+  it.each(['after-quarantine', 'after-delete-library'] as const)(
+    'restores the complete Book when deletion fails at %s before commit',
+    async (faultStage) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+      temporaryRoots.push(root);
+      const book = makeIntegrityBook();
+      const store = new StoryStore(root);
+      await store.saveBook(book);
+      const unmanaged = path.join(root, 'books', book.id, 'private-note.txt');
+      await writeFile(unmanaged, 'Synthetic unmanaged file.', 'utf8');
+
+      await expect(new FaultingDeleteStore(root, faultStage).deleteBook(book.id))
+        .rejects.toThrow(`synthetic ${faultStage} failure`);
+
+      expect((await JSON.parse(await readFile(path.join(root, 'library.json'), 'utf8')) as BookIndexEntry[])
+        .map((entry) => entry.id)).toContain(book.id);
+      expect((await new StoryStore(root).loadBook(book.id)).title).toBe(book.title);
+      expect(await readFile(unmanaged, 'utf8')).toBe('Synthetic unmanaged file.');
+      expect(await readdir(path.join(root, '.story-transactions'))).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    'rolls back a prepared delete after restart when library removal is %s',
+    async (libraryRemoved) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+      temporaryRoots.push(root);
+      const store = new StoryStore(root);
+      const book = await store.saveBook(makeIntegrityBook());
+      const unmanaged = path.join(root, 'books', book.id, 'private-note.txt');
+      await writeFile(unmanaged, 'Synthetic unmanaged file.', 'utf8');
+      const transaction = await stageDeleteTransaction(root, book.id, `tx-delete-prepared-${libraryRemoved}`, 'prepared');
+      await rename(path.join(root, 'books', book.id), transaction.quarantineRoot);
+      if (libraryRemoved) {
+        await writeFile(path.join(root, 'library.json'), '[]\n', 'utf8');
+        await writeFile(
+          path.join(transaction.transactionRoot, 'journal.json.tmp-1-00000000-0000-4000-8000-000000000000'),
+          'partial committed journal',
+          'utf8',
+        );
+      }
+
+      const reopened = new StoryStore(root);
+      expect((await reopened.loadBook(book.id)).title).toBe(book.title);
+      expect((await reopened.listBooks()).map((entry) => entry.id)).toContain(book.id);
+      expect(await readFile(unmanaged, 'utf8')).toBe('Synthetic unmanaged file.');
+      await expectMissing(transaction.transactionRoot);
+    },
+  );
+
+  it('removes an initializing delete directory without touching the Book', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    const initializingRoot = path.join(root, '.story-transactions', 'delete-initializing-tx-crash');
+    await mkdir(initializingRoot, { recursive: true });
+    await writeFile(
+      path.join(initializingRoot, 'journal.json.tmp-1-00000000-0000-4000-8000-000000000000'),
+      'partial',
+      'utf8',
+    );
+
+    expect((await new StoryStore(root).loadBook(book.id)).title).toBe(book.title);
+    await expectMissing(initializingRoot);
+  });
+
+  it('fails closed and retains a prepared delete whose library snapshot is missing', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-delete-missing-library');
+    await mkdir(transactionRoot, { recursive: true });
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-delete-missing-library',
+      bookId: book.id,
+      operation: 'delete',
+      status: 'prepared',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new StoryStore(root).loadBook(book.id)).rejects.toThrow('library 快照损坏');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+    expect(await readFile(path.join(root, 'books', book.id, 'book.json'), 'utf8')).toContain(book.title);
+  });
+
+  it('fails closed when a prepared delete quarantine contains a junction', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    const transaction = await stageDeleteTransaction(root, book.id, 'tx-delete-linked', 'prepared');
+    await rename(path.join(root, 'books', book.id), transaction.quarantineRoot);
+    const outside = path.join(root, 'outside-delete');
+    await mkdir(outside);
+    await writeFile(path.join(outside, 'sentinel.txt'), 'unchanged', 'utf8');
+    try {
+      await symlink(outside, path.join(transaction.quarantineRoot, 'linked'), 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await expect(new StoryStore(root).listBooks()).rejects.toThrow('结构异常');
+    await expect(access(transaction.transactionRoot)).resolves.toBeUndefined();
+    expect(await readFile(path.join(outside, 'sentinel.txt'), 'utf8')).toBe('unchanged');
+  });
+
+  it('finishes a committed delete after restart even when quarantine cleanup was partial', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    const transaction = await stageDeleteTransaction(root, book.id, 'tx-delete-committed', 'committed');
+    await rename(path.join(root, 'books', book.id), transaction.quarantineRoot);
+    await writeFile(path.join(root, 'library.json'), '[]\n', 'utf8');
+    await rm(path.join(transaction.quarantineRoot, 'characters'), { recursive: true, force: true });
+
+    const reopened = new StoryStore(root);
+    expect((await reopened.listBooks()).map((entry) => entry.id)).not.toContain(book.id);
+    await expect(reopened.loadBook(book.id)).rejects.toThrow(`找不到 Book：${book.id}`);
+    await expectMissing(path.join(root, 'books', book.id));
+    await expectMissing(transaction.transactionRoot);
+  });
+
+  it('keeps a committed journal when Book cleanup fails and finishes it on the next start', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
     temporaryRoots.push(root);
     const book = makeIntegrityBook();
@@ -957,12 +1147,50 @@ describe('story store', () => {
     await store.saveBook(book);
 
     const failingStore = new FailingDeleteStore(root);
-    await expect(failingStore.deleteBook(book.id)).rejects.toThrow('synthetic quarantine removal failure');
+    await expect(failingStore.deleteBook(book.id)).resolves.toEqual({ id: book.id });
 
     expect((await JSON.parse(await readFile(path.join(root, 'library.json'), 'utf8')) as BookIndexEntry[])
-      .map((entry) => entry.id)).toContain(book.id);
-    expect((await failingStore.loadBook(book.id)).title).toBe(book.title);
-    expect(await readdir(path.join(root, 'books'))).toEqual([book.id]);
+      .map((entry) => entry.id)).not.toContain(book.id);
+    const pending = await readdir(path.join(root, '.story-transactions'));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatch(/^tx-/);
+
+    const reopened = new StoryStore(root);
+    expect((await reopened.listBooks()).map((entry) => entry.id)).not.toContain(book.id);
+    await expect(reopened.loadBook(book.id)).rejects.toThrow(`找不到 Book：${book.id}`);
+    expect(await readdir(path.join(root, '.story-transactions'))).toEqual([]);
+  });
+
+  it('retries a retired delete transaction whose final journal cleanup was interrupted', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const book = makeIntegrityBook();
+    const store = new StoryStore(root);
+    await store.saveBook(book);
+
+    await expect(new FailingTransactionCleanupStore(root).deleteBook(book.id)).resolves.toEqual({ id: book.id });
+    const pending = await readdir(path.join(root, '.story-transactions'));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatch(/^delete-cleanup-tx-/);
+
+    const reopened = new StoryStore(root);
+    expect((await reopened.listBooks()).map((entry) => entry.id)).not.toContain(book.id);
+    await expectMissing(path.join(root, 'books', book.id));
+    expect(await readdir(path.join(root, '.story-transactions'))).toEqual([]);
+  });
+
+  it('fails closed instead of erasing unknown content under a delete cleanup marker', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const book = await store.saveBook(makeIntegrityBook());
+    const cleanupRoot = path.join(root, '.story-transactions', 'delete-cleanup-tx-unknown');
+    const sentinel = path.join(cleanupRoot, 'unknown.txt');
+    await mkdir(cleanupRoot, { recursive: true });
+    await writeFile(sentinel, 'do not erase', 'utf8');
+
+    await expect(new StoryStore(root).loadBook(book.id)).rejects.toThrow('包含未知内容');
+    expect(await readFile(sentinel, 'utf8')).toBe('do not erase');
   });
 
   it('loads a legacy Section without optional note or blocks', async () => {

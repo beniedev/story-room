@@ -25,6 +25,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - Book paths are validated and Book content is not combined across IDs.
 - Local-host saves require the revision that the client loaded, serialize reads and writes in one process, and reject a stale revision before publishing changes.
 - Before a local-host save publishes content, `book.json`, or the library index, the store writes a private prepared journal and snapshots the previous managed Book files and library. Failed or interrupted prepared saves are restored; committed journals are only cleaned up.
+- Local-host deletion moves the complete Book tree into a prepared transaction before removing its library entry. An interruption before the commit restores both the tree and library snapshot; an interruption after the commit continues physical cleanup. Final transaction retirement uses a recognizable cleanup state so another interruption remains retryable.
 - Complete JSON backups are validated on import and restored under a newly generated Book ID, so import does not replace an existing Book.
 - Local-host full-Book browser caches are not used; legacy `story-native:book:` entries are cleared on host startup. Device-local storage remains unencrypted by design.
 - The host and development launcher default to loopback and accept an explicitly configured LAN or private-network bind address. They do not add a password/token gate or Host allowlist. State-changing requests with an Origin header require same-origin.
@@ -39,7 +40,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - Browser `localStorage` is not encrypted. Site-data clearing, browser profile loss, or user deletion can remove device-local Books. Exports are outside the app's control.
 - Device-local revision checks and same-origin storage events can detect stale pages, but they do not merge changes or provide the local host's multi-file transaction recovery.
 - The local-host queue is process-local and there is no cross-process filesystem lock. Two independent host processes sharing one data directory can bypass that serialization boundary.
-- Book deletion rolls back ordinary in-process failures but has no restart journal. A process exit during its quarantine/index/cleanup window can leave a recoverable Book directory out of sync with the library index.
+- Transaction journals do not `fsync` each file and parent directory. They recover ordinary host-process interruption under the filesystem's completed write/rename semantics, not sudden power loss, storage failure, or disk corruption.
 - The local host uses HTTP and is not a hardened public service. Binding it to a reachable address does not add TLS, user accounts, rate limiting, or multi-user authorization.
 - API request bodies, Provider responses, and Section Memory have no application-defined size caps. Full Book `PUT` and autosave remain whole-Book operations buffered in memory, so large inputs increase memory and I/O use. Generation has no application-defined deadline; callers can cancel it. Incremental revisions are future work described in [`INCREMENTAL_SAVE.md`](INCREMENTAL_SAVE.md).
 
