@@ -395,6 +395,8 @@ const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 
 const unsafeBookTree = () => new StoreDataError('Book 文件结构异常。');
 
 const transactionRootName = '.story-transactions';
+const saveInitializationNamePattern = /^save-initializing-tx-[a-z0-9-]+$/i;
+const saveCleanupNamePattern = /^save-cleanup-tx-[a-z0-9-]+$/i;
 const deleteInitializationNamePattern = /^delete-initializing-tx-[a-z0-9-]+$/i;
 const deleteCleanupNamePattern = /^delete-cleanup-tx-[a-z0-9-]+$/i;
 const transactionJournalTemporaryNamePattern = /^journal\.json\.tmp-\d+-[0-9a-f-]+$/i;
@@ -609,44 +611,130 @@ export class StoryStore {
     await atomicWrite(this.transactionJournalFile(transactionRoot), `${JSON.stringify(journal, null, 2)}\n`);
   }
 
+  private async assertSaveTransactionTree(directory: string, message: string) {
+    const visitSnapshot = async (current: string, relativeRoot: string): Promise<void> => {
+      const entries = await readSafeDirectory(current);
+      if (!entries) throw new StoreDataError(message);
+      for (const entry of entries) {
+        const relative = relativeRoot ? path.join(relativeRoot, entry.name) : entry.name;
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          await ensureSafeDirectory(fullPath);
+          const parts = relative.split(path.sep);
+          const allowedDirectory = parts.length === 1
+            && (managedDirectories.includes(parts[0] as ManagedDirectory) || parts[0] === 'manuscript');
+          const allowedChapterDirectory = parts.length === 2
+            && parts[0] === 'manuscript'
+            && idPattern.test(parts[1]!);
+          if (!allowedDirectory && !allowedChapterDirectory) throw new StoreDataError(message);
+          await visitSnapshot(fullPath, relative);
+          continue;
+        }
+        await ensureSafeFile(fullPath);
+        if (!this.isManagedBookRelative(relative)) throw new StoreDataError(message);
+      }
+    };
+
+    const entries = await readSafeDirectory(directory);
+    if (!entries) throw new StoreDataError(message);
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.name === 'book') {
+        if (!entry.isDirectory()) throw new StoreDataError(message);
+        await ensureSafeDirectory(fullPath);
+        await visitSnapshot(fullPath, '');
+      } else if (entry.name === 'journal.json'
+        || entry.name === 'library.json'
+        || transactionJournalTemporaryNamePattern.test(entry.name)) {
+        await ensureSafeFile(fullPath);
+      } else {
+        throw new StoreDataError(message);
+      }
+    }
+  }
+
+  private saveCleanupRoot(transactionRoot: string) {
+    return path.join(this.transactionsRoot(), `save-cleanup-${path.basename(transactionRoot)}`);
+  }
+
+  private async removeInitializingSaveTransaction(initializingRoot: string) {
+    await this.assertSaveTransactionTree(initializingRoot, '未开始的保存事务包含未知内容。');
+    try {
+      await this.removeTransactionTree(initializingRoot);
+    } catch {
+      throw new StoreDataError('未开始的保存事务清理失败。');
+    }
+  }
+
+  private async removeSaveCleanupTransaction(cleanupRoot: string) {
+    await this.assertSaveTransactionTree(cleanupRoot, '保存事务清理目录包含未知内容。');
+    try {
+      await this.removeTransactionTree(cleanupRoot);
+    } catch {
+      throw new StoreDataError('保存事务残留清理失败。');
+    }
+  }
+
+  private async retireSaveTransaction(transactionRoot: string) {
+    await this.assertSaveTransactionTree(transactionRoot, '已收敛保存事务包含未知内容。');
+    const cleanupRoot = this.saveCleanupRoot(transactionRoot);
+    if (await safeDirectoryExists(cleanupRoot)) {
+      throw new StoreDataError('保存事务清理目录发生冲突。');
+    }
+    try {
+      await rename(transactionRoot, cleanupRoot);
+    } catch {
+      throw new TransactionCleanupPendingError();
+    }
+    try {
+      await this.assertSaveTransactionTree(cleanupRoot, '保存事务清理目录包含未知内容。');
+      await this.removeTransactionTree(cleanupRoot);
+    } catch (error) {
+      if (error instanceof StoreDataError) throw error;
+      throw new TransactionCleanupPendingError();
+    }
+  }
+
   private async beginTransaction(bookId: string) {
     await this.ensureTransactionParent();
-    const root = path.join(this.transactionsRoot(), `tx-${randomUUID()}`);
-    await mkdir(root);
-    const bookRoot = this.bookRoot(bookId);
-    let bookExists = false;
+    const id = `tx-${randomUUID()}`;
+    const root = path.join(this.transactionsRoot(), id);
+    const initializingRoot = path.join(this.transactionsRoot(), `save-initializing-${id}`);
+    await mkdir(initializingRoot);
     try {
-      const stat = await lstat(bookRoot);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
-      bookExists = true;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-    }
-    const bookFiles = bookExists ? await this.collectManagedBookFiles(bookRoot) : [];
-    let libraryExists = false;
-    try {
-      const stat = await lstat(this.libraryFile());
-      if (stat.isSymbolicLink() || !stat.isFile()) throw unsafeBookTree();
-      libraryExists = true;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-    }
+      const bookRoot = this.bookRoot(bookId);
+      let bookExists = false;
+      try {
+        const stat = await lstat(bookRoot);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+        bookExists = true;
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+      const bookFiles = bookExists ? await this.collectManagedBookFiles(bookRoot) : [];
+      let libraryExists = false;
+      try {
+        const stat = await lstat(this.libraryFile());
+        if (stat.isSymbolicLink() || !stat.isFile()) throw unsafeBookTree();
+        libraryExists = true;
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
 
-    const journal: TransactionJournal = {
-      schemaVersion: 1,
-      id: path.basename(root),
-      bookId,
-      operation: 'save',
-      status: 'prepared',
-      snapshotReady: false,
-      bookExists,
-      libraryExists,
-      bookFiles: bookFiles.map(transactionRelativePath),
-      createdAt: new Date().toISOString(),
-    };
-    try {
-      await this.writeTransactionJournal(root, journal);
-      const snapshotRoot = path.join(root, 'book');
+      const journal: TransactionJournal = {
+        schemaVersion: 1,
+        id,
+        bookId,
+        operation: 'save',
+        status: 'prepared',
+        snapshotReady: false,
+        bookExists,
+        libraryExists,
+        bookFiles: bookFiles.map(transactionRelativePath),
+        createdAt: new Date().toISOString(),
+      };
+      await this.writeTransactionJournal(initializingRoot, journal);
+      const snapshotRoot = path.join(initializingRoot, 'book');
       for (const relative of bookFiles) {
         const source = path.join(bookRoot, relative);
         const target = path.join(snapshotRoot, relative);
@@ -656,16 +744,19 @@ export class StoryStore {
       }
       if (libraryExists) {
         await ensureSafeFile(this.libraryFile());
-        await copyFile(this.libraryFile(), path.join(root, 'library.json'));
+        await copyFile(this.libraryFile(), path.join(initializingRoot, 'library.json'));
       }
       journal.snapshotReady = true;
-      await this.writeTransactionJournal(root, journal);
+      await this.writeTransactionJournal(initializingRoot, journal);
+      await this.assertSaveTransactionTree(initializingRoot, '保存事务初始化目录包含未知内容。');
+      await this.validateTransactionSnapshot(journal, initializingRoot);
+      await rename(initializingRoot, root);
       return { root, journal };
     } catch (error) {
       // A normal in-process preparation failure has not published any new
-      // Book files yet. A process exit at this point intentionally leaves the
-      // prepared journal for the next operation to fail closed.
-      await this.removeTransactionTree(root).catch(() => undefined);
+      // Book files yet. A process exit at this point leaves a recognizable
+      // initializing marker for the next operation to clean safely.
+      await this.removeInitializingSaveTransaction(initializingRoot).catch(() => undefined);
       throw error;
     }
   }
@@ -970,6 +1061,14 @@ export class StoryStore {
     for (const entry of entries) {
       if (!entry.isDirectory()) throw new StoreDataError('事务目录结构异常。');
       const transactionRoot = path.join(this.transactionsRoot(), entry.name);
+      if (saveInitializationNamePattern.test(entry.name)) {
+        await this.removeInitializingSaveTransaction(transactionRoot);
+        continue;
+      }
+      if (saveCleanupNamePattern.test(entry.name)) {
+        await this.removeSaveCleanupTransaction(transactionRoot);
+        continue;
+      }
       if (deleteInitializationNamePattern.test(entry.name)) {
         await this.removeInitializingDeleteTransaction(transactionRoot);
         continue;
@@ -993,29 +1092,36 @@ export class StoryStore {
         continue;
       }
       if (journal.status === 'committed') {
-        await this.assertSafeTree(transactionRoot);
         try {
-          await this.removeTransactionTree(transactionRoot);
-        } catch {
-          throw new StoreDataError('已提交事务清理失败。');
+          await this.retireSaveTransaction(transactionRoot);
+        } catch (error) {
+          if (error instanceof TransactionCleanupPendingError) {
+            throw new StoreDataError('已提交事务清理失败。');
+          }
+          throw error;
         }
         continue;
       }
       if (!journal.snapshotReady) {
-        await this.assertSafeTree(transactionRoot);
         try {
-          await this.removeTransactionTree(transactionRoot);
-        } catch {
-          throw new StoreDataError('未完成事务清理失败。');
+          await this.retireSaveTransaction(transactionRoot);
+        } catch (error) {
+          if (error instanceof TransactionCleanupPendingError) {
+            throw new StoreDataError('未完成事务清理失败。');
+          }
+          throw error;
         }
         continue;
       }
       await this.validateTransactionSnapshot(journal, transactionRoot);
       await this.restoreTransaction(journal, transactionRoot);
       try {
-        await this.removeTransactionTree(transactionRoot);
-      } catch {
-        throw new StoreDataError('已恢复事务清理失败。');
+        await this.retireSaveTransaction(transactionRoot);
+      } catch (error) {
+        if (error instanceof TransactionCleanupPendingError) {
+          throw new StoreDataError('已恢复事务清理失败。');
+        }
+        throw error;
       }
     }
   }
@@ -1164,6 +1270,16 @@ export class StoryStore {
     }
     const remaining = await readSafeDirectory(manuscriptRoot);
     if (remaining?.length === 0) await rmdir(manuscriptRoot);
+  }
+
+  private async settleSourceWrites(writes: Array<() => Promise<void>>) {
+    const results = await Promise.allSettled(writes.map((write) => write()));
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  }
+
+  protected async writeManagedSource(file: string, content: string) {
+    await atomicWriteIfChanged(file, content);
   }
 
   private async ensureSeeded() {
@@ -1406,16 +1522,16 @@ export class StoryStore {
 
       // Source files are written before the manifest. The transaction keeps a
       // complete old set available if any one write fails.
-      await Promise.all(saved.characters.map((item) =>
-        atomicWriteIfChanged(path.join(root, 'characters', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
-      await Promise.all(saved.worldRules.map((item) =>
-        atomicWriteIfChanged(path.join(root, 'world', `${validId(item.id)}.md`), item.content)));
-      await Promise.all(saved.canonFacts.map((item) =>
-        atomicWriteIfChanged(path.join(root, 'canon', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
-      await Promise.all(saved.summaries.map((item) =>
-        atomicWriteIfChanged(path.join(root, 'summaries', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
-      await Promise.all(saved.chapters.flatMap((chapter) => chapter.sections.map((section) =>
-        atomicWriteIfChanged(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
+      await this.settleSourceWrites(saved.characters.map((item) => () =>
+        this.writeManagedSource(path.join(root, 'characters', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+      await this.settleSourceWrites(saved.worldRules.map((item) => () =>
+        this.writeManagedSource(path.join(root, 'world', `${validId(item.id)}.md`), item.content)));
+      await this.settleSourceWrites(saved.canonFacts.map((item) => () =>
+        this.writeManagedSource(path.join(root, 'canon', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+      await this.settleSourceWrites(saved.summaries.map((item) => () =>
+        this.writeManagedSource(path.join(root, 'summaries', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
+      await this.settleSourceWrites(saved.chapters.flatMap((chapter) => chapter.sections.map((section) => () =>
+        this.writeManagedSource(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
       await this.transactionCheckpoint('after-sources');
 
       await atomicWrite(path.join(root, 'book.json'), `${JSON.stringify(meta, null, 2)}\n`);
@@ -1432,22 +1548,26 @@ export class StoryStore {
       await this.transactionCheckpoint('after-library');
 
       await this.writeTransactionJournal(transaction.root, { ...transaction.journal, status: 'committed' });
-      try {
-        await this.removeTransactionTree(transaction.root);
-      } catch {
-        // A committed journal is deliberately left for the next operation to
-        // clean. The new Book is already the durable state.
-      }
-      return saved;
     } catch (error) {
       try {
         await this.restoreTransaction(transaction.journal, transaction.root);
-        await this.removeTransactionTree(transaction.root).catch(() => undefined);
-      } catch {
+        await this.retireSaveTransaction(transaction.root);
+      } catch (cleanupError) {
+        if (cleanupError instanceof TransactionCleanupPendingError) {
+          throw new StoreDataError('保存失败，原 Book 已恢复，但保存事务记录清理失败。恢复材料已保留。');
+        }
         throw new StoreDataError('保存失败，且无法恢复保存前的完整 Book。恢复材料已保留。');
       }
       throw error;
     }
+    try {
+      await this.retireSaveTransaction(transaction.root);
+    } catch (error) {
+      if (!(error instanceof TransactionCleanupPendingError)) throw error;
+      // A committed journal is deliberately left in a cleanup marker for the
+      // next operation. The new Book is already the durable state.
+    }
+    return saved;
   }
 
   async saveBook(book: Book, options: SaveBookOptions = {}): Promise<Book> {

@@ -156,17 +156,68 @@ const isCachedBook = (value: unknown, bookId: string): value is Book => {
     && Array.isArray(candidate.branches);
 };
 
+type DeviceDraftEnvelope = {
+  schemaVersion: 1;
+  book: Book;
+  baseUpdatedAt: string | null;
+  draftEditedAt: string;
+};
+
+type DeviceDraftRecord = {
+  book: Book;
+  baseUpdatedAt: string | null;
+  legacy: boolean;
+};
+
+const isDraftEnvelope = (value: unknown, bookId: string): value is DeviceDraftEnvelope => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<DeviceDraftEnvelope>;
+  return candidate.schemaVersion === 1
+    && (typeof candidate.baseUpdatedAt === 'string' || candidate.baseUpdatedAt === null)
+    && typeof candidate.draftEditedAt === 'string'
+    && isCachedBook(candidate.book, bookId);
+};
+
+const readDraftRecord = (bookId: string): DeviceDraftRecord | null => {
+  if (api.runtime !== 'device') return null;
+  try {
+    const value = localStorage.getItem(bookDraftKey(bookId));
+    if (!value) return null;
+    const parsed = JSON.parse(value) as unknown;
+    if (isDraftEnvelope(parsed, bookId)) {
+      return {
+        book: normalizeBook(parsed.book),
+        baseUpdatedAt: parsed.baseUpdatedAt,
+        legacy: false,
+      };
+    }
+    if (isCachedBook(parsed, bookId)) {
+      return {
+        book: normalizeBook(parsed),
+        baseUpdatedAt: null,
+        legacy: true,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 const readCachedBook = (bookId: string, includeDraft = true) => {
   if (api.runtime !== 'device') return null;
   try {
     const persistedValue = localStorage.getItem(bookCacheKey(bookId));
-    const draftValue = localStorage.getItem(bookDraftKey(bookId));
-    for (const value of includeDraft ? [draftValue, persistedValue] : [persistedValue]) {
-      if (!value) continue;
-      const parsed = JSON.parse(value) as unknown;
-      if (isCachedBook(parsed, bookId)) return normalizeBook(parsed);
+    if (!includeDraft) {
+      if (!persistedValue) return null;
+      const parsed = JSON.parse(persistedValue) as unknown;
+      return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
     }
-    return null;
+    const draft = readDraftRecord(bookId);
+    if (draft) return draft.book;
+    if (!persistedValue) return null;
+    const parsed = JSON.parse(persistedValue) as unknown;
+    return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
   } catch {
     return null;
   }
@@ -182,10 +233,16 @@ const cacheBook = (book: Book) => {
   }
 };
 
-const cacheDraftBook = (book: Book) => {
+const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
   if (api.runtime !== 'device') return false;
   try {
-    localStorage.setItem(bookDraftKey(book.id), JSON.stringify(normalizeBook(book)));
+    const envelope: DeviceDraftEnvelope = {
+      schemaVersion: 1,
+      book: normalizeBook(book),
+      baseUpdatedAt,
+      draftEditedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(bookDraftKey(book.id), JSON.stringify(envelope));
     return true;
   } catch {
     return false;
@@ -240,6 +297,37 @@ const newerBook = (stored: Book, cached: Book | null) => {
     : stored;
 };
 
+type BookLoadResolution = {
+  stored: Book;
+  loaded: Book;
+  draft: DeviceDraftRecord | null;
+  draftConflict: boolean;
+  loadedDirty: boolean;
+};
+
+const resolveBookForLoad = async (
+  bookId: string,
+  options: { ignoreDraft?: boolean } = {},
+): Promise<BookLoadResolution> => {
+  const stored = normalizeBook(await api.loadBook(bookId));
+  const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
+  const persistedCached = api.runtime === 'device' ? readCachedBook(bookId, false) : null;
+  const draft = api.runtime === 'device' ? readDraftRecord(bookId) : null;
+  const recoverDraft = !options.ignoreDraft && draft !== null;
+  const draftConflict = recoverDraft && (draft!.legacy || draft!.baseUpdatedAt !== stored.updatedAt);
+  const cachedForLoad = options.ignoreDraft ? persistedCached : cached;
+  const loaded = recoverDraft ? draft!.book : newerBook(stored, cachedForLoad);
+  if (api.runtime === 'device' && !draftConflict
+    && (!cachedForLoad || loaded.updatedAt === stored.updatedAt)) cacheBook(loaded);
+  return {
+    stored,
+    loaded,
+    draft,
+    draftConflict,
+    loadedDirty: recoverDraft || Boolean(cachedForLoad && loaded.updatedAt !== stored.updatedAt),
+  };
+};
+
 function App() {
   const [library, setLibrary] = useState<BookIndexEntry[]>([]);
   const [book, setBook] = useState<Book | null>(null);
@@ -292,6 +380,7 @@ function App() {
   const saveFlights = useRef(new Map<number, Promise<Book>>());
   const persistedRevision = useRef<number | null>(null);
   const persistedUpdatedAt = useRef<string | null>(null);
+  const draftBaseUpdatedAt = useRef<string | null | undefined>(undefined);
   const saveConflictRef = useRef(false);
   const [saveConflict, setSaveConflict] = useState(false);
   const busyRef = useRef(false);
@@ -323,6 +412,22 @@ function App() {
     saveFlights.current.clear();
     persistedRevision.current = null;
     return saveRevision.current;
+  };
+
+  const cacheCurrentDraft = (candidate: Book) => {
+    if (api.runtime !== 'device') return false;
+    if (draftBaseUpdatedAt.current === undefined) {
+      draftBaseUpdatedAt.current = persistedUpdatedAt.current;
+    }
+    if (draftBaseUpdatedAt.current === null) {
+      return cacheDraftBook(candidate);
+    }
+    return cacheDraftBook(candidate, draftBaseUpdatedAt.current ?? null);
+  };
+
+  const clearCurrentDraft = (bookId: string) => {
+    removeDraftBook(bookId);
+    draftBaseUpdatedAt.current = undefined;
   };
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
@@ -514,7 +619,7 @@ function App() {
         }
         setLibrary(entries);
         if (entries[0]) await openBook(entries[0].id);
-        setStatus('');
+        if (!saveConflictRef.current) setStatus('');
       } catch (error) {
         setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
@@ -525,7 +630,7 @@ function App() {
     if (!book || !dirty) return;
     const candidate = normalizeBook(book);
     let cachedLocally = false;
-    if (api.runtime === 'device') cachedLocally = cacheDraftBook(candidate);
+    if (api.runtime === 'device') cachedLocally = cacheCurrentDraft(candidate);
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
@@ -540,7 +645,7 @@ function App() {
         const normalizedSaved = normalizeBook(saved);
         if (api.runtime === 'device') {
           cacheBook(normalizedSaved);
-          removeDraftBook(normalizedSaved.id);
+          clearCurrentDraft(normalizedSaved.id);
         }
         bookRef.current = normalizedSaved;
         setBook((current) => current?.id === normalizedSaved.id ? normalizedSaved : current);
@@ -571,25 +676,20 @@ function App() {
   const openBook = async (bookId: string, options: { ignoreDraft?: boolean } = {}) => {
     if (book && book.id !== bookId && dirty) await saveCurrent();
     rememberCurrentSectionDraft();
-    const stored = normalizeBook(await api.loadBook(bookId));
-    const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
-    const cachedForLoad = options.ignoreDraft
-      ? (api.runtime === 'device' ? readCachedBook(bookId, false) : null)
-      : cached;
-    const loaded = newerBook(stored, cachedForLoad);
-    if (api.runtime === 'device' && (!cachedForLoad || loaded.updatedAt === stored.updatedAt)) cacheBook(loaded);
+    const { stored, loaded, draft, draftConflict, loadedDirty } = await resolveBookForLoad(bookId, options);
     persistedUpdatedAt.current = stored.updatedAt;
-    saveConflictRef.current = false;
-    setSaveConflict(false);
+    draftBaseUpdatedAt.current = !options.ignoreDraft && draft !== null ? draft.baseUpdatedAt : undefined;
+    saveConflictRef.current = draftConflict;
+    setSaveConflict(draftConflict);
     const revision = advanceSaveRevision();
     bookRef.current = loaded;
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     restoreSectionDraft(loaded.id, '');
-    const loadedDirty = Boolean(cachedForLoad && loaded.updatedAt !== stored.updatedAt);
     persistedRevision.current = loadedDirty ? null : revision;
     setDirty(loadedDirty);
+    if (draftConflict) setStatus(bookConflictMessage);
     setView('shelf');
   };
 
@@ -649,12 +749,12 @@ function App() {
       && persistedRevision.current === revision) return currentBook;
     const saveRevisionForCandidate = candidateOverride ? advanceSaveRevision() : revision;
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
-    if (api.runtime === 'device') cacheDraftBook(candidate);
+    if (api.runtime === 'device') cacheCurrentDraft(candidate);
     const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
     if (saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
     if (api.runtime === 'device') {
       cacheBook(saved);
-      removeDraftBook(saved.id);
+      clearCurrentDraft(saved.id);
     }
     bookRef.current = saved;
     setBook(saved);
@@ -682,14 +782,14 @@ function App() {
     bookRef.current = candidate;
     setBook(candidate);
     setDirty(true);
-    if (api.runtime === 'device') cacheDraftBook(candidate);
+    if (api.runtime === 'device') cacheCurrentDraft(candidate);
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
       const saved = normalizeBook(await queueBookSave(candidate, revision));
       if (saveRevision.current !== revision) throw staleSaveError();
       if (api.runtime === 'device') {
         cacheBook(saved);
-        removeDraftBook(saved.id);
+        clearCurrentDraft(saved.id);
       }
       bookRef.current = saved;
       setBook(saved);
@@ -737,7 +837,7 @@ function App() {
     if (!book) return;
     try {
       const normalized = normalizeBook(book);
-      if (api.runtime === 'device') cacheDraftBook(normalized);
+      if (api.runtime === 'device') cacheCurrentDraft(normalized);
       const file = createBookExport(normalized, format);
       const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
       const link = document.createElement('a');
@@ -1302,6 +1402,7 @@ function App() {
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
       setBook(normalizedCreated);
       if (api.runtime === 'device') cacheBook(normalizedCreated);
+      draftBaseUpdatedAt.current = undefined;
       persistedUpdatedAt.current = normalizedCreated.updatedAt;
       saveConflictRef.current = false;
       setSaveConflict(false);
@@ -1323,11 +1424,16 @@ function App() {
 
   const importBookBackup = async (file: File) => {
     const imported = parseBookBackup(await file.text());
-    await ensureCurrentBookSaved();
-    rememberCurrentSectionDraft();
+    if (saveConflictRef.current) {
+      rememberCurrentSectionDraft();
+    } else {
+      await ensureCurrentBookSaved();
+      rememberCurrentSectionDraft();
+    }
     const restored = normalizeBook(await api.importBook(imported));
     const revision = advanceSaveRevision();
     persistedUpdatedAt.current = restored.updatedAt;
+    draftBaseUpdatedAt.current = undefined;
     saveConflictRef.current = false;
     setSaveConflict(false);
     bookRef.current = restored;
@@ -1359,30 +1465,34 @@ function App() {
     setBusy(true);
     try {
       await ensureCurrentBookSaved();
-      const storedNextBook = nextBook ? normalizeBook(await api.loadBook(nextBook.id)) : null;
-      const cachedNextBook = nextBook && api.runtime === 'device' ? readCachedBook(nextBook.id) : null;
-      const loadedNextBook = storedNextBook ? newerBook(storedNextBook, cachedNextBook) : null;
+      const nextResolution = nextBook ? await resolveBookForLoad(nextBook.id) : null;
       const revision = advanceSaveRevision();
       setDirty(false);
       await saveQueue.current.catch(() => undefined);
       await api.deleteBook(deletedBook.id);
       removeCachedBook(deletedBook.id);
       setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
-      if (loadedNextBook) {
-        if (api.runtime === 'device') cacheBook(loadedNextBook);
-        persistedUpdatedAt.current = storedNextBook?.updatedAt ?? loadedNextBook.updatedAt;
-        saveConflictRef.current = false;
-        setSaveConflict(false);
+      if (nextResolution) {
+        const {
+          stored: storedNextBook,
+          loaded: loadedNextBook,
+          draft,
+          draftConflict,
+          loadedDirty,
+        } = nextResolution;
+        draftBaseUpdatedAt.current = draft?.baseUpdatedAt;
+        persistedUpdatedAt.current = storedNextBook.updatedAt;
+        saveConflictRef.current = draftConflict;
+        setSaveConflict(draftConflict);
         setBook(loadedNextBook);
         setSectionId('');
         setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
         restoreSectionDraft(loadedNextBook.id, '');
-        const loadedNextBookDirty = Boolean(cachedNextBook && loadedNextBook.updatedAt !== storedNextBook?.updatedAt);
-        persistedRevision.current = loadedNextBookDirty ? null : revision;
-        setDirty(loadedNextBookDirty);
+        persistedRevision.current = loadedDirty ? null : revision;
+        setDirty(loadedDirty);
         setView('shelf');
       }
-      setStatus(`已删除《${deletedBook.title}》。`);
+      if (!saveConflictRef.current) setStatus(`已删除《${deletedBook.title}》。`);
     } catch (error) {
       setDirty(wasDirty);
       setStatus(error instanceof Error ? error.message : '删除书目失败。');
@@ -1648,7 +1758,7 @@ function App() {
     if (!book) return;
     if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
     await openBook(book.id, { ignoreDraft: true });
-    removeDraftBook(book.id);
+    clearCurrentDraft(book.id);
     setStatus('已重新载入当前书目。');
   };
 

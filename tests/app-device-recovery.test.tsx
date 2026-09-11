@@ -34,6 +34,23 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string) { this.values.set(key, value); }
 }
 
+const bookKey = (bookId: string) => `story-native:book:${bookId}`;
+const draftKey = (bookId: string) => `story-native:draft:${bookId}`;
+const waitForStorage = async (milliseconds = 800) => {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+  });
+};
+
+const writeDraftEnvelope = (book: ReturnType<typeof createExampleBooks>[number], baseUpdatedAt: string | null) => {
+  localStorage.setItem(draftKey(book.id), JSON.stringify({
+    schemaVersion: 1,
+    book,
+    baseUpdatedAt,
+    draftEditedAt: new Date().toISOString(),
+  }));
+};
+
 const waitForElement = async <T extends Element>(query: () => T | null): Promise<T> => {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const element = query();
@@ -94,30 +111,196 @@ describe('device storage recovery', () => {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       });
       const current = await deviceLibrary.loadBook(expected.id);
-      localStorage.removeItem(`story-native:book:${current.id}`);
+      localStorage.removeItem(bookKey(current.id));
       await act(async () => {
         window.dispatchEvent(new StorageEvent('storage', {
-          key: `story-native:book:${current.id}`,
+          key: bookKey(current.id),
           newValue: null,
         }));
       });
-      await act(async () => {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 800));
-      });
+      await waitForStorage();
 
-      expect(container.querySelector('[role="status"]')?.textContent).toContain('其他页面更新');
+      expect(container.querySelector('.status-line[role="status"]')?.textContent).toContain('其他页面更新');
       const reload = container.querySelector<HTMLButtonElement>('[aria-label="重新载入当前书目"]');
       expect(reload).not.toBeNull();
-      expect(localStorage.getItem(`story-native:draft:${current.id}`)).not.toBeNull();
+      expect(localStorage.getItem(draftKey(current.id))).not.toBeNull();
       vi.stubGlobal('confirm', vi.fn(() => true));
       await act(async () => {
         reload?.click();
         await Promise.resolve();
       });
-      expect(localStorage.getItem(`story-native:draft:${current.id}`)).not.toBeNull();
+      expect(localStorage.getItem(draftKey(current.id))).not.toBeNull();
       await expect(deviceLibrary.saveBook({ ...current, title: '不应复活' }, current.updatedAt))
         .rejects.toMatchObject({ code: 'BOOK_CONFLICT', statusCode: 409 });
-      expect(localStorage.getItem(`story-native:book:${current.id}`)).toBeNull();
+      expect(localStorage.getItem(bookKey(current.id))).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('recovers and autosaves a draft whose base matches the current Book', async () => {
+    const expected = createExampleBooks()[0]!;
+    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+    if (!current) throw new Error('fixture book missing');
+    const stored = await deviceLibrary.loadBook(current.id);
+    const draft = {
+      ...stored,
+      title: '同基线本地草稿',
+      updatedAt: new Date(Date.parse(stored.updatedAt) + 1).toISOString(),
+    };
+    writeDraftEnvelope(draft, stored.updatedAt);
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      await waitForElement(() => container.querySelector('.book-selector-card'));
+      await waitForStorage();
+
+      await expect(deviceLibrary.loadBook(stored.id)).resolves.toMatchObject({ title: '同基线本地草稿' });
+      expect(localStorage.getItem(draftKey(stored.id))).toBeNull();
+      expect(container.querySelector('[role="status"]')?.textContent).not.toContain('其他页面更新');
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('keeps an old-base draft visible and blocks autosave after remount', async () => {
+    const expected = createExampleBooks()[0]!;
+    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+    if (!current) throw new Error('fixture book missing');
+    const baseline = await deviceLibrary.loadBook(current.id);
+
+    const firstContainer = document.createElement('div');
+    document.body.appendChild(firstContainer);
+    const firstRoot = createRoot(firstContainer);
+    await act(async () => firstRoot.render(<App />));
+    await waitForElement(() => firstContainer.querySelector('.book-selector-card'));
+    await act(async () => firstRoot.unmount());
+
+    const remote = await deviceLibrary.saveBook({ ...baseline, title: '另一页的新版本' }, baseline.updatedAt);
+    const staleDraft = {
+      ...baseline,
+      title: '旧基线本地草稿',
+      updatedAt: new Date(Date.parse(remote.updatedAt) + 1).toISOString(),
+    };
+    writeDraftEnvelope(staleDraft, baseline.updatedAt);
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      await waitForElement(() => container.querySelector('.book-selector-card'));
+      await waitForStorage();
+
+      await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '另一页的新版本' });
+      const preservedDraft = JSON.parse(localStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
+        book?: { title?: string };
+        baseUpdatedAt?: string | null;
+      };
+      expect(preservedDraft.book?.title).toBe('旧基线本地草稿');
+      expect(preservedDraft.baseUpdatedAt).toBe(baseline.updatedAt);
+      expect(container.textContent).toContain('旧基线本地草稿');
+      expect(container.querySelector('[role="status"]')?.textContent).toContain('其他页面更新');
+      const reload = container.querySelector<HTMLButtonElement>('[aria-label="重新载入当前书目"]');
+      expect(reload).not.toBeNull();
+
+      vi.stubGlobal('confirm', vi.fn(() => true));
+      await act(async () => {
+        reload?.click();
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      expect(localStorage.getItem(draftKey(baseline.id))).toBeNull();
+      await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '另一页的新版本' });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('migrates a legacy raw draft as unknown-base content without overwriting the current Book', async () => {
+    const expected = createExampleBooks()[0]!;
+    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+    if (!current) throw new Error('fixture book missing');
+    const baseline = await deviceLibrary.loadBook(current.id);
+    const remote = await deviceLibrary.saveBook({ ...baseline, title: '当前持久版本' }, baseline.updatedAt);
+    const legacyDraft = {
+      ...baseline,
+      title: '旧格式草稿',
+      updatedAt: new Date(Date.parse(remote.updatedAt) + 1).toISOString(),
+    };
+    localStorage.setItem(draftKey(baseline.id), JSON.stringify(legacyDraft));
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      await waitForElement(() => container.querySelector('.book-selector-card'));
+      await waitForStorage();
+
+      await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '当前持久版本' });
+      const migrated = JSON.parse(localStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
+        schemaVersion?: number;
+        book?: { title?: string };
+        baseUpdatedAt?: string | null;
+      };
+      expect(migrated.schemaVersion).toBe(1);
+      expect(migrated.book?.title).toBe('旧格式草稿');
+      expect(migrated.baseUpdatedAt).toBeNull();
+      expect(container.textContent).toContain('旧格式草稿');
+      expect(container.querySelector('[role="status"]')?.textContent).toContain('其他页面更新');
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('preserves a stale next-book draft when deleting the current Book', async () => {
+    const entries = await deviceLibrary.listBooks();
+    const currentEntry = entries[0];
+    const nextEntry = entries[1];
+    if (!currentEntry || !nextEntry) throw new Error('fixture books missing');
+    const nextBaseline = await deviceLibrary.loadBook(nextEntry.id);
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      await waitForElement(() => container.querySelector('.book-selector-card'));
+
+      const remote = await deviceLibrary.saveBook({ ...nextBaseline, title: '下一本的持久新版本' }, nextBaseline.updatedAt);
+      const staleDraft = {
+        ...nextBaseline,
+        title: '下一本的旧基线草稿',
+        updatedAt: new Date(Date.parse(remote.updatedAt) + 1).toISOString(),
+      };
+      writeDraftEnvelope(staleDraft, nextBaseline.updatedAt);
+
+      await act(async () => {
+        container.querySelector<HTMLDetailsElement>('.book-actions-menu')?.querySelector('summary')?.click();
+      });
+      const deleteButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((candidate) => candidate.textContent?.includes('删除书目'));
+      expect(deleteButton).not.toBeUndefined();
+      await act(async () => deleteButton?.click());
+      const confirmButton = await waitForElement(() => container
+        .querySelector<HTMLDialogElement>('dialog[aria-labelledby="confirm-dialog-title"]')
+        ?.querySelector<HTMLButtonElement>('.danger-action') ?? null);
+      await act(async () => confirmButton.click());
+      await waitForStorage();
+
+      await expect(deviceLibrary.loadBook(nextEntry.id)).resolves.toMatchObject({ title: '下一本的持久新版本' });
+      const preservedDraft = JSON.parse(localStorage.getItem(draftKey(nextEntry.id)) ?? 'null') as {
+        book?: { title?: string };
+        baseUpdatedAt?: string | null;
+      };
+      expect(preservedDraft.book?.title).toBe('下一本的旧基线草稿');
+      expect(preservedDraft.baseUpdatedAt).toBe(nextBaseline.updatedAt);
+      expect(container.textContent).toContain('下一本的旧基线草稿');
+      expect(container.querySelector('.status-line[role="status"]')?.textContent).toContain('其他页面更新');
+      expect(container.querySelector('[aria-label="重新载入当前书目"]')).not.toBeNull();
     } finally {
       await act(async () => root.unmount());
     }
