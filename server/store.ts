@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  copyFile,
   lstat,
   mkdir,
   readFile,
@@ -52,6 +53,15 @@ export class BookNotFoundError extends Error {
   }
 }
 
+export class StoreConflictError extends Error {
+  readonly statusCode = 409;
+
+  constructor(message = 'Book 已在其他页面更新，请重新载入后再保存。') {
+    super(message);
+    this.name = 'StoreConflictError';
+  }
+}
+
 export class StoreDataError extends Error {
   readonly statusCode = 500;
 
@@ -60,6 +70,29 @@ export class StoreDataError extends Error {
     this.name = 'StoreDataError';
   }
 }
+
+export type SaveBookOptions = {
+  expectedUpdatedAt?: string;
+  createOnly?: boolean;
+};
+
+type TransactionStatus = 'prepared' | 'committed';
+
+type TransactionJournal = {
+  schemaVersion: 1;
+  id: string;
+  bookId: string;
+  status: TransactionStatus;
+  snapshotReady: boolean;
+  bookExists: boolean;
+  libraryExists: boolean;
+  bookFiles: string[];
+  createdAt: string;
+};
+
+export type StoreFaultStage = 'after-sources' | 'after-manifest' | 'after-library';
+
+export type StoreRecoveryStage = 'before-restore' | 'after-restore';
 
 const idPattern = /^[a-z0-9][a-z0-9-]*$/i;
 
@@ -332,7 +365,7 @@ const validateBook = (book: Book) => {
 
 const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, 'utf8')) as T;
 
-const atomicWrite = async (file: string, content: string) => {
+const atomicWrite = async (file: string, content: string | Uint8Array) => {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
   try {
@@ -351,6 +384,18 @@ const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 
 
 const unsafeBookTree = () => new StoreDataError('Book 文件结构异常。');
 
+const transactionRootName = '.story-transactions';
+
+const transactionRelativePath = (relative: string) => relative.split(path.sep).join('/');
+
+const fromTransactionRelativePath = (relative: string) => relative.split('/').join(path.sep);
+
+const isSafeTransactionRelativePath = (relative: string) => {
+  if (!relative || path.isAbsolute(relative)) return false;
+  const parts = relative.split('/');
+  return parts.every((part) => part.length > 0 && part !== '.' && part !== '..' && !part.includes('\\'));
+};
+
 const ensureSafeDirectory = async (directory: string) => {
   try {
     const stat = await lstat(directory);
@@ -362,6 +407,17 @@ const ensureSafeDirectory = async (directory: string) => {
   await mkdir(directory);
   const stat = await lstat(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+};
+
+const safeDirectoryExists = async (directory: string) => {
+  try {
+    const stat = await lstat(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
 };
 
 const readSafeDirectory = async (directory: string) => {
@@ -434,11 +490,354 @@ export class StoryStore {
     return path.join(this.root, 'books', validId(bookId));
   }
 
+  private transactionsRoot() {
+    return path.join(this.root, transactionRootName);
+  }
+
+  private enqueue<T>(operation: () => Promise<T>) {
+    const result = this.writeQueue.then(operation, operation);
+    this.writeQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private isManagedBookRelative(relative: string) {
+    const parts = relative.split(path.sep);
+    if (parts.length === 1) return parts[0] === 'book.json';
+    if (parts[0] === undefined) return false;
+    if (managedDirectories.includes(parts[0] as ManagedDirectory) && parts.length === 2) {
+      const extension = parts[0] === 'world' ? '.md' : '.json';
+      return managedId(parts[1]!, extension) !== undefined;
+    }
+    return parts.length === 3
+      && parts[0] === 'manuscript'
+      && idPattern.test(parts[1]!)
+      && managedId(parts[2]!, '.md') !== undefined;
+  }
+
+  private async collectManagedBookFiles(root: string): Promise<string[]> {
+    const files: string[] = [];
+    const visit = async (directory: string, relativeRoot: string) => {
+      const entries = await readSafeDirectory(directory);
+      if (!entries) return;
+      for (const entry of entries) {
+        const relative = relativeRoot ? path.join(relativeRoot, entry.name) : entry.name;
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await visit(fullPath, relative);
+        } else if (entry.isFile()) {
+          if (this.isManagedBookRelative(relative)) files.push(relative);
+        } else {
+          throw unsafeBookTree();
+        }
+      }
+    };
+    await visit(root, '');
+    return files.sort();
+  }
+
+  private async collectSnapshotFiles(root: string, relativeRoot = ''): Promise<string[]> {
+    const entries = await readSafeDirectory(root);
+    if (!entries) return [];
+    const files: string[] = [];
+    for (const entry of entries) {
+      const relative = relativeRoot ? path.join(relativeRoot, entry.name) : entry.name;
+      const fullPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await this.collectSnapshotFiles(fullPath, relative));
+      } else if (entry.isFile()) {
+        files.push(relative);
+      } else {
+        throw unsafeBookTree();
+      }
+    }
+    return files.sort();
+  }
+
+  private async assertSafeTree(directory: string) {
+    const entries = await readSafeDirectory(directory);
+    if (!entries) return;
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await this.assertSafeTree(fullPath);
+      } else if (!entry.isFile()) {
+        throw unsafeBookTree();
+      }
+    }
+  }
+
+  private async ensureTransactionParent() {
+    await this.ensureStorageLayout();
+    await ensureSafeDirectory(this.transactionsRoot());
+  }
+
+  private async ensureStorageLayout() {
+    // Validate every pre-existing boundary before creating any missing child.
+    // In particular, never let mkdir follow a root/books junction or let an
+    // atomic library write replace a non-file path.
+    const rootExists = await safeDirectoryExists(this.root);
+    const booksPath = path.join(this.root, 'books');
+    const booksExists = rootExists ? await safeDirectoryExists(booksPath) : false;
+    await ensureSafeFile(this.libraryFile());
+
+    if (!rootExists) {
+      await mkdir(this.root, { recursive: true });
+      await ensureSafeDirectory(this.root);
+    }
+    if (!booksExists) await mkdir(booksPath);
+    await ensureSafeDirectory(booksPath);
+  }
+
+  private transactionJournalFile(transactionRoot: string) {
+    return path.join(transactionRoot, 'journal.json');
+  }
+
+  private async writeTransactionJournal(transactionRoot: string, journal: TransactionJournal) {
+    await atomicWrite(this.transactionJournalFile(transactionRoot), `${JSON.stringify(journal, null, 2)}\n`);
+  }
+
+  private async beginTransaction(bookId: string) {
+    await this.ensureTransactionParent();
+    const root = path.join(this.transactionsRoot(), `tx-${randomUUID()}`);
+    await mkdir(root);
+    const bookRoot = this.bookRoot(bookId);
+    let bookExists = false;
+    try {
+      const stat = await lstat(bookRoot);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+      bookExists = true;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    const bookFiles = bookExists ? await this.collectManagedBookFiles(bookRoot) : [];
+    let libraryExists = false;
+    try {
+      const stat = await lstat(this.libraryFile());
+      if (stat.isSymbolicLink() || !stat.isFile()) throw unsafeBookTree();
+      libraryExists = true;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+
+    const journal: TransactionJournal = {
+      schemaVersion: 1,
+      id: path.basename(root),
+      bookId,
+      status: 'prepared',
+      snapshotReady: false,
+      bookExists,
+      libraryExists,
+      bookFiles: bookFiles.map(transactionRelativePath),
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await this.writeTransactionJournal(root, journal);
+      const snapshotRoot = path.join(root, 'book');
+      for (const relative of bookFiles) {
+        const source = path.join(bookRoot, relative);
+        const target = path.join(snapshotRoot, relative);
+        await ensureSafeFile(source);
+        await mkdir(path.dirname(target), { recursive: true });
+        await copyFile(source, target);
+      }
+      if (libraryExists) {
+        await ensureSafeFile(this.libraryFile());
+        await copyFile(this.libraryFile(), path.join(root, 'library.json'));
+      }
+      journal.snapshotReady = true;
+      await this.writeTransactionJournal(root, journal);
+      return { root, journal };
+    } catch (error) {
+      // A normal in-process preparation failure has not published any new
+      // Book files yet. A process exit at this point intentionally leaves the
+      // prepared journal for the next operation to fail closed.
+      await this.removeTransactionTree(root).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async readTransactionJournal(transactionRoot: string): Promise<TransactionJournal> {
+    let value: unknown;
+    try {
+      await ensureSafeFile(this.transactionJournalFile(transactionRoot));
+      value = await readJson<unknown>(this.transactionJournalFile(transactionRoot));
+    } catch {
+      throw new StoreDataError('事务记录损坏。');
+    }
+    if (!isRecord(value)
+      || value.schemaVersion !== 1
+      || typeof value.id !== 'string'
+      || value.id !== path.basename(transactionRoot)
+      || typeof value.bookId !== 'string'
+      || !idPattern.test(value.bookId)
+      || (value.status !== 'prepared' && value.status !== 'committed')
+      || typeof value.snapshotReady !== 'boolean'
+      || typeof value.bookExists !== 'boolean'
+      || typeof value.libraryExists !== 'boolean'
+      || !Array.isArray(value.bookFiles)
+      || value.bookFiles.some((file) => typeof file !== 'string'
+        || !isSafeTransactionRelativePath(file)
+        || !this.isManagedBookRelative(fromTransactionRelativePath(file)))) {
+      throw new StoreDataError('事务记录损坏。');
+    }
+    return {
+      schemaVersion: 1,
+      id: value.id,
+      bookId: value.bookId,
+      status: value.status,
+      snapshotReady: value.snapshotReady,
+      bookExists: value.bookExists,
+      libraryExists: value.libraryExists,
+      bookFiles: value.bookFiles,
+      createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
+    };
+  }
+
+  private async ensureBookFileParent(bookRoot: string, relative: string) {
+    await this.ensureStorageLayout();
+    await ensureSafeDirectory(bookRoot);
+    const parts = path.dirname(relative).split(path.sep).filter(Boolean);
+    let directory = bookRoot;
+    for (const part of parts) {
+      directory = path.join(directory, part);
+      await ensureSafeDirectory(directory);
+    }
+  }
+
+  private async pruneManagedEmptyDirectories(bookRoot: string) {
+    const prune = async (directory: string) => {
+      const entries = await readSafeDirectory(directory);
+      if (entries?.length === 0) await rmdir(directory);
+    };
+    for (const directory of managedDirectories) {
+      await prune(path.join(bookRoot, directory));
+    }
+    const manuscriptRoot = path.join(bookRoot, 'manuscript');
+    const chapters = await readSafeDirectory(manuscriptRoot);
+    if (chapters) {
+      for (const chapter of chapters) {
+        if (chapter.isDirectory() && idPattern.test(chapter.name)) {
+          await prune(path.join(manuscriptRoot, chapter.name));
+        }
+      }
+    }
+    await prune(manuscriptRoot);
+    await prune(bookRoot);
+  }
+
+  private async restoreTransaction(journal: TransactionJournal, transactionRoot: string) {
+    await this.ensureStorageLayout();
+    await this.recoveryCheckpoint('before-restore');
+    await this.assertSafeTree(transactionRoot);
+    const bookRoot = this.bookRoot(journal.bookId);
+    const snapshotRoot = path.join(transactionRoot, 'book');
+    const snapshotFiles = new Set(journal.bookFiles);
+    const currentFiles = await this.collectManagedBookFiles(bookRoot);
+    for (const relative of currentFiles) {
+      if (!snapshotFiles.has(transactionRelativePath(relative))) {
+        const target = path.join(bookRoot, relative);
+        await ensureSafeFile(target);
+        await unlink(target);
+      }
+    }
+    for (const relative of journal.bookFiles) {
+      const source = path.join(snapshotRoot, fromTransactionRelativePath(relative));
+      await ensureSafeFile(source);
+      const targetRelative = fromTransactionRelativePath(relative);
+      const target = path.join(bookRoot, targetRelative);
+      await this.ensureBookFileParent(bookRoot, targetRelative);
+      await atomicWrite(target, await readFile(source));
+    }
+
+    if (journal.libraryExists) {
+      const source = path.join(transactionRoot, 'library.json');
+      await ensureSafeFile(source);
+      await atomicWrite(this.libraryFile(), await readFile(source));
+    } else {
+      try {
+        await ensureSafeFile(this.libraryFile());
+        await unlink(this.libraryFile());
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+    }
+    await this.pruneManagedEmptyDirectories(bookRoot);
+    await this.recoveryCheckpoint('after-restore');
+  }
+
+  private async recoverTransactions() {
+    await this.ensureTransactionParent();
+    const entries = await readSafeDirectory(this.transactionsRoot());
+    if (!entries) return;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) throw new StoreDataError('事务目录结构异常。');
+      const transactionRoot = path.join(this.transactionsRoot(), entry.name);
+      const journal = await this.readTransactionJournal(transactionRoot);
+      if (journal.status === 'committed') {
+        await this.assertSafeTree(transactionRoot);
+        try {
+          await this.removeTransactionTree(transactionRoot);
+        } catch {
+          throw new StoreDataError('已提交事务清理失败。');
+        }
+        continue;
+      }
+      if (!journal.snapshotReady) {
+        await this.assertSafeTree(transactionRoot);
+        try {
+          await this.removeTransactionTree(transactionRoot);
+        } catch {
+          throw new StoreDataError('未完成事务清理失败。');
+        }
+        continue;
+      }
+      await this.validateTransactionSnapshot(journal, transactionRoot);
+      await this.restoreTransaction(journal, transactionRoot);
+      try {
+        await this.removeTransactionTree(transactionRoot);
+      } catch {
+        throw new StoreDataError('已恢复事务清理失败。');
+      }
+    }
+  }
+
+  protected async transactionCheckpoint(_stage: StoreFaultStage): Promise<void> {
+    // Narrow seam for storage fault-injection tests.
+  }
+
+  protected async recoveryCheckpoint(_stage: StoreRecoveryStage): Promise<void> {
+    // Narrow seam for recovery fault-injection tests.
+  }
+
+  protected async removeTransactionTree(directory: string) {
+    await rm(directory, { recursive: true, force: false });
+  }
+
+  private async validateTransactionSnapshot(journal: TransactionJournal, transactionRoot: string) {
+    await this.assertSafeTree(transactionRoot);
+    const snapshotRoot = path.join(transactionRoot, 'book');
+    const snapshotEntries = await readSafeDirectory(snapshotRoot);
+    const snapshotFiles = snapshotEntries
+      ? (await this.collectSnapshotFiles(snapshotRoot)).map(transactionRelativePath)
+      : [];
+    const expectedFiles = [...journal.bookFiles].sort();
+    const actualFiles = [...snapshotFiles].sort();
+    if (!isDeepStrictEqual(expectedFiles, actualFiles)
+      || (!journal.bookExists && expectedFiles.length > 0)
+      || (journal.bookExists && expectedFiles.length === 0)) {
+      throw new StoreDataError('事务快照与记录不一致。');
+    }
+
+    const librarySnapshot = path.join(transactionRoot, 'library.json');
+    const libraryEntries = (await readSafeDirectory(transactionRoot))?.some((entry) => entry.name === 'library.json') ?? false;
+    if (journal.libraryExists !== libraryEntries) throw new StoreDataError('事务 library 快照与记录不一致。');
+    if (journal.libraryExists) await ensureSafeFile(librarySnapshot);
+  }
+
   private async prepareBookTree(book: Book, root: string) {
     // The data directory is user-selected, so only the Book subtree gets the
     // strict no-link checks. Create each child directory one level at a time.
-    await mkdir(this.root, { recursive: true });
-    await ensureSafeDirectory(path.join(this.root, 'books'));
+    await this.ensureStorageLayout();
     await ensureSafeDirectory(root);
     await readSafeDirectory(root);
     await ensureSafeFile(path.join(root, 'book.json'));
@@ -545,37 +944,42 @@ export class StoryStore {
   }
 
   private async ensureSeeded() {
-    this.seedPromise ??= (async () => {
+    this.seedPromise ??= this.enqueue(async () => {
+      await this.recoverTransactions();
       try {
         await readFile(this.libraryFile(), 'utf8');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         await atomicWrite(this.libraryFile(), '[]\n');
-        for (const book of createExampleBooks()) await this.saveBook(book);
+        for (const book of createExampleBooks()) await this.saveBookInternal(book);
       }
-    })();
+    });
     await this.seedPromise;
   }
 
   private async ensureExamples() {
     this.examplesPromise ??= (async () => {
-      const library = await readJson<BookIndexEntry[]>(this.libraryFile());
-      const legacyExamples = new Map([
-        ['the-observatory', createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira')],
-        ['harbor-at-noon', createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan')],
-      ]);
-      for (const example of createExampleBooks()) {
-        const entry = library.find((item) => item.id === example.id);
-        if (!entry) continue;
-        const legacy = legacyExamples.get(example.id);
-        const current = await this.loadBook(example.id);
-        if (legacy && sameBookIgnoringTimestamp(current, legacy)) {
-          await this.saveBook(example);
-          continue;
+      await this.ensureSeeded();
+      await this.enqueue(async () => {
+        await this.recoverTransactions();
+        const library = await readJson<BookIndexEntry[]>(this.libraryFile());
+        const legacyExamples = new Map([
+          ['the-observatory', createLegacyFixtureBook('the-observatory', 'The Observatory', 'Mira')],
+          ['harbor-at-noon', createLegacyFixtureBook('harbor-at-noon', 'Harbor at Noon', 'Rowan')],
+        ]);
+        for (const example of createExampleBooks()) {
+          const entry = library.find((item) => item.id === example.id);
+          if (!entry) continue;
+          const legacy = legacyExamples.get(example.id);
+          const current = await this.loadBookFromDisk(example.id);
+          if (legacy && sameBookIgnoringTimestamp(current, legacy)) {
+            await this.saveBookInternal(example);
+            continue;
+          }
+          const upgraded = upgradeExampleBookContent(current, example);
+          if (upgraded) await this.saveBookInternal(upgraded);
         }
-        const upgraded = upgradeExampleBookContent(current, example);
-        if (upgraded) await this.saveBook(upgraded);
-      }
+      });
     })();
     await this.examplesPromise;
   }
@@ -583,12 +987,14 @@ export class StoryStore {
   async listBooks(): Promise<BookIndexEntry[]> {
     await this.ensureSeeded();
     await this.ensureExamples();
-    return readJson<BookIndexEntry[]>(this.libraryFile());
+    return this.enqueue(async () => {
+      await this.recoverTransactions();
+      return readJson<BookIndexEntry[]>(this.libraryFile());
+    });
   }
 
-  async loadBook(bookId: string): Promise<Book> {
+  private async loadBookFromDisk(bookId: string): Promise<Book> {
     validId(bookId);
-    await this.ensureSeeded();
     const root = this.bookRoot(bookId);
     const manifestFile = path.join(root, 'book.json');
     let meta: BookFile;
@@ -679,47 +1085,104 @@ export class StoryStore {
     return normalized;
   }
 
-  async saveBook(book: Book): Promise<Book> {
-    // Validate the caller's graph before normalization. normalizeBook is
-    // intentionally tolerant of deleted references for the UI, but storage
-    // must reject those references rather than persist a silently altered
-    // Book.
-    validateBook(book);
-    const normalizedBook = normalizeBook(book);
-    validateBook(normalizedBook);
-    const operation = async () => {
-      const root = this.bookRoot(normalizedBook.id);
-      const saved = { ...normalizedBook, updatedAt: new Date().toISOString() };
-      const meta: BookFile = {
-        id: saved.id,
-        title: saved.title,
-        plotOutline: saved.plotOutline ?? '',
-        writingBrief: saved.writingBrief,
-        characters: saved.characters.map(({ id }) => ({ id })),
-        worldRules: saved.worldRules.map(({ content: _content, ...item }) => item),
-        canonFacts: saved.canonFacts.map(({ id }) => ({ id })),
-        summaries: saved.summaries.map(({ id }) => ({ id })),
-        chapters: saved.chapters.map((chapter) => ({
-          id: chapter.id,
-          title: chapter.title,
-          sections: chapter.sections.map(({ content: _content, ...section }) => section),
-        })),
-        branches: saved.branches,
-        updatedAt: saved.updatedAt,
-      };
+  async loadBook(bookId: string): Promise<Book> {
+    validId(bookId);
+    await this.ensureSeeded();
+    return this.enqueue(async () => {
+      await this.recoverTransactions();
+      return this.loadBookFromDisk(bookId);
+    });
+  }
 
-      let library: BookIndexEntry[] = [];
-      try {
-        library = await readJson<BookIndexEntry[]>(this.libraryFile());
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        // First seed write creates the library immediately below.
+  private async inspectBook(bookId: string) {
+    await readSafeDirectory(this.root);
+    await readSafeDirectory(path.join(this.root, 'books'));
+    const root = this.bookRoot(bookId);
+    let rootExists = false;
+    try {
+      const stat = await lstat(root);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafeBookTree();
+      rootExists = true;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (!rootExists) return { rootExists: false, manifestExists: false, updatedAt: undefined as string | undefined };
+    const manifestFile = path.join(root, 'book.json');
+    try {
+      await ensureSafeFile(manifestFile);
+      const meta = await readJson<unknown>(manifestFile);
+      if (!isRecord(meta) || meta.id !== bookId || typeof meta.updatedAt !== 'string') {
+        throw new StoreDataError();
       }
+      return { rootExists: true, manifestExists: true, updatedAt: meta.updatedAt };
+    } catch (error) {
+      if (isMissing(error)) return { rootExists: true, manifestExists: false, updatedAt: undefined };
+      throw error;
+    }
+  }
 
+  private nextUpdatedAt(previous: string | undefined) {
+    const now = Date.now();
+    const previousMs = previous ? Date.parse(previous) : Number.NaN;
+    return new Date(Math.max(now, Number.isFinite(previousMs) ? previousMs + 1 : now)).toISOString();
+  }
+
+  private async saveBookInternal(normalizedBook: Book, options: SaveBookOptions = {}) {
+    await this.recoverTransactions();
+    if (options.expectedUpdatedAt !== undefined
+      && (typeof options.expectedUpdatedAt !== 'string' || !options.expectedUpdatedAt.trim())) {
+      throw new StoreInputError('expectedUpdatedAt 必须是非空文本。');
+    }
+    if (options.expectedUpdatedAt !== undefined && options.createOnly) {
+      throw new StoreInputError('expectedUpdatedAt 与 createOnly 不能同时使用。');
+    }
+
+    let library: BookIndexEntry[] = [];
+    try {
+      library = await readJson<BookIndexEntry[]>(this.libraryFile());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // First seed write creates the library immediately below.
+    }
+
+    const current = await this.inspectBook(normalizedBook.id);
+    if (options.createOnly && (current.rootExists || current.manifestExists
+      || library.some((item) => item.id === normalizedBook.id))) {
+      throw new StoreConflictError('这个 Book 已存在，恢复备份必须创建为新副本。');
+    }
+    if (options.expectedUpdatedAt !== undefined) {
+      if (!current.manifestExists) throw new BookNotFoundError(normalizedBook.id);
+      if (current.updatedAt !== options.expectedUpdatedAt) {
+        throw new StoreConflictError();
+      }
+    }
+
+    const root = this.bookRoot(normalizedBook.id);
+    const saved = { ...normalizedBook, updatedAt: this.nextUpdatedAt(current.updatedAt) };
+    const meta: BookFile = {
+      id: saved.id,
+      title: saved.title,
+      plotOutline: saved.plotOutline ?? '',
+      writingBrief: saved.writingBrief,
+      characters: saved.characters.map(({ id }) => ({ id })),
+      worldRules: saved.worldRules.map(({ content: _content, ...item }) => item),
+      canonFacts: saved.canonFacts.map(({ id }) => ({ id })),
+      summaries: saved.summaries.map(({ id }) => ({ id })),
+      chapters: saved.chapters.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title,
+        sections: chapter.sections.map(({ content: _content, ...section }) => section),
+      })),
+      branches: saved.branches,
+      updatedAt: saved.updatedAt,
+    };
+
+    const transaction = await this.beginTransaction(saved.id);
+    try {
       await this.prepareBookTree(saved, root);
 
-      // Publish the manifest last so an interrupted save keeps the previous
-      // manifest pointing at a complete set of source files.
+      // Source files are written before the manifest. The transaction keeps a
+      // complete old set available if any one write fails.
       await Promise.all(saved.characters.map((item) =>
         atomicWriteIfChanged(path.join(root, 'characters', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
       await Promise.all(saved.worldRules.map((item) =>
@@ -730,22 +1193,55 @@ export class StoryStore {
         atomicWriteIfChanged(path.join(root, 'summaries', `${validId(item.id)}.json`), `${JSON.stringify(item, null, 2)}\n`)));
       await Promise.all(saved.chapters.flatMap((chapter) => chapter.sections.map((section) =>
         atomicWriteIfChanged(path.join(root, 'manuscript', validId(chapter.id), `${validId(section.id)}.md`), section.content))));
+      await this.transactionCheckpoint('after-sources');
+
       await atomicWrite(path.join(root, 'book.json'), `${JSON.stringify(meta, null, 2)}\n`);
+      await this.transactionCheckpoint('after-manifest');
 
       // Stale managed files are removed only after the new manifest is
-      // published. Library visibility follows cleanup; cleanup errors reject
-      // the save and never become a successful library update.
+      // published. Library visibility follows cleanup.
       await this.reconcileBookTree(saved, root);
 
       const entry = { id: saved.id, title: saved.title, updatedAt: saved.updatedAt };
       const next = [...library.filter((item) => item.id !== saved.id), entry]
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       await atomicWrite(this.libraryFile(), `${JSON.stringify(next, null, 2)}\n`);
+      await this.transactionCheckpoint('after-library');
+
+      await this.writeTransactionJournal(transaction.root, { ...transaction.journal, status: 'committed' });
+      try {
+        await this.removeTransactionTree(transaction.root);
+      } catch {
+        // A committed journal is deliberately left for the next operation to
+        // clean. The new Book is already the durable state.
+      }
       return saved;
-    };
-    const result = this.writeQueue.then(operation, operation);
-    this.writeQueue = result.then(() => undefined, () => undefined);
-    return result;
+    } catch (error) {
+      try {
+        await this.restoreTransaction(transaction.journal, transaction.root);
+        await this.removeTransactionTree(transaction.root).catch(() => undefined);
+      } catch {
+        throw new StoreDataError('保存失败，且无法恢复保存前的完整 Book。恢复材料已保留。');
+      }
+      throw error;
+    }
+  }
+
+  async saveBook(book: Book, options: SaveBookOptions = {}): Promise<Book> {
+    // Validate the caller's graph before normalization. normalizeBook is
+    // intentionally tolerant of deleted references for the UI, but storage
+    // must reject those references rather than persist a silently altered
+    // Book.
+    validateBook(book);
+    const normalizedBook = normalizeBook(book);
+    validateBook(normalizedBook);
+    return this.enqueue(() => this.saveBookInternal(normalizedBook, options));
+  }
+
+  async importBook(book: Book): Promise<Book> {
+    validateBook(book);
+    const restored = { ...book, id: `book-${randomUUID()}` };
+    return this.saveBook(restored, { createOnly: true });
   }
 
   async createBook(title: string): Promise<Book> {
@@ -781,6 +1277,7 @@ export class StoryStore {
     validId(bookId);
     await this.ensureSeeded();
     const operation = async () => {
+      await this.recoverTransactions();
       const library = await readJson<BookIndexEntry[]>(this.libraryFile());
       if (!library.some((entry) => entry.id === bookId)) throw new BookNotFoundError(bookId);
 
@@ -822,8 +1319,6 @@ export class StoryStore {
       }
       return { id: bookId };
     };
-    const result = this.writeQueue.then(operation, operation);
-    this.writeQueue = result.then(() => undefined, () => undefined);
-    return result;
+    return this.enqueue(operation);
   }
 }

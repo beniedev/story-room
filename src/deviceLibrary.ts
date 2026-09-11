@@ -17,6 +17,16 @@ import type {
 const libraryKey = 'story-native:library';
 const bookKey = (bookId: string) => `story-native:book:${bookId}`;
 
+export class DeviceBookConflictError extends Error {
+  readonly code = 'BOOK_CONFLICT' as const;
+  readonly statusCode = 409 as const;
+
+  constructor(message = '这本 Book 已在其他页面更新，请重新载入后再保存。') {
+    super(message);
+    this.name = 'DeviceBookConflictError';
+  }
+}
+
 const readJson = <T>(key: string): T | null => {
   const value = localStorage.getItem(key);
   if (!value) return null;
@@ -36,6 +46,12 @@ const indexEntry = (book: Book): BookIndexEntry => ({
   title: book.title,
   updatedAt: book.updatedAt,
 });
+
+const nextUpdatedAt = (previous: string | undefined) => {
+  const now = Date.now();
+  const previousMs = previous ? Date.parse(previous) : Number.NaN;
+  return new Date(Math.max(now, Number.isFinite(previousMs) ? previousMs + 1 : now)).toISOString();
+};
 
 const isBook = (value: unknown): value is Book => {
   if (!value || typeof value !== 'object') return false;
@@ -101,8 +117,27 @@ const loadBook = (bookId: string): Book => {
   return normalizeBook(book);
 };
 
-const saveBook = (book: Book): Book => {
-  const saved = { ...normalizeBook(book), updatedAt: new Date().toISOString() };
+const writeBook = (book: Book, options: { expectedUpdatedAt?: string; createOnly?: boolean } = {}): Book => {
+  const existingValue = localStorage.getItem(bookKey(book.id));
+  let previousUpdatedAt: string | undefined;
+  if (options.createOnly) {
+    if (existingValue !== null) throw new DeviceBookConflictError('这个 Book 已存在，恢复备份必须创建为新副本。');
+  } else {
+    if (typeof options.expectedUpdatedAt !== 'string' || !options.expectedUpdatedAt.trim()) {
+      throw new DeviceBookConflictError();
+    }
+    if (existingValue === null) throw new DeviceBookConflictError();
+    let existing: unknown;
+    try {
+      existing = JSON.parse(existingValue);
+    } catch {
+      throw new Error(`Book 数据已损坏：${book.id}`);
+    }
+    if (!isBook(existing)) throw new Error(`Book 数据已损坏：${book.id}`);
+    previousUpdatedAt = existing.updatedAt;
+    if (existing.updatedAt !== options.expectedUpdatedAt) throw new DeviceBookConflictError();
+  }
+  const saved = { ...normalizeBook(book), updatedAt: nextUpdatedAt(previousUpdatedAt) };
   localStorage.setItem(bookKey(saved.id), JSON.stringify(saved));
   const library = ensureLibrary();
   writeLibrary([
@@ -112,23 +147,37 @@ const saveBook = (book: Book): Book => {
   return saved;
 };
 
-const createBook = (title: string): Book => saveBook({
-  id: makeId('book'),
-  title: title.trim() || '未命名书目',
-  plotOutline: '',
-  writingBrief: '',
-  characters: [],
-  worldRules: [],
-  canonFacts: [],
-  summaries: [],
-  chapters: [{
-    id: makeId('chapter'),
-    title: '第一章',
-    sections: [{ id: makeId('section'), title: '新小节', content: '' }],
-  }],
-  branches: [],
-  updatedAt: new Date().toISOString(),
-});
+const createBook = (title: string): Book => {
+  let id = makeId('book');
+  while (localStorage.getItem(bookKey(id))) id = makeId('book');
+  return writeBook({
+    id,
+    title: title.trim() || '未命名书目',
+    plotOutline: '',
+    writingBrief: '',
+    characters: [],
+    worldRules: [],
+    canonFacts: [],
+    summaries: [],
+    chapters: [{
+      id: makeId('chapter'),
+      title: '第一章',
+      sections: [{ id: makeId('section'), title: '新小节', content: '' }],
+    }],
+    branches: [],
+    updatedAt: new Date().toISOString(),
+  }, { createOnly: true });
+};
+
+const importBook = (book: Book): Book => {
+  let id = makeId('book');
+  while (localStorage.getItem(bookKey(id))) id = makeId('book');
+  return writeBook({
+    ...normalizeBook(book),
+    id,
+    updatedAt: new Date().toISOString(),
+  }, { createOnly: true });
+};
 
 const deleteBook = (bookId: string) => {
   const library = ensureLibrary();
@@ -148,7 +197,8 @@ export const deviceLibrary = {
   listBooks: async () => ensureLibrary(),
   loadBook: async (bookId: string) => loadBook(bookId),
   createBook: async (title: string) => createBook(title),
-  saveBook: async (book: Book) => saveBook(book),
+  saveBook: async (book: Book, expectedUpdatedAt: string) => writeBook(book, { expectedUpdatedAt }),
+  importBook: async (book: Book) => importBook(book),
   deleteBook: async (bookId: string) => deleteBook(bookId),
   contextPlan: async (request: GenerationRequest): Promise<ContextPlanPreview> => (
     toContextPlanPreview(buildContextPlan(loadBook(request.bookId), request))

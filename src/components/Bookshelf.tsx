@@ -880,7 +880,7 @@ export function Bookshelf(props: BookshelfProps) {
             </details>
           </div>
         </aside>
-        <h1 className="sr-only">故事书架</h1>
+        <h1 className="sr-only">故事书屋</h1>
         <section className={`directory-panel${selectionMode ? ' selection-mode' : ''}`} aria-label="章节目录">
             <div className="directory-toolbar">
               <button

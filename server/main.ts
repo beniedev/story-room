@@ -12,7 +12,12 @@ import {
   ProviderResponseError,
   RequestValidationError,
 } from './domain.ts';
-import { BookNotFoundError, StoreInputError, StoryStore } from './store.ts';
+import {
+  BookNotFoundError,
+  StoreConflictError,
+  StoreInputError,
+  StoryStore,
+} from './store.ts';
 import type { Book, GenerationRequest } from '../src/types.ts';
 import type { ProviderProfile } from '../src/providerProfiles.ts';
 import {
@@ -170,11 +175,35 @@ const readProviderBody = async (request: IncomingMessage) => {
   return { profile: body.profile as unknown as ProviderProfile, apiKey: body.apiKey as string | undefined };
 };
 
+const readBookSaveRequest = async (request: IncomingMessage, bookId: string) => {
+  const body = await readBody(request);
+  if (!isRecord(body) || !isRecord(body.book)
+    || typeof body.book.id !== 'string'
+    || typeof body.expectedUpdatedAt !== 'string'
+    || !body.expectedUpdatedAt.trim()) {
+    throw new RequestValidationError('保存请求必须包含有效的 Book 与 expectedUpdatedAt。');
+  }
+  if (body.book.id !== bookId) throw new RequestValidationError('URL 与 Book ID 不一致。');
+  return {
+    book: body.book as unknown as Book,
+    expectedUpdatedAt: body.expectedUpdatedAt,
+  };
+};
+
+const readBookImportRequest = async (request: IncomingMessage) => {
+  const body = await readBody(request);
+  if (!isRecord(body) || !isRecord(body.book) || typeof body.book.id !== 'string') {
+    throw new RequestValidationError('导入请求必须包含有效的 Book。');
+  }
+  return body.book as unknown as Book;
+};
+
 const knownRouteMethods: Record<string, string[]> = {
   '/api/health': ['GET'],
   '/api/library': ['GET'],
   '/api/storage-location': ['GET'],
   '/api/books': ['POST'],
+  '/api/books/import': ['POST'],
   '/api/providers': ['GET', 'POST'],
   '/api/provider-test': ['POST'],
   '/api/context-plan': ['POST'],
@@ -271,6 +300,14 @@ export const createStoryServer = (
         }
         return sendJson(response, 201, await storyStore.createBook(body.title));
       }
+      if (url.pathname === '/api/books/import') {
+        if (request.method === 'POST') {
+          const book = await readBookImportRequest(request);
+          return sendJson(response, 201, await storyStore.importBook(book));
+        }
+        response.setHeader('allow', 'POST');
+        return sendJson(response, 405, { error: '这个 Book 导入 API 不支持当前请求方法。' });
+      }
 
       const bookMatch = url.pathname.match(/^\/api\/books\/([a-z0-9-]+)$/i);
       if (bookMatch && request.method === 'GET') {
@@ -278,12 +315,10 @@ export const createStoryServer = (
       }
       if (bookMatch && request.method === 'PUT') {
         // Every edit saves the whole Book, so manuscript growth must not block saving.
-        const body = await readBody(request);
-        if (!isRecord(body) || typeof body.id !== 'string') {
-          throw new RequestValidationError('Book 数据无效。');
-        }
-        if (body.id !== bookMatch[1]) throw new RequestValidationError('URL 与 Book ID 不一致。');
-        return sendJson(response, 200, await storyStore.saveBook(body as unknown as Book));
+        const body = await readBookSaveRequest(request, bookMatch[1]);
+        return sendJson(response, 200, await storyStore.saveBook(body.book, {
+          expectedUpdatedAt: body.expectedUpdatedAt,
+        }));
       }
       if (bookMatch && request.method === 'DELETE') {
         return sendJson(response, 200, await storyStore.deleteBook(bookMatch[1]));
@@ -384,6 +419,8 @@ export const createStoryServer = (
         || response.writableEnded) return;
       const statusCode = error instanceof BookNotFoundError
           ? error.statusCode
+          : error instanceof StoreConflictError
+            ? error.statusCode
           : error instanceof RequestValidationError || error instanceof StoreInputError
             ? error.statusCode
             : error instanceof ProviderResponseError
@@ -392,6 +429,7 @@ export const createStoryServer = (
               ? error.statusCode
               : 500;
       const message = error instanceof BookNotFoundError
+        || error instanceof StoreConflictError
         || error instanceof RequestValidationError
         || error instanceof StoreInputError
         || error instanceof ProviderResponseError
@@ -418,7 +456,9 @@ export const createStoryServer = (
         return;
       }
       if (statusCode >= 500) console.error('Story host request failed:', error);
-      return sendJson(response, statusCode, { error: message });
+      return sendJson(response, statusCode, statusCode === 409
+        ? { error: message, code: 'BOOK_CONFLICT' }
+        : { error: message });
     }
   };
   return createServer(handler);

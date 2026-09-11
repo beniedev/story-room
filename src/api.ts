@@ -15,6 +15,16 @@ import {
   type ProviderProfile,
 } from './providerProfiles';
 
+export class BookConflictError extends Error {
+  readonly code = 'BOOK_CONFLICT' as const;
+  readonly statusCode = 409 as const;
+
+  constructor(message = '这本 Book 已在其他页面更新，请重新载入后再保存。') {
+    super(message);
+    this.name = 'BookConflictError';
+  }
+}
+
 const requestOnce = async (url: string, init: RequestInit | undefined) => {
   const headers = new Headers(init?.headers);
   if (init?.body) headers.set('content-type', 'application/json');
@@ -29,21 +39,26 @@ const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
     if (init?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       throw error;
     }
-    throw new Error('无法连接本地书库服务，请确认故事书架仍在运行。');
+    throw new Error('无法连接本地书库服务，请确认故事书屋仍在运行。');
   }
 
   const text = await response.text();
-  let body: T & { error?: string };
+  let body: T & { error?: string; code?: unknown };
   try {
-    body = text ? JSON.parse(text) as T & { error?: string } : {} as T & { error?: string };
+    body = text ? JSON.parse(text) as T & { error?: string; code?: unknown } : {} as T & { error?: string; code?: unknown };
   } catch {
+    if (!response.ok && response.status === 409) throw new BookConflictError();
     throw new Error(response.ok
       ? '本地书库返回了无法读取的数据。'
       : `本地书库请求失败（HTTP ${response.status}）。`);
   }
-  if (!response.ok) throw new Error(body.error ?? (response.status === 502 || response.status === 503
-      ? '本地书库服务暂时不可用，请确认故事书架仍在运行。'
-      : `请求失败（HTTP ${response.status}）。`));
+  if (!response.ok) {
+    const message = body.error ?? (response.status === 502 || response.status === 503
+      ? '本地书库服务暂时不可用，请确认故事书屋仍在运行。'
+      : `请求失败（HTTP ${response.status}）。`);
+    if (response.status === 409 || body.code === 'BOOK_CONFLICT') throw new BookConflictError(message);
+    throw new Error(message);
+  }
   return body;
 };
 
@@ -186,7 +201,7 @@ const streamRequest = async (
     });
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    throw new Error('无法连接本地书库服务，请确认故事书架仍在运行。');
+    throw new Error('无法连接本地书库服务，请确认故事书屋仍在运行。');
   }
   if (!response.ok) {
     const text = await response.text();
@@ -198,7 +213,7 @@ const streamRequest = async (
       // Keep the local error generic when a failed response is not JSON.
     }
     throw new Error(errorMessage ?? (response.status === 502 || response.status === 503
-      ? '本地书库服务暂时不可用，请确认故事书架仍在运行。'
+      ? '本地书库服务暂时不可用，请确认故事书屋仍在运行。'
       : `请求失败（HTTP ${response.status}）。`));
   }
   return readGenerationStream(response, signal, onDelta);
@@ -213,9 +228,13 @@ const hostApi = {
     method: 'POST',
     body: JSON.stringify({ title }),
   }),
-  saveBook: (book: Book) => request<Book>(`/api/books/${book.id}`, {
+  saveBook: (book: Book, expectedUpdatedAt: string) => request<Book>(`/api/books/${book.id}`, {
     method: 'PUT',
-    body: JSON.stringify(book),
+    body: JSON.stringify({ book, expectedUpdatedAt }),
+  }),
+  importBook: (book: Book) => request<Book>('/api/books/import', {
+    method: 'POST',
+    body: JSON.stringify({ book }),
   }),
   deleteBook: (bookId: string) => request<{ id: string }>(`/api/books/${bookId}`, {
     method: 'DELETE',

@@ -5,7 +5,7 @@ Status: accepted for the pre-release demo.
 ## Decision
 
 - `MANUSCRIPT` is the primary source of facts. `MEMORY` is a lossy index, so manuscript text wins when they conflict.
-- Legacy Section `plan` and `note` fields remain readable and exportable for compatibility only; they are not injected into Provider prompts. A reference is completed, non-target material.
+- Legacy Section `plan` data remains readable and exportable for compatibility only; it is not injected into Provider prompts. The current Section `note` is persistent writing guidance and is included in non-summary prompts for that Section, while notes from other Sections remain excluded. A reference is completed, non-target material.
 - Book-level summaries and Canon facts remain stored/exportable Book data, but are not implicit Provider prompt inputs.
 - Each generation request uses one `system` message for the static contract and one structured `user` packet for the selected Book data and turn input. Story strings are JSON-encoded inside that packet.
 - Prompt blocks use three Planner stability groups/cache hints, not Provider cache controls or cache-hit guarantees: `stable` for the fixed system contract and Book-level material explicitly included by the planner, `session` for the selected mode and references, and `dynamic` for the current target, author note, and turn input. These bands describe cache behavior only; they are not story state.

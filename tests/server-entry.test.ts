@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
-import { StoryStore } from '../server/store';
+import { StoreConflictError, StoryStore } from '../server/store';
 import type { Book } from '../src/types';
 import { createSectionMemory } from '../src/sectionMemory';
 import { formatUrlHost } from '../vite.config';
@@ -103,7 +103,7 @@ describe('local server entry', () => {
       if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
       const url = `http://127.0.0.1:${address.port}/api/books/${book.id}`;
       const saveAndReload = async () => {
-        const body = JSON.stringify(book);
+        const body = JSON.stringify({ book, expectedUpdatedAt: book.updatedAt });
         expect(Buffer.byteLength(body)).toBeGreaterThan(2_000_000);
         const saved = await fetch(url, {
           method: 'PUT',
@@ -143,6 +143,109 @@ describe('local server entry', () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('requires an explicit expected Book revision for host saves', async () => {
+    const book = {
+      id: 'revision-book',
+      title: 'Synthetic Book',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    } satisfies Book;
+    const storyStore = { saveBook: vi.fn() };
+    const server = createStoryServer(storyStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/books/${book.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ book }),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('expectedUpdatedAt') });
+      expect(storyStore.saveBook).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('passes the expected revision to the store and maps conflicts to HTTP 409', async () => {
+    const book = {
+      id: 'revision-book',
+      title: 'Synthetic Book',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    } satisfies Book;
+    const conflict = new StoreConflictError('Book revision is stale');
+    const storyStore = {
+      saveBook: vi.fn(async () => { throw conflict; }),
+    };
+    const server = createStoryServer(storyStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/books/${book.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ book, expectedUpdatedAt: book.updatedAt }),
+      });
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: conflict.message, code: 'BOOK_CONFLICT' });
+      expect(storyStore.saveBook).toHaveBeenCalledWith(book, { expectedUpdatedAt: book.updatedAt });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('imports a valid Book through the host as a new recovery copy', async () => {
+    const book = {
+      id: 'backup-book',
+      title: 'Synthetic Backup',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    } satisfies Book;
+    const restored = { ...book, id: 'book-restored-copy' };
+    const storyStore = { importBook: vi.fn(async () => restored) };
+    const server = createStoryServer(storyStore as never);
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port.');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/books/import`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ book }),
+      });
+      expect(response.status).toBe(201);
+      await expect(response.json()).resolves.toEqual(restored);
+      expect(storyStore.importBook).toHaveBeenCalledWith(book);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
 

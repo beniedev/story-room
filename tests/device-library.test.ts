@@ -56,7 +56,7 @@ describe('device-local library', () => {
             ]
           : chapter.sections,
       })),
-    });
+    }, created.updatedAt);
     expect((await deviceLibrary.listBooks())[0]).toMatchObject({ id: saved.id, title: '本地改名' });
     const loaded = await deviceLibrary.loadBook(saved.id);
     const loadedTarget = loaded.chapters.flatMap((chapter) => chapter.sections).find((section) => section.id === targetSectionId);

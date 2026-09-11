@@ -1,6 +1,6 @@
 # Security policy
 
-Story-native Writing Harness is a pre-release, non-production demo. It is designed for a local host or a single browser device, not for public hosting or multi-user data.
+Story Room is a pre-release, non-production demo. It is designed for a local host or a single browser device, not for public hosting or multi-user data.
 
 ## Report a vulnerability
 
@@ -22,16 +22,21 @@ The hosted/device build keeps Books in unencrypted browser `localStorage`. Same-
 
 The prompt view is limited to a compact Provider-input preview: it shows categories, approximate budget, and any explicit exclusion or degradation. It does not expose raw Provider messages or hidden model reasoning, and stored Book summaries or Canon facts are not silently added as prompt material. The context-plan API returns preview metadata and the generation API returns the draft without echoing the full internal plan.
 
+Local-host Book saves use an expected `updatedAt` revision and reject stale updates with HTTP 409. Before publishing a save, the store snapshots its managed Book files and library index under a private transaction journal. Prepared transactions are rolled back and committed journals are cleaned on the next serialized store operation. JSON backup imports are validated and assigned a new Book ID rather than replacing an existing Book.
+
 ## Known limitations
 
 - Provider DNS preflight and the subsequent network connection are separate operations, so a theoretical DNS or routing TOCTOU remains.
 - A compromised browser, same-origin script, operating system, filesystem, or configured Provider endpoint is outside the guarantees of this demo.
 - The local HTTP host is not a hardened production service. Do not use it as a public internet endpoint.
+- The storage queue and transaction recovery belong to one host process; there is no cross-process file lock. Do not run independent hosts against the same data directory.
+- Save recovery does not currently cover a process exit during Book deletion. An in-process deletion failure is rolled back, but an exit between quarantine, index update, and cleanup can leave the Book temporarily unlisted or unavailable until its files are recovered manually.
+- Browser `localStorage` does not provide the local host's multi-file transaction recovery. Same-origin storage events are best-effort conflict signals, not synchronization or merging.
 - Full Book `PUT` requests have no application-defined size cap. Saves still transfer and validate the whole Book; unchanged source and manuscript files are not rewritten. See [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md) for an unimplemented future API design.
 
 ## Repository checks
 
-CI runs dependency auditing and license checks separately from full-history secret scanning and the repository privacy scan. A failed dependency audit does not prevent the privacy job from running. Each job reports its own failure without suppressing findings.
+CI runs dependency auditing and license checks separately from secret scanning and the repository privacy scan. The privacy job fetches every repository head and tag, verifies the checksum of a pinned Gitleaks release, and scans all commits reachable from those refs with explicit `--all` history options. The current-tree privacy scan still runs when Gitleaks reports a finding, and a failed dependency audit does not prevent the privacy job from running. Each check reports its own failure without suppressing another check's findings.
 
 Temporary mitigation: `package.json` overrides only Miniflare's `sharp` dependency to `0.35.4`, which fixes [GHSA-rgj7-g3m4-5g8c](https://github.com/lovell/sharp/security/advisories/GHSA-rgj7-g3m4-5g8c). Miniflare currently pins an affected version. This uses the upstream patch release without changing the rest of the toolchain. Because it selects a native package, verify platform compatibility when changing the override. Remove it when the selected Miniflare version brings in a patched `sharp` itself, then rerun installation, dependency auditing, tests and both builds.
 

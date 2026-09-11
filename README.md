@@ -1,6 +1,6 @@
-# Story-native Writing Harness
+# Story Room
 
-Story-native Writing Harness is a local-first novel-writing harness: a local Node host writes a readable Book directory, while the hosted/device build stores Books only in the current browser. It does not provide cloud manuscript storage or synchronization.
+Story Room is a local-first novel-writing workspace: a local Node host writes a readable Book directory, while the hosted/device build stores Books only in the current browser. It does not provide cloud manuscript storage or synchronization.
 
 The manuscript stays continuous prose rather than a chat transcript. Each Book stores its characters, world rules, canon, summaries, chapters, and sections; stored summaries and Canon facts are not hidden Provider prompt inputs. Author and first-person character modes share the same persistence and prompt pipeline, and the UI shows a compact context preview, budget, and any explicit degradation without exposing raw Provider messages or hidden model reasoning.
 
@@ -9,9 +9,9 @@ The manuscript stays continuous prose rather than a chat transcript. Each Book s
 | Runtime | Book persistence | Provider behavior |
 | --- | --- | --- |
 | Local host | Readable files under `.data/` by default; set `STORY_DATA_DIR` to choose another directory | Fake Provider or OpenAI-compatible Provider; generated context plans are sent to the configured endpoint |
-| Hosted/device | Unencrypted `localStorage` in the current browser and origin | Fake generation only; Provider tests send the current page's temporary key directly to the URL you enter |
+| Hosted/device | Unencrypted `localStorage` in the current browser and origin | Fake generation only; Provider tests send the current page's temporary key to the configured `/models` endpoint |
 
-The hosted/device build does not upload or merge Books. A complete JSON backup contains the manuscript, blocks, answer candidates and their adopted versions, branches, Book settings, prompt-loading scope, and Section Memory data (including a previous snapshot when present). EPUB, Markdown, and TXT exports contain the adopted manuscript, without unadopted candidates. Clearing site data removes the device-local library.
+The hosted/device build does not upload or merge Books. A complete JSON backup contains the manuscript, blocks, answer candidates and their adopted versions, branches, Book settings, prompt-loading scope, and Section Memory data (including a previous snapshot when present). The shelf's JSON import action validates that structure and restores it as a new Book with a new ID; it never overwrites the original or an existing Book. EPUB, Markdown, and TXT exports contain the adopted manuscript, without unadopted candidates. Clearing site data removes the device-local library.
 
 ## Run locally
 
@@ -32,17 +32,26 @@ Configured Providers may use HTTP or HTTPS on public, loopback, LAN, or private-
 
 The local host supports the deterministic Fake Provider and OpenAI-compatible endpoints. The context plan and prompt for a generation request are assembled internally and sent to the Provider endpoint configured by the user. `/api/context-plan` returns a compact preview; `/api/generate` returns the draft and source-signature metadata for answer comparison, without echoing the internal messages. The writing UI does not display raw Provider messages. The local-host API Key is stored as plaintext in `.data/private/providers.json` by default; set `STORY_PROVIDER_CONFIG` to choose another file. On POSIX, the file is written with mode `0600`. Windows file permissions are not treated as an equivalent credential store. Changing a saved profile's endpoint or kind requires entering its key again.
 
-In hosted/device mode, generation remains Fake. A Provider test sends a temporary key directly to the URL in the current page; page scripts can read that input while the page is running, and the key is not persisted by the app.
+In hosted/device mode, generation remains Fake. A Provider test sends a temporary key to the configured `/models` endpoint; page scripts can read that input while the page is running, and the key is not persisted by the app. A successful test proves only that the endpoint responded and, when it returned a model list, that the configured model ID was present. It does not prove that `/chat/completions` accepts this app's generation parameters.
 
 ## What is implemented
 
 - Continuous prose editing with author and first-person character modes
 - Book-scoped character cards, world rules, canon, summaries, chapters, and sections
 - Readable local-host persistence and device-local hosted persistence
+- Recoverable local-host full-Book saves, stale-save rejection, and JSON backup restore-as-copy
 - Fake and OpenAI-compatible local-host Provider paths
 - Compact prompt preview with provenance, inclusion/exclusion reasons, and an approximate size budget
 - EPUB, Markdown, TXT, and complete JSON exports
 - Responsive controls for desktop and mobile-sized viewports
+
+### Saving and recovery
+
+Every update still saves and validates the whole Book. The client sends the `updatedAt` value from the version it loaded, and the local host compares that value inside its serialized save queue. If another page saved first, the stale request is rejected with HTTP 409 instead of overwriting the newer Book. The page keeps its local edits and answer candidates available, stops further stale autosaves, and offers JSON export or an explicit reload; it does not attempt an automatic merge.
+
+Before publishing a local-host save, the store records a private transaction journal and snapshots the previous managed Book files plus the library index. A failed in-process save is rolled back immediately. After a restart, an uncommitted transaction is rolled back and a committed transaction is only cleaned up. Reads, saves, imports, and deletes use the same process-local queue so a normal request cannot observe the store halfway through that recovery. This protects save consistency, not against disk loss or two independent host processes sharing one data directory, so important work still needs external backups.
+
+The hosted/device runtime applies the same stale-revision rule to its browser-local Books and listens for same-origin storage changes from other pages. Browser events and `localStorage` are not a collaboration or durability system; conflict recovery remains export or reload.
 
 ### Generating and comparing answers
 
@@ -66,7 +75,7 @@ The writing page's Context drawer shows the active Provider limits, an approxima
 
 Cancelling a generation aborts the local request and propagates the abort to the Provider fetch. Generation has no application-defined deadline; the author can cancel while waiting. A late result cannot write to the manuscript or Memory, and cancellation does not clear the author's current input or note. This cannot retract work already accepted by a configured endpoint or remove that endpoint's logs.
 
-The Book-level plot outline (`plotOutline`, shown as “剧情大纲”) is included in normal continuation and block-regeneration prompts as future guidance. Legacy Section `plan` and `note` fields may remain in an imported Book for read/export compatibility, but they are not inserted into Provider prompts. Book summaries and Canon facts are likewise stored/exportable Book data, not hidden prompt sources. In “前文选择”, a checkbox loads or removes an earlier Section, while the rest of its row expands an inline synopsis editor. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; generating a synopsis changes only the local draft until the user confirms save-and-load. The current Memory and its previous snapshot are persisted with the Book and included in complete JSON export.
+The Book-level plot outline (`plotOutline`, shown as “剧情大纲”) is included in normal continuation and block-regeneration prompts as future guidance. A Section `note`, shown as the current section guidance in the writing page, is included in non-summary prompts for that Section; notes from other Sections are not included. Legacy Section `plan` data remains readable and exportable but is not inserted into Provider prompts. Book summaries and Canon facts are likewise stored/exportable Book data, not hidden prompt sources. In “前文选择”, a checkbox loads or removes an earlier Section, while the rest of its row expands an inline synopsis editor. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; generating a synopsis changes only the local draft until the user confirms save-and-load. The current Memory and its previous snapshot are persisted with the Book and included in complete JSON export.
 
 Model-generated memory is never inserted into ordinary continuation until it is confirmed. Hosted/device generation remains Fake, and there is no automatic cloud storage or synchronization. Provider keys and endpoints remain a trust boundary: only enter a temporary device test key when you trust the current page and destination URL; local-host keys are stored as described above.
 
@@ -74,7 +83,7 @@ Model-generated memory is never inserted into ordinary continuation until it is 
 
 - API requests, Provider responses, and Section Memory have no application-defined size or item-count caps. Saves still transfer and validate the whole Book. The app reuses saves of the same unchanged revision, and the host skips rewriting identical source and manuscript files. Large Books still require more memory and I/O. A future Section/source revision API is outlined in [`docs/INCREMENTAL_SAVE.md`](docs/INCREMENTAL_SAVE.md); that API is not implemented.
 - Context estimates are advisory and do not block generation. Model context and output settings accept positive safe integers; the configured Provider determines its actual supported limits.
-- Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books.
+- Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books, and the device runtime does not provide filesystem-style transaction recovery.
 - The local host and Provider endpoint are not a production deployment. Browser, operating-system, or configured endpoint compromise is outside this demo's guarantees.
 - There is no cloud storage, account sync, multi-user collaboration, RAG, embeddings, or desktop wrapper.
 

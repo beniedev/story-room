@@ -11,7 +11,8 @@ import {
   Settings,
   X,
 } from 'lucide-react';
-import { api } from './api';
+import { api, BookConflictError } from './api';
+import { parseBookBackup } from './bookImport';
 import { createBookExport, type BookExportFormat } from './bookExport';
 import {
   buildContextPlan as composeContextPlan,
@@ -82,6 +83,8 @@ import type {
 type ViewName = 'write' | 'shelf';
 const bookCachePrefix = 'story-native:book:';
 const bookCacheKey = (bookId: string) => `${bookCachePrefix}${bookId}`;
+const bookDraftPrefix = 'story-native:draft:';
+const bookDraftKey = (bookId: string) => `${bookDraftPrefix}${bookId}`;
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
@@ -128,6 +131,13 @@ const abortGenerationError = () => {
   }
 };
 const staleSaveError = () => new Error('保存期间正文已变化，请稍后重试。');
+const isBookConflictError = (error: unknown) => error instanceof BookConflictError
+  || (error instanceof Error && (error.name === 'BookConflictError' || error.name === 'DeviceBookConflictError'))
+  || (typeof error === 'object' && error !== null
+    && ((error as { code?: unknown }).code === 'BOOK_CONFLICT'
+      || (error as { statusCode?: unknown }).statusCode === 409));
+const bookConflictMessage = '这本书已在其他页面更新；当前本地内容仍保留，可导出 JSON 备份或重新载入当前书目。';
+const blockedBookConflictError = () => new BookConflictError();
 const generationSourceFingerprint = (blocks: SectionBlock[], targetIndex: number) => JSON.stringify(
   blocks.slice(0, targetIndex).map((block) => [block.id, block.kind, block.content]),
 );
@@ -146,13 +156,17 @@ const isCachedBook = (value: unknown, bookId: string): value is Book => {
     && Array.isArray(candidate.branches);
 };
 
-const readCachedBook = (bookId: string) => {
+const readCachedBook = (bookId: string, includeDraft = true) => {
   if (api.runtime !== 'device') return null;
   try {
-    const value = localStorage.getItem(bookCacheKey(bookId));
-    if (!value) return null;
-    const parsed = JSON.parse(value) as unknown;
-    return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
+    const persistedValue = localStorage.getItem(bookCacheKey(bookId));
+    const draftValue = localStorage.getItem(bookDraftKey(bookId));
+    for (const value of includeDraft ? [draftValue, persistedValue] : [persistedValue]) {
+      if (!value) continue;
+      const parsed = JSON.parse(value) as unknown;
+      if (isCachedBook(parsed, bookId)) return normalizeBook(parsed);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -168,10 +182,30 @@ const cacheBook = (book: Book) => {
   }
 };
 
+const cacheDraftBook = (book: Book) => {
+  if (api.runtime !== 'device') return false;
+  try {
+    localStorage.setItem(bookDraftKey(book.id), JSON.stringify(normalizeBook(book)));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeDraftBook = (bookId: string) => {
+  if (api.runtime !== 'device') return;
+  try {
+    localStorage.removeItem(bookDraftKey(bookId));
+  } catch {
+    // Browser persistence is optional on the device runtime.
+  }
+};
+
 const removeCachedBook = (bookId: string) => {
   if (api.runtime !== 'device') return;
   try {
     localStorage.removeItem(bookCacheKey(bookId));
+    localStorage.removeItem(bookDraftKey(bookId));
   } catch {
     // Browser persistence is optional on the device runtime.
   }
@@ -183,7 +217,7 @@ const clearHostBookCaches = () => {
   try {
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (key?.startsWith(bookCachePrefix)) staleKeys.push(key);
+      if (key?.startsWith(bookCachePrefix) || key?.startsWith(bookDraftPrefix)) staleKeys.push(key);
     }
   } catch {
     return;
@@ -241,6 +275,7 @@ function App() {
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
   const exportTrigger = useRef<HTMLElement | null>(null);
+  const importInput = useRef<HTMLInputElement>(null);
   const contextCompositionTrigger = useRef<HTMLElement | null>(null);
   const [contextCompositionOpen, setContextCompositionOpen] = useState(false);
   const contextToolsTrigger = useRef<HTMLElement | null>(null);
@@ -256,6 +291,9 @@ function App() {
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const saveFlights = useRef(new Map<number, Promise<Book>>());
   const persistedRevision = useRef<number | null>(null);
+  const persistedUpdatedAt = useRef<string | null>(null);
+  const saveConflictRef = useRef(false);
+  const [saveConflict, setSaveConflict] = useState(false);
   const busyRef = useRef(false);
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
   const generationAbort = useRef<AbortController | null>(null);
@@ -374,6 +412,32 @@ function App() {
   }, [book]);
 
   useEffect(() => {
+    if (api.runtime !== 'device' || !book) return undefined;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== bookCacheKey(book.id)) return;
+      if (!event.newValue) {
+        saveConflictRef.current = true;
+        setSaveConflict(true);
+        setDirty(true);
+        setStatus(bookConflictMessage);
+        return;
+      }
+      try {
+        const incoming = JSON.parse(event.newValue) as unknown;
+        if (!isCachedBook(incoming, book.id) || incoming.updatedAt === persistedUpdatedAt.current) return;
+        saveConflictRef.current = true;
+        setSaveConflict(true);
+        setDirty(true);
+        setStatus(bookConflictMessage);
+      } catch {
+        // A malformed update is handled by the next explicit load; keep the local page intact.
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [book?.id]);
+
+  useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
       const current = navigationState.current;
       const hasDraft = Object.values(current.sectionDrafts).some((draft) => draft.instruction.trim());
@@ -460,7 +524,8 @@ function App() {
   useEffect(() => {
     if (!book || !dirty) return;
     const candidate = normalizeBook(book);
-    const cachedLocally = api.runtime === 'device' ? cacheBook(candidate) : false;
+    let cachedLocally = false;
+    if (api.runtime === 'device') cachedLocally = cacheDraftBook(candidate);
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
@@ -473,7 +538,10 @@ function App() {
       void task.then((saved) => {
         if (saveRevision.current !== revision) return;
         const normalizedSaved = normalizeBook(saved);
-        if (api.runtime === 'device') cacheBook(normalizedSaved);
+        if (api.runtime === 'device') {
+          cacheBook(normalizedSaved);
+          removeDraftBook(normalizedSaved.id);
+        }
         bookRef.current = normalizedSaved;
         setBook((current) => current?.id === normalizedSaved.id ? normalizedSaved : current);
         setLibrary((items) => [{ id: normalizedSaved.id, title: normalizedSaved.title, updatedAt: normalizedSaved.updatedAt },
@@ -484,10 +552,15 @@ function App() {
           : '已自动保存。');
       }).catch((error) => {
         if (saveRevision.current === revision) {
-          const recovery = api.runtime === 'device' && cachedLocally
-            ? '当前设备缓存仍保留本次修改。'
-            : '请立即复制正文或导出仍可访问的内容。';
-          setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${recovery}`);
+          if (isBookConflictError(error)) {
+            setDirty(true);
+            setStatus(bookConflictMessage);
+          } else {
+            const recovery = api.runtime === 'device' && cachedLocally
+              ? '当前设备草稿仍保留本次修改。'
+              : '请立即复制正文或导出仍可访问的内容。';
+            setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${recovery}`);
+          }
         }
       });
     }, 700);
@@ -495,20 +568,26 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [book, dirty]);
 
-  const openBook = async (bookId: string) => {
+  const openBook = async (bookId: string, options: { ignoreDraft?: boolean } = {}) => {
     if (book && book.id !== bookId && dirty) await saveCurrent();
     rememberCurrentSectionDraft();
     const stored = normalizeBook(await api.loadBook(bookId));
     const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
-    const loaded = newerBook(stored, cached);
-    if (api.runtime === 'device') cacheBook(loaded);
+    const cachedForLoad = options.ignoreDraft
+      ? (api.runtime === 'device' ? readCachedBook(bookId, false) : null)
+      : cached;
+    const loaded = newerBook(stored, cachedForLoad);
+    if (api.runtime === 'device' && (!cachedForLoad || loaded.updatedAt === stored.updatedAt)) cacheBook(loaded);
+    persistedUpdatedAt.current = stored.updatedAt;
+    saveConflictRef.current = false;
+    setSaveConflict(false);
     const revision = advanceSaveRevision();
     bookRef.current = loaded;
     setBook(loaded);
     setSectionId('');
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     restoreSectionDraft(loaded.id, '');
-    const loadedDirty = Boolean(cached && loaded.updatedAt !== stored.updatedAt);
+    const loadedDirty = Boolean(cachedForLoad && loaded.updatedAt !== stored.updatedAt);
     persistedRevision.current = loadedDirty ? null : revision;
     setDirty(loadedDirty);
     setView('shelf');
@@ -535,13 +614,23 @@ function App() {
       if (autosaveRevision !== undefined && saveRevision.current !== autosaveRevision) {
         return candidate;
       }
+      if (saveConflictRef.current) throw blockedBookConflictError();
+      if (!persistedUpdatedAt.current) throw new Error('缺少当前书目的服务端保存基线，请重新载入后再保存。');
       persisted = true;
-      return api.saveBook(candidate);
+      return api.saveBook(candidate, persistedUpdatedAt.current);
     });
     const tracked: Promise<Book> = task.then((saved) => {
-      if (persisted && saveRevision.current === revision) persistedRevision.current = revision;
+      if (persisted) {
+        persistedUpdatedAt.current = saved.updatedAt;
+        if (saveRevision.current === revision) persistedRevision.current = revision;
+      }
       return saved;
     }, (error) => {
+      if (isBookConflictError(error)) {
+        saveConflictRef.current = true;
+        setSaveConflict(true);
+        setDirty(true);
+      }
       if (saveFlights.current.get(revision) === tracked) saveFlights.current.delete(revision);
       throw error;
     });
@@ -560,14 +649,20 @@ function App() {
       && persistedRevision.current === revision) return currentBook;
     const saveRevisionForCandidate = candidateOverride ? advanceSaveRevision() : revision;
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
-    if (api.runtime === 'device') cacheBook(candidate);
+    if (api.runtime === 'device') cacheDraftBook(candidate);
     const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
     if (saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
-    if (api.runtime === 'device') cacheBook(saved);
+    if (api.runtime === 'device') {
+      cacheBook(saved);
+      removeDraftBook(saved.id);
+    }
     bookRef.current = saved;
     setBook(saved);
     setDirty(false);
     persistedRevision.current = saveRevisionForCandidate;
+    persistedUpdatedAt.current = saved.updatedAt;
+    saveConflictRef.current = false;
+    setSaveConflict(false);
     setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
       ...items.filter((item) => item.id !== saved.id)]);
     setStatus(api.runtime === 'device'
@@ -584,21 +679,40 @@ function App() {
       updatedAt: new Date().toISOString(),
     });
     const revision = advanceSaveRevision();
+    bookRef.current = candidate;
+    setBook(candidate);
+    setDirty(true);
+    if (api.runtime === 'device') cacheDraftBook(candidate);
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
       const saved = normalizeBook(await queueBookSave(candidate, revision));
       if (saveRevision.current !== revision) throw staleSaveError();
-      if (api.runtime === 'device') cacheBook(saved);
+      if (api.runtime === 'device') {
+        cacheBook(saved);
+        removeDraftBook(saved.id);
+      }
       bookRef.current = saved;
       setBook(saved);
       setDirty(false);
       persistedRevision.current = revision;
+      persistedUpdatedAt.current = saved.updatedAt;
+      saveConflictRef.current = false;
+      setSaveConflict(false);
       setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
         ...items.filter((item) => item.id !== saved.id)]);
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
       return saved;
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : '保存失败。');
+      if (!isBookConflictError(error)) {
+        bookRef.current = currentBook;
+        setBook(currentBook);
+        setDirty(false);
+      } else {
+        setDirty(true);
+      }
+      setStatus(isBookConflictError(error)
+        ? bookConflictMessage
+        : error instanceof Error ? error.message : '保存失败。');
       throw error;
     }
   };
@@ -623,7 +737,7 @@ function App() {
     if (!book) return;
     try {
       const normalized = normalizeBook(book);
-      if (api.runtime === 'device') cacheBook(normalized);
+      if (api.runtime === 'device') cacheDraftBook(normalized);
       const file = createBookExport(normalized, format);
       const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
       const link = document.createElement('a');
@@ -733,6 +847,7 @@ function App() {
     } catch (error) {
       setStatus(isAbortError(error)
         ? '已取消生成；迟到结果未写入正文。'
+        : isBookConflictError(error) ? bookConflictMessage
         : error instanceof Error ? error.message : '操作失败。');
     } finally {
       busyRef.current = false;
@@ -1187,6 +1302,9 @@ function App() {
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
       setBook(normalizedCreated);
       if (api.runtime === 'device') cacheBook(normalizedCreated);
+      persistedUpdatedAt.current = normalizedCreated.updatedAt;
+      saveConflictRef.current = false;
+      setSaveConflict(false);
       const revision = advanceSaveRevision();
       setSectionId('');
       setSelectedCharacterId('');
@@ -1201,6 +1319,32 @@ function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const importBookBackup = async (file: File) => {
+    const imported = parseBookBackup(await file.text());
+    await ensureCurrentBookSaved();
+    rememberCurrentSectionDraft();
+    const restored = normalizeBook(await api.importBook(imported));
+    const revision = advanceSaveRevision();
+    persistedUpdatedAt.current = restored.updatedAt;
+    saveConflictRef.current = false;
+    setSaveConflict(false);
+    bookRef.current = restored;
+    setBook(restored);
+    if (api.runtime === 'device') cacheBook(restored);
+    setLibrary((items) => [{
+      id: restored.id,
+      title: restored.title,
+      updatedAt: restored.updatedAt,
+    }, ...items.filter((item) => item.id !== restored.id)]);
+    setSectionId('');
+    setSelectedCharacterId(restored.characters[0]?.id ?? '');
+    restoreSectionDraft(restored.id, '');
+    persistedRevision.current = revision;
+    setDirty(false);
+    setView('shelf');
+    setStatus(`已导入《${restored.title}》的恢复副本，原书目未覆盖。`);
   };
 
   const deleteCurrentBook = async () => {
@@ -1226,6 +1370,9 @@ function App() {
       setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
       if (loadedNextBook) {
         if (api.runtime === 'device') cacheBook(loadedNextBook);
+        persistedUpdatedAt.current = storedNextBook?.updatedAt ?? loadedNextBook.updatedAt;
+        saveConflictRef.current = false;
+        setSaveConflict(false);
         setBook(loadedNextBook);
         setSectionId('');
         setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
@@ -1497,6 +1644,14 @@ function App() {
     setView('shelf');
   };
 
+  const reloadCurrentBook = async () => {
+    if (!book) return;
+    if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
+    await openBook(book.id, { ignoreDraft: true });
+    removeDraftBook(book.id);
+    setStatus('已重新载入当前书目。');
+  };
+
   const openSettings = () => {
     if (document.activeElement instanceof HTMLElement) {
       settingsTrigger.current = document.activeElement;
@@ -1558,9 +1713,31 @@ function App() {
       <a className="skip-link" href="#main-content">跳到正文</a>
       {view === 'shelf' && <header className="app-header">
         <div className="header-context" aria-live="polite">
-          <strong>故事书架</strong>
+          <strong>故事书屋</strong>
         </div>
         <div className="header-actions">
+          <input
+            ref={importInput}
+            className="sr-only"
+            type="file"
+            accept="application/json,.json"
+            aria-label="导入 JSON 备份"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void withBusy(async () => { await importBookBackup(file); });
+            }}
+          />
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => importInput.current?.click()}
+            disabled={!book || busy}
+            aria-label="导入 JSON 备份"
+            title="导入 JSON 备份"
+          >
+            <FileJson aria-hidden="true" />
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -1582,6 +1759,16 @@ function App() {
           >
             <Download aria-hidden="true" />
           </button>
+          {saveConflict && <button
+            type="button"
+            className="icon-button"
+            onClick={() => void withBusy(reloadCurrentBook)}
+            disabled={!book || busy}
+            aria-label="重新载入当前书目"
+            title="重新载入当前书目"
+          >
+            <BookOpenText aria-hidden="true" />
+          </button>}
           <button
             type="button"
             className="icon-button"
@@ -1996,7 +2183,7 @@ function SettingsDrawer({
     try {
       await onTestProviderProfile({ ...profileDraft, baseUrl, modelId }, apiKeyDraft || undefined);
       setConnectionState('success');
-      setConnectionStatus('连接有效，模型 ID 可用。');
+      setConnectionStatus('已访问 /models，模型列表已返回；未验证实际生成参数。');
     } catch (error) {
       setConnectionState('error');
       setConnectionStatus(error instanceof Error ? error.message : '无法连接。');

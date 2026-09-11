@@ -125,7 +125,8 @@ const installHostApi = ({
     if (url === '/api/providers') return jsonResponse([]);
     if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(structuredClone(persisted));
     if (url === `/api/books/${book.id}` && method === 'PUT') {
-      const candidate = JSON.parse(String(init?.body)) as Book;
+      const payload = JSON.parse(String(init?.body)) as { book: Book };
+      const candidate = payload.book;
       const index = saves.push(structuredClone(candidate)) - 1;
       const response = onSave ? await onSave(candidate, index) : jsonResponse(candidate);
       if (response.ok) persisted = structuredClone(candidate);

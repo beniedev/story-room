@@ -65,9 +65,43 @@ jobs:
         uses: actions/setup-node@v6.4.0
         with:
           node-version: '22'
-      - name: Scan repository history with Gitleaks
-        uses: gitleaks/gitleaks-action@v3.0.0
-        env:
-          GITLEAKS_VERSION: 8.28.0
+      - name: Install pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks_8.28.0_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+            --output "$archive"
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  $archive" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan all repository history with Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin \
+            '+refs/heads/*:refs/remotes/origin/*' \
+            '+refs/tags/*:refs/tags/*'
+          commit_count="$(git rev-list --all --count)"
+          if [ "$commit_count" -le 1 ]; then
+            echo "Expected full history, but only $commit_count commit is available." >&2
+            exit 1
+          fi
+          echo "Scanning $commit_count commits reachable from all fetched heads and tags."
+          gitleaks git --redact --verbose --exit-code=2 \
+            --log-opts="--all" \
+            --report-format=sarif \
+            --report-path="$RUNNER_TEMP/gitleaks-results.sarif" \
+            .
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: gitleaks-results
+          path: ${{ runner.temp }}/gitleaks-results.sarif
+          if-no-files-found: warn
       - name: Scan privacy-sensitive content
+        if: always()
         run: npm run privacy:scan

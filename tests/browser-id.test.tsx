@@ -107,7 +107,8 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === '/api/providers') return jsonResponse([]);
       if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(book);
       if (url === `/api/books/${book.id}` && method === 'PUT') {
-        return jsonResponse(JSON.parse(String(init?.body)) as unknown);
+        const payload = JSON.parse(String(init?.body)) as { book: unknown };
+        return jsonResponse(payload.book);
       }
       throw new Error(`Unexpected test request: ${method} ${url}`);
     }));
@@ -156,7 +157,8 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === '/api/providers') return jsonResponse([]);
       if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(book);
       if (url === `/api/books/${book.id}` && method === 'PUT') {
-        savedBook = JSON.parse(String(init?.body)) as typeof book;
+        const payload = JSON.parse(String(init?.body)) as { book: typeof book };
+        savedBook = payload.book;
         return jsonResponse(savedBook);
       }
       if (url === '/api/generate' && method === 'POST') {
@@ -223,7 +225,8 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === `/api/books/${book.id}` && method === 'PUT') {
         saves += 1;
         if (rejectSave) return new Response(JSON.stringify({ error: 'Synthetic save failure' }), { status: 503 });
-        persisted = JSON.parse(String(init?.body)) as typeof book;
+        const payload = JSON.parse(String(init?.body)) as { book: typeof book };
+        persisted = payload.book;
         return jsonResponse(persisted);
       }
       throw new Error(`Unexpected test request: ${method} ${url}`);
@@ -307,7 +310,8 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === '/api/providers') return jsonResponse([]);
       if (url === `/api/books/${book.id}` && init?.method === 'PUT') {
         saves += 1;
-        return jsonResponse(JSON.parse(String(init.body)));
+        const payload = JSON.parse(String(init.body)) as { book: unknown };
+        return jsonResponse(payload.book);
       }
       if (url === `/api/books/${book.id}`) return jsonResponse(book);
       if (url === '/api/generate') {
@@ -380,7 +384,8 @@ describe('browser IDs without crypto.randomUUID', () => {
       if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
       if (url === '/api/providers') return jsonResponse([]);
       if (url === `/api/books/${book.id}` && init?.method === 'PUT') {
-        const candidate = JSON.parse(String(init.body)) as typeof book;
+        const payload = JSON.parse(String(init.body)) as { book: typeof book };
+        const candidate = payload.book;
         saves.push(candidate);
         if (saves.length === 1) return new Promise<Response>((resolve) => { finishFirstSave = resolve; });
         if (failSave) throw new Error('Synthetic save failure');
@@ -478,5 +483,89 @@ describe('browser IDs without crypto.randomUUID', () => {
     expect(created.chapters[0]?.sections[0]?.id)
       .toMatch(new RegExp(`^section-${uuidPattern.source.slice(1, -1)}$`));
     expect((await deviceLibrary.loadBook(created.id)).title).toBe('Fallback Book');
+  });
+
+  it('keeps local prose, candidates, and input after a host conflict and blocks retry PUTs', async () => {
+    const book = createExampleBooks()[0]!;
+    const section = book.chapters[0]!.sections[0]!;
+    section.blocks = [
+      { id: 'conflict-user', kind: 'user', content: '已有用户输入。' },
+      {
+        id: 'conflict-answer',
+        kind: 'assistant',
+        content: '旧候选正文。',
+        candidates: [
+          { id: 'conflict-old', content: '旧候选正文。' },
+          { id: 'conflict-new', content: '本地新候选正文。' },
+        ],
+        adoptedCandidateId: 'conflict-old',
+      },
+    ];
+    section.content = '已有用户输入。\n\n旧候选正文。';
+    let putCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url === '/api/library') return jsonResponse([{ id: book.id, title: book.title, updatedAt: book.updatedAt }]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === `/api/books/${book.id}` && method === 'GET') return jsonResponse(structuredClone(book));
+      if (url === `/api/books/${book.id}` && method === 'PUT') {
+        putCount += 1;
+        return new Response(JSON.stringify({ error: 'Synthetic revision conflict', code: 'BOOK_CONFLICT' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected test request: ${method} ${url}`);
+    }));
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<App />));
+      const sectionButton = await waitForElement(() => container.querySelector<HTMLButtonElement>('.section-open'));
+      await act(async () => sectionButton.click());
+      const instruction = await waitForElement(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      const instructionSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      if (!instructionSetter) throw new Error('Text area value setter is unavailable.');
+      await act(async () => {
+        instructionSetter.call(instruction, '冲突后仍要保留的输入。');
+        instruction.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="选择 AI 输出片段"]')?.click());
+      const nextCandidate = await waitForElement(() => container.querySelector<HTMLButtonElement>('[aria-label="下一版回答候选"]'));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await act(async () => nextCandidate.click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+
+      expect(putCount).toBe(1);
+      expect(container.querySelector('.manuscript')?.textContent).toContain('本地新候选正文。');
+      expect(container.querySelector('.answer-candidate-strip')?.textContent).toContain('2 / 2');
+      expect(container.querySelector<HTMLTextAreaElement>('#writing-instruction')?.value)
+        .toBe('冲突后仍要保留的输入。');
+      expect(container.querySelector('[role="status"]')?.textContent).toContain('其他页面更新');
+      const note = container.querySelector<HTMLTextAreaElement>('#author-note-input');
+      if (!note) throw new Error('author note input missing');
+      const noteSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      if (!noteSetter) throw new Error('Text area value setter is unavailable.');
+      await act(async () => {
+        noteSetter.call(note, '冲突后继续编辑。');
+        note.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+      expect(putCount).toBe(1);
+      expect(container.querySelector('.manuscript')?.textContent).toContain('本地新候选正文。');
+      expect(container.querySelector<HTMLTextAreaElement>('#writing-instruction')?.value)
+        .toBe('冲突后仍要保留的输入。');
+
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="返回故事书架"]')?.click());
+      expect(container.querySelector<HTMLButtonElement>('[aria-label="重新载入当前书目"]')).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,6 +1,6 @@
 # Privacy
 
-Story-native Writing Harness does not provide cloud manuscript storage, account sync, telemetry, or an automatic synchronization service. What is stored or sent depends on the runtime you choose.
+Story Room does not provide cloud manuscript storage, account sync, telemetry, or an automatic synchronization service. What is stored or sent depends on the runtime you choose.
 
 ## Local host
 
@@ -12,7 +12,7 @@ When you use an OpenAI-compatible Provider, the host assembles the request and s
 
 The hosted/device build stores its Book library in the current browser's unencrypted `localStorage`. Any script running with the same origin can read it. Clearing site data removes that device-local library. The app does not upload Books to a cloud backend.
 
-The browser document title is always the generic `故事书架 · Story-native`; it does not include a Book, chapter, or Section name, and the app URL does not include those names. This reduces accidental exposure in a tab or history entry, but does not prevent the browser, operating system, or other software with access to them from revealing local activity.
+The browser document title is always the generic `故事书屋 · Story Room`; it does not include a Book, chapter, or Section name, and the app URL does not include those names. This reduces accidental exposure in a tab or history entry, but does not prevent the browser, operating system, or other software with access to them from revealing local activity.
 
 Generation in this runtime is Fake. The Provider test form can send a temporary key entered on the page directly to the URL you enter. The current page's scripts can read that runtime input; the app does not persist the key.
 

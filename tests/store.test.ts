@@ -1,10 +1,10 @@
 import type { AddressInfo } from 'node:net';
 import { createStoryServer } from '../server/main.ts';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { StoryStore } from '../server/store.ts';
+import { StoreConflictError, StoryStore, type StoreFaultStage, type StoreRecoveryStage } from '../server/store.ts';
 import { createLegacyFixtureBook } from '../src/fixtures.ts';
 import { createSectionMemory } from '../src/sectionMemory';
 import type { Book, BookIndexEntry } from '../src/types.ts';
@@ -68,6 +68,55 @@ const makeIntegrityBook = (): Book => ({
 class FailingDeleteStore extends StoryStore {
   protected override async removeBookTree(_directory: string) {
     throw new Error('synthetic quarantine removal failure');
+  }
+}
+
+class FaultingStore extends StoryStore {
+  constructor(root: string, private readonly faultStage: StoreFaultStage) {
+    super(root);
+  }
+
+  protected override async transactionCheckpoint(stage: StoreFaultStage) {
+    if (stage === this.faultStage) throw new Error(`synthetic ${stage} failure`);
+  }
+}
+
+class RecoveryFailingStore extends FaultingStore {
+  protected override async recoveryCheckpoint(_stage: StoreRecoveryStage) {
+    throw new Error('synthetic recovery failure');
+  }
+}
+
+class FailingTransactionCleanupStore extends StoryStore {
+  constructor(root: string, private readonly failureMessage = 'synthetic transaction cleanup failure') {
+    super(root);
+  }
+
+  protected override async removeTransactionTree(_directory: string) {
+    throw new Error(this.failureMessage);
+  }
+}
+
+class PausingStore extends StoryStore {
+  readonly reached: Promise<void>;
+  private reachedResolve!: () => void;
+  private readonly releasePromise: Promise<void>;
+  private releaseResolve!: () => void;
+
+  constructor(root: string) {
+    super(root);
+    this.reached = new Promise<void>((resolve) => { this.reachedResolve = resolve; });
+    this.releasePromise = new Promise<void>((resolve) => { this.releaseResolve = resolve; });
+  }
+
+  release() {
+    this.releaseResolve();
+  }
+
+  protected override async transactionCheckpoint(stage: StoreFaultStage) {
+    if (stage !== 'after-sources') return;
+    this.reachedResolve();
+    await this.releasePromise;
   }
 }
 
@@ -307,6 +356,354 @@ describe('story store', () => {
     expect((await store.listBooks()).map((item) => item.id)).toEqual(expect.arrayContaining(['book-one', 'book-two']));
     expect((await store.loadBook('book-one')).chapters[0]?.sections[0]?.content).toBe('One');
     expect((await store.loadBook('book-two')).chapters[0]?.sections[0]?.content).toBe('Two');
+  });
+
+  it('checks expectedUpdatedAt inside the serialized save boundary', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const first = await store.saveBook({
+      id: 'revision-book',
+      title: 'Revision Book',
+      writingBrief: '',
+      characters: [],
+      worldRules: [],
+      canonFacts: [],
+      summaries: [],
+      chapters: [{ id: 'revision-chapter', title: 'Chapter', sections: [{ id: 'revision-section', title: 'Section', content: 'R0' }] }],
+      branches: [],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const second = await store.saveBook({
+      ...first,
+      title: 'Revision R1',
+      chapters: [{ ...first.chapters[0]!, sections: [{ ...first.chapters[0]!.sections[0]!, content: 'R1' }] }],
+    }, { expectedUpdatedAt: first.updatedAt });
+
+    await expect(store.saveBook({ ...second, title: 'Stale overwrite' }, {
+      expectedUpdatedAt: first.updatedAt,
+    })).rejects.toBeInstanceOf(StoreConflictError);
+    expect((await store.loadBook(first.id)).title).toBe('Revision R1');
+    expect((await store.loadBook(first.id)).chapters[0]?.sections[0]?.content).toBe('R1');
+  });
+
+  it('imports a validated Book as a new copy without replacing the source', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const source = await store.saveBook(makeIntegrityBook());
+    const restored = await store.importBook(source);
+
+    expect(restored.id).not.toBe(source.id);
+    expect(restored.title).toBe(source.title);
+    expect(restored.chapters).toEqual(source.chapters);
+    expect(restored.characters).toEqual(source.characters);
+    expect((await store.listBooks()).map((entry) => entry.id)).toEqual(expect.arrayContaining([source.id, restored.id]));
+    expect((await store.loadBook(source.id)).title).toBe(source.title);
+  });
+
+  it.each(['after-sources', 'after-manifest', 'after-library'] as const)(
+    'restores a complete old Book when a save fails at %s',
+    async (faultStage) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+      temporaryRoots.push(root);
+      const baseline = new StoryStore(root);
+      const oldBook = await baseline.saveBook(makeIntegrityBook());
+      const nextBook = {
+        ...oldBook,
+        title: 'Synthetic New Title',
+        chapters: oldBook.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((section) => ({ ...section, content: 'Synthetic New Content.' })),
+        })),
+      };
+
+      await expect(new FaultingStore(root, faultStage).saveBook(nextBook)).rejects.toThrow(`synthetic ${faultStage} failure`);
+      const reopened = new StoryStore(root);
+      const recovered = await reopened.loadBook(oldBook.id);
+      expect(recovered.title).toBe(oldBook.title);
+      expect(recovered.chapters[0]?.sections[0]?.content).toBe(oldBook.chapters[0]?.sections[0]?.content);
+      expect(await readdir(path.join(root, '.story-transactions'))).toEqual([]);
+    },
+  );
+
+  it('does not let a read observe a save between source and manifest publication', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const baseline = new StoryStore(root);
+    const oldBook = await baseline.saveBook(makeIntegrityBook());
+    const nextBook = {
+      ...oldBook,
+      title: 'Synthetic queued title',
+      chapters: oldBook.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((section) => ({ ...section, content: 'Synthetic queued content.' })),
+      })),
+    };
+    const pausing = new PausingStore(root);
+    const savePromise = pausing.saveBook(nextBook);
+    await pausing.reached;
+    let loaded = false;
+    const loadPromise = pausing.loadBook(oldBook.id).then(() => { loaded = true; });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(loaded).toBe(false);
+    pausing.release();
+    await savePromise;
+    await loadPromise;
+    expect(loaded).toBe(true);
+    expect((await pausing.loadBook(oldBook.id)).title).toBe('Synthetic queued title');
+  });
+
+  it('recovers a prepared journal after a process exit before commit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const oldBook = await store.saveBook(makeIntegrityBook());
+    const bookRoot = path.join(root, 'books', oldBook.id);
+    const relativeFiles = [
+      'book.json',
+      'characters/integrity-character.json',
+      'world/integrity-rule.md',
+      'canon/integrity-fact.json',
+      'summaries/integrity-summary.json',
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[0]!.id}.md`,
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[1]!.id}.md`,
+    ];
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-crash');
+    await mkdir(path.join(transactionRoot, 'book'), { recursive: true });
+    for (const relative of relativeFiles) {
+      const source = path.join(bookRoot, ...relative.split('/'));
+      const target = path.join(transactionRoot, 'book', ...relative.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(source, target);
+    }
+    await copyFile(path.join(root, 'library.json'), path.join(transactionRoot, 'library.json'));
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-crash',
+      bookId: oldBook.id,
+      status: 'prepared',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: relativeFiles,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    const manifest = JSON.parse(await readFile(path.join(bookRoot, 'book.json'), 'utf8')) as Record<string, unknown>;
+    manifest.title = 'Synthetic interrupted title';
+    await writeFile(path.join(bookRoot, 'book.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    await writeFile(path.join(bookRoot, 'manuscript', oldBook.chapters[0]!.id, `${oldBook.chapters[0]!.sections[0]!.id}.md`), 'Synthetic interrupted content.', 'utf8');
+
+    const recovered = await new StoryStore(root).loadBook(oldBook.id);
+    expect(recovered.title).toBe(oldBook.title);
+    expect(recovered.chapters[0]?.sections[0]?.content).toBe(oldBook.chapters[0]?.sections[0]?.content);
+    await expectMissing(transactionRoot);
+  });
+
+  it('discards an unready prepared journal without restoring or hiding the old Book', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const oldBook = await store.saveBook(makeIntegrityBook());
+    const relativeFiles = [
+      'book.json',
+      'characters/integrity-character.json',
+      'world/integrity-rule.md',
+      'canon/integrity-fact.json',
+      'summaries/integrity-summary.json',
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[0]!.id}.md`,
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[1]!.id}.md`,
+    ];
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-unready');
+    await mkdir(transactionRoot, { recursive: true });
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-unready',
+      bookId: oldBook.id,
+      status: 'prepared',
+      snapshotReady: false,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: relativeFiles,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new FailingTransactionCleanupStore(root, 'unready cleanup failure').loadBook(oldBook.id))
+      .rejects.toThrow('未完成事务清理失败');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+    expect((await new StoryStore(root).loadBook(oldBook.id)).title).toBe(oldBook.title);
+    await expectMissing(transactionRoot);
+  });
+
+  it('fails closed and keeps prepared recovery material when its snapshot inventory is incomplete', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const oldBook = await store.saveBook(makeIntegrityBook());
+    const relativeFiles = [
+      'book.json',
+      'characters/integrity-character.json',
+      'world/integrity-rule.md',
+      'canon/integrity-fact.json',
+      'summaries/integrity-summary.json',
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[0]!.id}.md`,
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[1]!.id}.md`,
+    ];
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-incomplete');
+    await mkdir(path.join(transactionRoot, 'book'), { recursive: true });
+    for (const relative of relativeFiles.slice(0, -1)) {
+      const source = path.join(root, 'books', oldBook.id, ...relative.split('/'));
+      const target = path.join(transactionRoot, 'book', ...relative.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(source, target);
+    }
+    await copyFile(path.join(root, 'library.json'), path.join(transactionRoot, 'library.json'));
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-incomplete',
+      bookId: oldBook.id,
+      status: 'prepared',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: relativeFiles,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new StoryStore(root).loadBook(oldBook.id)).rejects.toThrow('事务快照与记录不一致');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+    expect(await readFile(path.join(root, 'books', oldBook.id, 'book.json'), 'utf8')).toContain(oldBook.title);
+  });
+
+  it('fails closed when a prepared journal requires a missing library snapshot', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const oldBook = await store.saveBook(makeIntegrityBook());
+    const relativeFiles = [
+      'book.json',
+      'characters/integrity-character.json',
+      'world/integrity-rule.md',
+      'canon/integrity-fact.json',
+      'summaries/integrity-summary.json',
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[0]!.id}.md`,
+      `manuscript/${oldBook.chapters[0]!.id}/${oldBook.chapters[0]!.sections[1]!.id}.md`,
+    ];
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-missing-library');
+    await mkdir(path.join(transactionRoot, 'book'), { recursive: true });
+    for (const relative of relativeFiles) {
+      const source = path.join(root, 'books', oldBook.id, ...relative.split('/'));
+      const target = path.join(transactionRoot, 'book', ...relative.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(source, target);
+    }
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-missing-library',
+      bookId: oldBook.id,
+      status: 'prepared',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: relativeFiles,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new StoryStore(root).loadBook(oldBook.id)).rejects.toThrow('事务 library 快照与记录不一致');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+  });
+
+  it('retains a committed result and only cleans its committed journal', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const saved = await store.saveBook(makeIntegrityBook());
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-committed');
+    await mkdir(transactionRoot, { recursive: true });
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-committed',
+      bookId: saved.id,
+      status: 'committed',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    expect((await new StoryStore(root).loadBook(saved.id)).title).toBe(saved.title);
+    await expectMissing(transactionRoot);
+  });
+
+  it('converges a committed journal after cleanup fails once', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const saved = await store.saveBook(makeIntegrityBook());
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-committed-retry');
+    await mkdir(transactionRoot, { recursive: true });
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-committed-retry',
+      bookId: saved.id,
+      status: 'committed',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new FailingTransactionCleanupStore(root).loadBook(saved.id)).rejects.toThrow('已提交事务清理失败');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+    expect((await new StoryStore(root).loadBook(saved.id)).title).toBe(saved.title);
+    await expectMissing(transactionRoot);
+  });
+
+  it('fails closed instead of deleting a committed transaction that contains a junction', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const saved = await store.saveBook(makeIntegrityBook());
+    const transactionRoot = path.join(root, '.story-transactions', 'tx-committed-link');
+    const outside = path.join(root, 'outside-transaction');
+    await mkdir(transactionRoot, { recursive: true });
+    await mkdir(outside);
+    try {
+      await symlink(outside, path.join(transactionRoot, 'linked'), 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await writeFile(path.join(transactionRoot, 'journal.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      id: 'tx-committed-link',
+      bookId: saved.id,
+      status: 'committed',
+      snapshotReady: true,
+      bookExists: true,
+      libraryExists: true,
+      bookFiles: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+
+    await expect(new StoryStore(root).loadBook(saved.id)).rejects.toThrow('结构异常');
+    await expect(access(transactionRoot)).resolves.toBeUndefined();
+  });
+
+  it('keeps recovery material when restoring a failed save also fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const baseline = new StoryStore(root);
+    const oldBook = await baseline.saveBook(makeIntegrityBook());
+    await expect(new RecoveryFailingStore(root, 'after-manifest').saveBook({
+      ...oldBook,
+      title: 'Synthetic failed recovery',
+    })).rejects.toThrow('无法恢复');
+    const transactionEntries = await readdir(path.join(root, '.story-transactions'));
+    expect(transactionEntries.length).toBeGreaterThan(0);
+    expect((await new StoryStore(root).loadBook(oldBook.id)).title).toBe(oldBook.title);
   });
 
   it('skips unchanged managed files while still publishing updated metadata', async () => {
@@ -719,6 +1116,54 @@ describe('story store', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     })).rejects.toThrow();
     expect(await readFile(library, 'utf8')).toBe('{not-json}\n');
+  });
+
+  it('fails closed when STORY_DATA_DIR is a junction', async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(sandbox);
+    const outside = path.join(sandbox, 'outside-root');
+    const root = path.join(sandbox, 'linked-root');
+    await mkdir(outside);
+    try {
+      await symlink(outside, root, 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await expect(new StoryStore(root).listBooks()).rejects.toThrow('结构异常');
+    await expect(readdir(outside)).resolves.toEqual([]);
+  });
+
+  it('fails closed when the books directory is a junction', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const outside = path.join(root, 'outside-books');
+    await mkdir(outside);
+    try {
+      await symlink(outside, path.join(root, 'books'), 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await expect(new StoryStore(root).listBooks()).rejects.toThrow('结构异常');
+    await expect(readdir(outside)).resolves.toEqual([]);
+  });
+
+  it('fails closed when library.json is a symlink', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    await mkdir(path.join(root, 'books'));
+    const outside = path.join(root, 'outside-library');
+    const library = path.join(root, 'library.json');
+    await mkdir(outside);
+    try {
+      await symlink(outside, library, 'junction');
+    } catch (error) {
+      throw new Error(`junction fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await expect(new StoryStore(root).listBooks()).rejects.toThrow('结构异常');
+    await expect(readdir(outside)).resolves.toEqual([]);
   });
 
   it('returns actionable HTTP statuses without exposing internal errors', async () => {

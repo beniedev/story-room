@@ -532,7 +532,7 @@ describe('writing UI contract', () => {
     expect(clearCache).toContain('localStorage.removeItem(key)');
     expect(source).toMatch(/useEffect\(\(\) => \{\s+clearHostBookCaches\(\);\s+\}, \[\]\);/);
     expect(source).toContain("const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;");
-    expect(source).toContain("if (api.runtime === 'device') cacheBook(candidate);");
+    expect(source).toContain("if (api.runtime === 'device') cacheDraftBook(candidate);");
     expect(source).toContain('正在保存到书库…');
     expect(source).toContain('已自动保存。');
     expect(source).not.toContain('已自动保存到此设备，正在写入本机故事目录…');
