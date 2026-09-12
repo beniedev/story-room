@@ -3,7 +3,7 @@
 import { act, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { InlineTitle } from '../src/components/shared/InlineTitle';
+import { InlineTitle, TITLE_ACTIVATION_DELAY } from '../src/components/shared/InlineTitle';
 
 type SaveHook = (value: string) => Promise<void>;
 
@@ -20,10 +20,12 @@ const mount = async ({
   initial = '旧标题',
   disabled = false,
   onSave,
+  onActivate,
 }: {
   initial?: string;
   disabled?: boolean;
   onSave?: SaveHook;
+  onActivate?: () => void;
 } = {}): Promise<Fixture> => {
   let setValue: Dispatch<SetStateAction<string>> = () => undefined;
   let setDisabled: Dispatch<SetStateAction<boolean>> = () => undefined;
@@ -48,7 +50,7 @@ const mount = async ({
     };
     return (
       <div onClick={() => { clicks += 1; }}>
-        <InlineTitle value={value} label="标题" disabled={isDisabled} onSave={save} />
+        <InlineTitle value={value} label="标题" disabled={isDisabled} onSave={save} onActivate={onActivate} />
       </div>
     );
   }
@@ -123,6 +125,7 @@ const dispatchPointer = async (
     });
     Object.defineProperty(event, 'timeStamp', { configurable: true, value: timeStamp });
     target.dispatchEvent(event);
+    if (type === 'pointerup') target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
   });
 };
 
@@ -136,10 +139,68 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
 });
 
 describe('InlineTitle', () => {
+  it('delays only the pointer primary action, and cancels it for a double click', async () => {
+    vi.useFakeTimers();
+    const onActivate = vi.fn();
+    const fixture = await mount({ onActivate });
+    try {
+      await dispatchMouse(displayButton(fixture.container), 'click', 1);
+      expect(onActivate).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(TITLE_ACTIVATION_DELAY); });
+      expect(onActivate).toHaveBeenCalledTimes(1);
+      onActivate.mockClear();
+      await dispatchMouse(displayButton(fixture.container), 'click', 1);
+      await dispatchMouse(displayButton(fixture.container), 'click', 2);
+      expect(editorInput(fixture.container)).not.toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(onActivate).not.toHaveBeenCalled();
+    } finally { await fixture.unmount(); }
+  });
+
+  it('cancels a pending title for another target, scrolling, disabling and unmounting', async () => {
+    vi.useFakeTimers();
+    const oneAction = vi.fn();
+    const twoAction = vi.fn();
+    const one = await mount({ onActivate: oneAction });
+    const two = await mount({ onActivate: twoAction });
+    try {
+      await dispatchMouse(displayButton(one.container), 'click', 1);
+      await dispatchMouse(displayButton(two.container), 'click', 1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(TITLE_ACTIVATION_DELAY); });
+      expect(oneAction).not.toHaveBeenCalled();
+      expect(twoAction).toHaveBeenCalledTimes(1);
+      await dispatchMouse(displayButton(one.container), 'click', 1);
+      await act(async () => document.dispatchEvent(new Event('scroll')));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(oneAction).not.toHaveBeenCalled();
+      await dispatchPointer(displayButton(one.container), 'pointerdown', { timeStamp: 1000 });
+      await dispatchPointer(displayButton(one.container), 'pointerup', { timeStamp: 1040 });
+      await act(async () => one.setDisabled(true));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(oneAction).not.toHaveBeenCalled();
+      await dispatchMouse(displayButton(two.container), 'click', 1);
+    } finally { await one.unmount(); await two.unmount(); }
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(twoAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses immediate keyboard activation and F2 renaming for a directory title', async () => {
+    const onActivate = vi.fn();
+    const fixture = await mount({ onActivate });
+    try {
+      await dispatchKey(displayButton(fixture.container), 'Enter');
+      await dispatchKey(displayButton(fixture.container), ' ');
+      expect(onActivate).toHaveBeenCalledTimes(2);
+      await dispatchKey(displayButton(fixture.container), 'F2');
+      expect(editorInput(fixture.container)).not.toBeNull();
+      expect(onActivate).toHaveBeenCalledTimes(2);
+    } finally { await fixture.unmount(); }
+  });
   it('keeps a pointer single click inert and enters on mouse double click', async () => {
     const fixture = await mount();
     try {

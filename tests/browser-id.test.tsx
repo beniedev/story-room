@@ -412,7 +412,7 @@ describe('browser IDs without crypto.randomUUID', () => {
     try {
       await act(async () => root.render(<App />));
       const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
-      await act(async () => chapterTitle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      await act(async () => chapterTitle.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
       const title = container.querySelector<HTMLInputElement>('.chapter-inline-title .inline-title-input')!;
       words.mockClear(); tokens.mockClear();
       await type(title, '标题xiu', true);

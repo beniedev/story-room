@@ -79,12 +79,14 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.innerHTML = '';
   vi.restoreAllMocks();
 });
 
 describe('bookshelf directory title interactions', () => {
-  it('keeps title clicks local while opening a section from the rest of its row', async () => {
+  it('opens a title once after the local window, but opens the rest of the row immediately', async () => {
+    vi.useFakeTimers();
     const onOpenSection = vi.fn();
     const { container, root } = await renderBookshelf({ onOpenSection });
     try {
@@ -92,10 +94,17 @@ describe('bookshelf directory title interactions', () => {
       const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
       const sectionTitle = container.querySelector<HTMLButtonElement>('.section-inline-title .inline-title-display')!;
 
-      await act(async () => chapterTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
       await act(async () => sectionTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
       expect(onOpenSection).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(onOpenSection).toHaveBeenCalledExactlyOnceWith('section-one');
+      onOpenSection.mockClear();
       expect(details.open).toBe(true);
+
+      await act(async () => chapterTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+      expect(details.open).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(details.open).toBe(false);
 
       const sectionOpen = container.querySelector<HTMLButtonElement>('.section-open')!;
       await act(async () => sectionOpen.click());
@@ -112,7 +121,10 @@ describe('bookshelf directory title interactions', () => {
     const { container, root } = await renderBookshelf({ book, onRenameChapter, onRenameSection });
     try {
       const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
-      await act(async () => chapterTitle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      await act(async () => {
+        chapterTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        chapterTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+      });
       const chapterInput = container.querySelector<HTMLInputElement>('.chapter-inline-title .inline-title-input')!;
       await setInputValue(chapterInput, '重命名章节');
       await act(async () => chapterInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
@@ -120,7 +132,10 @@ describe('bookshelf directory title interactions', () => {
       expect(book.chapters[0]!.id).toBe('chapter-one');
 
       const sectionTitle = container.querySelector<HTMLButtonElement>('.section-inline-title .inline-title-display')!;
-      await act(async () => sectionTitle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      await act(async () => {
+        sectionTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        sectionTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+      });
       const sectionInput = container.querySelector<HTMLInputElement>('.section-inline-title .inline-title-input')!;
       await setInputValue(sectionInput, '重命名小节');
       await act(async () => sectionInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
@@ -183,7 +198,7 @@ describe('bookshelf directory title interactions', () => {
     const { container, root } = await renderBookshelf({ onRenameSection });
     try {
       await act(async () => container.querySelector<HTMLButtonElement>('.section-inline-title .inline-title-display')!
-        .dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
       const input = container.querySelector<HTMLInputElement>('.section-inline-title .inline-title-input')!;
       await setInputValue(input, '待重试标题');
       await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));

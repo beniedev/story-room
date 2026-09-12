@@ -73,7 +73,7 @@
 | [`src/types.ts`](../src/types.ts) | `Book`、`Chapter`、`Section`、块、候选、`SectionContextReference`、`SectionMemory` 的数据契约 | 新字段是否需要规范化、导入校验、导出和两种运行时同时支持 |
 | [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、角色卡/世界观列表（共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)）、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 就绪状态、确认对话框、`Bookshelf.onBookChange` 保存回调，以及资料多选模式下的单项列表拖动 |
 | [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、保存期间控件状态和候选语义 |
-| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 单击标题不导航，其他区域立即打开或展开；保留输入法、取消、保存失败和禁用状态 |
+| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 目录标题以 300 毫秒窗口区分单／双击，其他区域立即执行主动作；Enter／空格执行目录主动作，F2 改名。新目标、滚动、取消、禁用和卸载取消待执行动作；保留原生输入及保存失败状态 |
 | [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) 与 [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | 前文选择、会话草稿、梗概生成及确认 | 关闭保留未确认草稿；按书目和小节隔离；确认才写入，暂时不可用的既有引用可显式保留或取消 |
 | [`src/directoryOperations.ts`](../src/directoryOperations.ts) | 整理模式下的目录拖动排序、稳定 ID、逆向位置和前文资格变化 | 拖动只在目录多选模式进行；不删除重建，不用整书快照撤销；成功保存后才采用新顺序 |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “本轮上下文概览”，展示纳入资料、原因和估算 | 只展示摘要，不泄露原始模型服务消息或隐藏推理 |

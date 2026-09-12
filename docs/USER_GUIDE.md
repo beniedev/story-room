@@ -42,7 +42,7 @@ A Book consists of chapters and sections:
 1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
 2. Choose the **New section** button at the end of a chapter row and enter a section name.
 3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
-4. Double-click or double-tap a chapter or section title to rename it in place; a single pointer click on the title stays in the directory. With the title focused, Enter, Space, or F2 also starts editing.
+4. Click or tap a section title to open its manuscript, or a chapter title to expand or collapse it. Titles wait 300 ms so a quick double-click or double-tap can rename in place without navigating. Other row areas still act immediately. With a directory title focused, Enter or Space performs its primary action; F2 renames immediately.
 
 Renaming shows only an input field: click outside to save changes, or leave editing if the name is unchanged. Enter also saves; Escape restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. The small arrow on each chapter changes direction when it expands or collapses.
 
@@ -50,7 +50,7 @@ The manuscript is stored and displayed as continuous fiction. User input and AI 
 
 ### Organize the directory
 
-In the normal directory, chapter rows have a **New section** button; section rows have an open arrow only. Rename a title by double-clicking or double-tapping it, or focus it and press Enter, Space, or F2. Choose **Organize directory** at the top to select entries, then choose the **×** in the same position to finish. The delete button appears only in selection mode and becomes available after selecting a chapter or section.
+In the normal directory, chapter rows have a **New section** button; section rows have an open arrow only. Rename a title with a quick double-click or double-tap, or focus it and press F2. Choose **Organize directory** at the top to select entries, then choose the **×** in the same position to finish. The delete button appears only in selection mode and becomes available after selecting a chapter or section.
 
 Choose **Organize directory** at the top to select entries for batch deletion. In this mode, six-dot drag handles support mouse or touch dragging to reorder chapters or sections within their current chapter, or move sections between chapters. Empty chapters can also receive sections.
 
@@ -205,6 +205,8 @@ Local-host saving has transaction logs and snapshots for process interruption. T
 ### Multiple browser tabs
 
 Every tab can edit, including different Books on the same device. Library writes are automatically serialized; there is no editor ownership or takeover step. If two pages edit the same Book, the stale save is rejected and its local text stays available for export or reload. A clean page automatically displays the latest saved version.
+
+If another tab deletes the section being read, this page returns to that Book's directory. Open title inputs, manuscript edits, unsent input, and context drafts are protected before any replacement; the page keeps its current content and reports an update conflict. Preserve those edits before reloading. Unsubmitted input remains in its editor or draft and is not necessarily part of the Book or its JSON backup.
 
 Books persist on the device. Unsaved recovery drafts are isolated in each tab's session storage and survive a reload of that tab. Closing the tab ends its session; confirm that the Book was saved before closing, and export JSON if saving fails. A legacy shared draft is transferred into the first page that opens that Book. Other pages cannot overwrite or clear this page's draft.
 

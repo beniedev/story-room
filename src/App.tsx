@@ -378,6 +378,12 @@ function App() {
   const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
   const libraryLoadGenerationRef = useRef(0);
   const bookLoadGenerationRef = useRef(0);
+  // Loading attempts can be superseded while the current Book is still saving.
+  // Only adopting a Book (including a reload) starts a new save session.
+  const bookSessionRef = useRef(0);
+  const bookNavigationPending = useRef(false);
+  const selectionRef = useRef({ sectionId, view });
+  selectionRef.current = { sectionId, view };
 
   const canEdit = libraryReady;
 
@@ -396,6 +402,7 @@ function App() {
     generationAbort.current?.abort();
     libraryLoadGenerationRef.current += 1;
     bookLoadGenerationRef.current += 1;
+    bookSessionRef.current += 1;
     cancelStreamingFrame();
     streamingPending.current = null;
   }, []);
@@ -519,6 +526,17 @@ function App() {
     bookRef.current = book;
   }, [book]);
 
+  const hasLocalEditorDraft = (bookId: string) => {
+    const active = document.activeElement;
+    // Native composition/selection and local forms may not have reached Book yet.
+    return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      || Boolean(mainContent.current?.querySelector('.inline-title-input, .block-editor-page, .source-editor-page, dialog[open]'))
+      || [...contextToolDrafts.current.values()].some((session) => session.bookId === bookId && session.hasChanges)
+      || Boolean(navigationState.current.instruction.trim())
+      || Boolean(bookRef.current?.chapters.some((chapter) => chapter.sections.some((section) =>
+        sectionDraftsRef.current[sectionDraftKey(bookId, section.id)]?.instruction.trim())));
+  };
+
   useEffect(() => {
     if (!isDeviceRuntime) return undefined;
     const currentBookId = book?.id;
@@ -543,8 +561,20 @@ function App() {
       try {
         const incoming = JSON.parse(storedValue) as unknown;
         if (!isCachedBook(incoming, book.id) || incoming.updatedAt === persistedUpdatedAt.current) return;
-        if (persistedRevision.current === saveRevision.current && !busyRef.current) {
+        if (persistedRevision.current === saveRevision.current && !busyRef.current && !hasLocalEditorDraft(currentBookId)) {
           const loaded = normalizeBook(incoming);
+          const selected = selectionRef.current.sectionId;
+          if (selected && !loaded.chapters.some((chapter) => chapter.sections.some((item) => item.id === selected))) {
+            setSectionId('');
+            setInstruction('');
+            setContextToolsOpen(false);
+            setContextCompositionOpen(false);
+            setWriterBookSettingsOpen(false);
+            removeContextDraftSessions(loaded.id, new Set([selected]));
+            setView('shelf');
+            restoreShelfFocus.current = true;
+            setStatus('这个小节已在另一页删除，已返回本书目录。');
+          }
           bookRef.current = loaded;
           setBook(loaded);
           persistedUpdatedAt.current = loaded.updatedAt;
@@ -636,6 +666,7 @@ function App() {
     setLibrary([]);
     setBook(null);
     bookRef.current = null;
+    bookSessionRef.current += 1;
     setSectionId('');
     setInstruction('');
     sectionDraftsRef.current = {};
@@ -695,6 +726,10 @@ function App() {
     const candidate = normalizeBook(book);
     let cachedLocally = false;
     if (api.runtime === 'device') cachedLocally = cacheCurrentDraft(candidate);
+    if (saveConflictRef.current) {
+      setStatus(bookConflictMessage);
+      return;
+    }
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
@@ -740,14 +775,18 @@ function App() {
     const loadGeneration = ++bookLoadGenerationRef.current;
     const isCurrent = () => loadGeneration === bookLoadGenerationRef.current;
     const persistedOnly = options.persistedOnly ?? false;
-    if (book && book.id !== bookId && dirty && !persistedOnly) await saveCurrent();
-    if (!isCurrent()) return;
+    try {
+      if (book && book.id !== bookId && dirty && !persistedOnly) await saveCurrent();
+    } catch (error) { if (isCurrent()) throw error; return false; }
+    if (!isCurrent()) return false;
     rememberCurrentSectionDraft();
-    const { stored, loaded, draft, draftConflict, loadedDirty } = await resolveBookForLoad(bookId, {
-      ...options,
-      persistedOnly,
-    });
-    if (!isCurrent()) return;
+    let resolution: BookLoadResolution;
+    try {
+      resolution = await resolveBookForLoad(bookId, { ...options, persistedOnly });
+    } catch (error) { if (isCurrent()) throw error; return false; }
+    if (!isCurrent()) return false;
+    const { stored, loaded, draft, draftConflict, loadedDirty } = resolution;
+    bookSessionRef.current += 1;
     persistedUpdatedAt.current = stored.updatedAt;
     draftBaseUpdatedAt.current = !persistedOnly && !options.ignoreDraft && draft !== null ? draft.baseUpdatedAt : undefined;
     saveConflictRef.current = !persistedOnly && draftConflict;
@@ -762,6 +801,7 @@ function App() {
     setDirty(persistedOnly ? false : loadedDirty);
     if (!persistedOnly && draftConflict) setStatus(bookConflictMessage);
     setView('shelf');
+    return true;
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
@@ -775,10 +815,30 @@ function App() {
     setDirty(true);
   };
 
+  const navigateToBook = async (bookId: string) => {
+    if (busyRef.current && !bookNavigationPending.current) return;
+    bookNavigationPending.current = true;
+    busyRef.current = true;
+    setBusy(true);
+    const task = openBook(bookId);
+    const request = bookLoadGenerationRef.current;
+    try { await task; }
+    catch (error) {
+      if (request === bookLoadGenerationRef.current) setStatus(isBookConflictError(error)
+        ? bookConflictMessage : error instanceof Error ? error.message : '无法打开书目。');
+    } finally {
+      if (request === bookLoadGenerationRef.current) {
+        bookNavigationPending.current = false;
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
+  };
+
   const queueBookSave = (candidate: Book, revision: number, autosaveRevision?: number): Promise<Book> => {
     assertDeviceWriteAccess();
-    const owner = bookLoadGenerationRef.current;
-    const ownsBook = () => owner === bookLoadGenerationRef.current && bookRef.current?.id === candidate.id;
+    const owner = bookSessionRef.current;
+    const ownsBook = () => owner === bookSessionRef.current && bookRef.current?.id === candidate.id;
     const existing = saveFlights.current.get(revision);
     if (existing) return existing;
     let persisted = false;
@@ -823,6 +883,7 @@ function App() {
 
   const saveCurrent = async (candidateOverride?: Book) => {
     assertDeviceWriteAccess();
+    const owner = bookSessionRef.current;
     const currentBook = candidateOverride ?? bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook(currentBook);
@@ -834,7 +895,7 @@ function App() {
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     if (api.runtime === 'device') cacheCurrentDraft(candidate);
     const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
-    if (saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
+    if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
     if (api.runtime === 'device') {
       clearCurrentDraft(saved.id);
     }
@@ -857,7 +918,7 @@ function App() {
     assertDeviceWriteAccess();
     const currentBook = bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
-    const owner = bookLoadGenerationRef.current;
+    const owner = bookSessionRef.current;
     const candidate = normalizeBook({
       ...recipe(currentBook),
       updatedAt: new Date().toISOString(),
@@ -873,7 +934,7 @@ function App() {
     try {
       const saved = normalizeBook(await queueBookSave(candidate, revision));
       // The write succeeded, but later edits still own the visible Book.
-      if (owner !== bookLoadGenerationRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) return saved;
+      if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) return saved;
       if (api.runtime === 'device') {
         clearCurrentDraft(saved.id);
       }
@@ -889,7 +950,7 @@ function App() {
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
       return saved;
     } catch (error) {
-      if (owner !== bookLoadGenerationRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) throw error;
+      if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) throw error;
       if (!deferCommit && !isBookConflictError(error)) {
         bookRef.current = currentBook;
         setBook(currentBook);
@@ -1490,6 +1551,9 @@ function App() {
       rememberCurrentSectionDraft();
       const created = await api.createBook(title);
       const normalizedCreated = normalizeBook(created);
+      bookSessionRef.current += 1;
+      bookLoadGenerationRef.current += 1;
+      bookRef.current = normalizedCreated;
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
       setBook(normalizedCreated);
       draftBaseUpdatedAt.current = undefined;
@@ -1523,6 +1587,8 @@ function App() {
       rememberCurrentSectionDraft();
     }
     const restored = normalizeBook(await api.importBook(imported));
+    bookSessionRef.current += 1;
+    bookLoadGenerationRef.current += 1;
     const revision = advanceSaveRevision();
     persistedUpdatedAt.current = restored.updatedAt;
     draftBaseUpdatedAt.current = undefined;
@@ -1562,6 +1628,8 @@ function App() {
       setDirty(false);
       await saveQueue.current.catch(() => undefined);
       await api.deleteBook(deletedBook.id);
+      bookSessionRef.current += 1;
+      bookLoadGenerationRef.current += 1;
       removeContextDraftSessions(deletedBook.id);
       removeDraftBook(deletedBook.id);
       setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
@@ -1910,7 +1978,7 @@ function App() {
   const reloadCurrentBook = async () => {
     if (!book) return;
     if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
-    await openBook(book.id, { ignoreDraft: true });
+    if (!await openBook(book.id, { ignoreDraft: true })) return;
     clearCurrentDraft(book.id);
     setStatus('已重新载入当前书目。');
   };
@@ -2120,7 +2188,7 @@ function App() {
                 mainContent.current?.querySelector<HTMLElement>('.writer-book-settings-button')?.focus();
               });
             }}
-            onOpenBook={(id) => void withBusy(async () => { await openBook(id); })}
+            onOpenBook={(id) => void navigateToBook(id)}
             onOpenSection={(id) => {
               if (busy) return;
               rememberCurrentSectionDraft();

@@ -170,6 +170,138 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', new MemoryStorage());
 });
 
+describe('App Book navigation save sessions', () => {
+  const installNavigationApi = (saveGate: Deferred<Response>, loadGate?: Deferred<Response>) => {
+    const first = makeBook();
+    const other = { ...makeBook(), id: 'other-book', title: '另一部合成书' };
+    const third = { ...makeBook(), id: 'third-book', title: '第三部合成书' };
+    let persisted = structuredClone(first);
+    const saves: Array<{ book: Book; expectedUpdatedAt: string }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/library') return jsonResponse([first, other, third].map(({ id, title, updatedAt }) => ({ id, title, updatedAt })));
+      if (url === `/api/books/${third.id}`) return jsonResponse(third);
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === `/api/books/${other.id}`) return loadGate ? loadGate.promise : jsonResponse(other);
+      if (url === `/api/books/${first.id}` && init?.method === 'PUT') {
+        const payload = JSON.parse(String(init.body)) as { book: Book; expectedUpdatedAt: string };
+        saves.push(payload);
+        const response = saves.length === 1 ? await saveGate.promise
+          : payload.expectedUpdatedAt === persisted.updatedAt ? jsonResponse({ ...payload.book, updatedAt: 'R2' })
+            : jsonResponse({ error: 'BOOK_VERSION_CONFLICT', code: 'BOOK_VERSION_CONFLICT' }, 409);
+        if (response.ok) persisted = await response.clone().json() as Book;
+        return response;
+      }
+      if (url === `/api/books/${first.id}`) return jsonResponse(persisted);
+      throw new Error(`Unexpected navigation test request: ${url}`);
+    }));
+    return { first, other, saves, persisted: () => persisted };
+  };
+
+  const switchBook = async (container: HTMLElement) => {
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="返回故事书架"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.book-list button')]
+      .find((button) => button.textContent?.includes('另一部合成书'))!.click());
+    await flushMicrotasks();
+  };
+
+  it('advances the departing Book baseline before saving newer edits and opening another Book', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const gate = deferred<Response>();
+    const apiState = installNavigationApi(gate);
+    const { container, root } = await renderApp();
+    try {
+      const note = container.querySelector<HTMLTextAreaElement>('#author-note-input')!;
+      await setTextAreaValue(note, '第一次修改');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      await setTextAreaValue(note, '第二次修改');
+      await switchBook(container);
+      await act(async () => gate.resolve(jsonResponse({ ...apiState.saves[0]!.book, updatedAt: 'R1' })));
+      await flushMicrotasks();
+      expect(apiState.saves).toHaveLength(2);
+      expect(apiState.saves[1]!.expectedUpdatedAt).toBe('R1');
+      expect(apiState.persisted().chapters[0]!.sections[0]!.note).toBe('第二次修改');
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(apiState.other.title);
+      expect(container.textContent).not.toContain('版本冲突');
+    } finally { await unmount(root); }
+  });
+
+  it('keeps the newest edits when the first save and the leaving save fail', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const gate = deferred<Response>();
+    const apiState = installNavigationApi(gate);
+    const { container, root } = await renderApp();
+    try {
+      const note = container.querySelector<HTMLTextAreaElement>('#author-note-input')!;
+      await setTextAreaValue(note, '第一次修改');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      await setTextAreaValue(note, '应保留的最新修改');
+      await switchBook(container);
+      // A real conflict keeps the page's newer Book; it must never open B.
+      await act(async () => gate.resolve(jsonResponse({ error: '另一保存已更新', code: 'BOOK_VERSION_CONFLICT' }, 409)));
+      await flushMicrotasks();
+      expect(apiState.saves).toHaveLength(1);
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(apiState.first.title);
+      await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+      expect(container.querySelector<HTMLTextAreaElement>('#author-note-input')!.value).toBe('应保留的最新修改');
+    } finally { await unmount(root); }
+  });
+
+  it('retains the current Book and usable saving after the target load fails', async () => {
+    const load = deferred<Response>();
+    const apiState = installNavigationApi(deferred<Response>(), load);
+    const { container, root } = await renderApp();
+    try {
+      await switchBook(container);
+      await act(async () => load.resolve(jsonResponse({ error: '合成加载失败' }, 500)));
+      await flushMicrotasks();
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(apiState.first.title);
+      expect(container.textContent).toContain('合成加载失败');
+      await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+      expect(container.querySelector('.writer-page')).not.toBeNull();
+    } finally { await unmount(root); }
+  });
+
+  it('saves the newer edits after a failed first PUT without inventing a version conflict', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const gate = deferred<Response>();
+    const apiState = installNavigationApi(gate);
+    const { container, root } = await renderApp();
+    try {
+      const note = container.querySelector<HTMLTextAreaElement>('#author-note-input')!;
+      await setTextAreaValue(note, '第一次修改');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      await setTextAreaValue(note, '失败后仍需保存的最新修改');
+      await switchBook(container);
+      await act(async () => gate.resolve(jsonResponse({ error: '合成临时保存失败' }, 500)));
+      await flushMicrotasks();
+      expect(apiState.saves).toHaveLength(2);
+      expect(apiState.saves[1]!.expectedUpdatedAt).toBe(apiState.first.updatedAt);
+      expect(apiState.persisted().chapters[0]!.sections[0]!.note).toBe('失败后仍需保存的最新修改');
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(apiState.other.title);
+    } finally { await unmount(root); }
+  });
+
+  it.each([true, false])('ignores a superseded target load (success=%s)', async (success) => {
+    const load = deferred<Response>();
+    installNavigationApi(deferred<Response>(), load);
+    const { container, root } = await renderApp();
+    try {
+      await switchBook(container);
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.book-list button')]
+        .find((button) => button.textContent?.includes('第三部合成书'))!.click());
+      await flushMicrotasks();
+      await act(async () => load.resolve(success
+        ? jsonResponse({ ...makeBook(), id: 'other-book', title: '过时加载结果' })
+        : jsonResponse({ error: '过时加载错误' }, 500)));
+      await flushMicrotasks();
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain('第三部合成书');
+      expect(container.textContent).not.toContain('过时加载');
+    } finally { await unmount(root); }
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
   document.body.innerHTML = '';

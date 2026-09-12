@@ -188,7 +188,7 @@ describe('directory organization UI', () => {
     try {
       const chapter = container.querySelector<HTMLDetailsElement>('.chapter-card > details')!;
       await act(async () => { chapter.open = false; });
-      await act(async () => chapter.querySelector('.inline-title-display')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      await act(async () => chapter.querySelector('.inline-title-display')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
       expect(chapter.open).toBe(false);
       expect(chapter.querySelector('.inline-title-input')).not.toBeNull();
       expect(onOpenSection).not.toHaveBeenCalled();

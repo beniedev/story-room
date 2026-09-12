@@ -11,6 +11,7 @@ import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 const apiControls = vi.hoisted(() => ({
   loadPersistedBook: vi.fn(),
+  saveBook: vi.fn(),
 }));
 
 vi.mock('../src/api', async () => {
@@ -21,6 +22,7 @@ vi.mock('../src/api', async () => {
       runtime: 'device' as const,
       ...deviceLibrary,
       loadPersistedBook: apiControls.loadPersistedBook,
+      saveBook: apiControls.saveBook,
       storageLocation: async () => ({ location: 'synthetic-device' }),
       listProviderProfiles: async () => [],
       saveProviderProfile: async (profile: unknown) => profile,
@@ -195,6 +197,8 @@ beforeEach(() => {
   environment = installFakeDeviceLocks();
   apiControls.loadPersistedBook.mockReset();
   apiControls.loadPersistedBook.mockImplementation((bookId: string) => deviceLibrary.loadPersistedBook(bookId));
+  apiControls.saveBook.mockReset();
+  apiControls.saveBook.mockImplementation(deviceLibrary.saveBook);
 });
 
 afterEach(async () => {
@@ -212,6 +216,88 @@ afterEach(async () => {
 });
 
 describe('device pages coordinate writes without editor ownership', () => {
+  it.each(['section', 'chapter', 'last-section'])('returns to the directory after external deletion of the current %s', async (kind) => {
+    const [book] = firstTwoBooks();
+    if (kind === 'last-section') book.chapters[0]!.sections = book.chapters[0]!.sections.slice(0, 1);
+    seedBooks([book]);
+    const { container } = await renderApp();
+    await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+    expect(container.querySelector('.writer-page')).not.toBeNull();
+    const updated = structuredClone(book);
+    if (kind === 'chapter') updated.chapters.shift();
+    else updated.chapters[0]!.sections.shift();
+    const saved = await deviceLibrary.saveBook(updated, book.updatedAt);
+    await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: bookKey(book.id), newValue: JSON.stringify(saved) })));
+    expect(container.querySelector('.book-selector-card')).not.toBeNull();
+    expect(container.textContent).toContain('这个小节已在另一页删除');
+    expect(container.querySelector('.writer-page')).toBeNull();
+  });
+
+  it.each(['title', 'instruction', 'composition'])('protects uncommitted %s input before replacing a deleted section', async (kind) => {
+    const [book] = firstTwoBooks();
+    seedBooks([book]);
+    const { container } = await renderApp();
+    await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+    let control: HTMLInputElement | HTMLTextAreaElement;
+    if (kind === 'title') {
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-heading .inline-title-display')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
+      control = container.querySelector<HTMLInputElement>('.inline-title-input')!;
+      await setControlValue(control, '尚未提交的标题');
+    } else {
+      control = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+      await act(async () => {
+        if (kind === 'composition') control.focus();
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(control, '尚未发送的输入');
+        if (kind !== 'composition') control.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    const value = control.value;
+    const updated = structuredClone(book);
+    updated.chapters[0]!.sections.shift();
+    const saved = await deviceLibrary.saveBook(updated, book.updatedAt);
+    await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: bookKey(book.id), newValue: JSON.stringify(saved) })));
+    expect(control.isConnected).toBe(true);
+    expect(control.value).toBe(value);
+    expect(container.querySelector('.writer-page')).not.toBeNull();
+    expect(container.textContent).toContain('当前本地内容仍保留');
+  });
+
+  it('does not let a late successful save own a reloaded session of the same Book', async () => {
+    const [book] = firstTwoBooks();
+    seedBooks([book]);
+    const response = deferred<void>();
+    let written: Book | undefined;
+    apiControls.saveBook.mockImplementationOnce(async (candidate: Book, expected: string) => {
+      written = await deviceLibrary.saveBook(candidate, expected);
+      await response.promise;
+      return written;
+    });
+    const { container } = await renderApp();
+    await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.writer-heading .inline-title-display')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })));
+    const input = container.querySelector<HTMLInputElement>('.inline-title-input')!;
+    await setControlValue(input, '已写入的新标题');
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    await flushMicrotasks();
+    expect(written).toBeDefined();
+    await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: bookKey(book.id), newValue: JSON.stringify(written) })));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="返回故事书架"]')!.click());
+    vi.stubGlobal('confirm', () => true);
+    const reload = container.querySelector<HTMLButtonElement>('[aria-label="重新载入当前书目"]')!;
+    await act(async () => reload.click());
+    await flushMicrotasks();
+    expect(container.querySelector('.book-selector-card')).not.toBeNull();
+    await act(async () => response.resolve());
+    await flushMicrotasks();
+    expect(container.querySelector('.book-selector-card')).not.toBeNull();
+    expect(container.textContent).not.toContain('当前本地内容仍保留');
+    expect(sessionStorage.getItem(draftKey(book.id))).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+    expect(container.querySelector('.writer-heading')?.textContent).toContain('已写入的新标题');
+  });
+
   it('keeps saved Books readable and exportable when coordination fails', async () => {
     seedBooks(firstTwoBooks());
     environment.locks.rejectNext();
@@ -259,5 +345,24 @@ describe('device pages coordinate writes without editor ownership', () => {
     expect(exportButton).not.toBeNull();
     await act(async () => exportButton!.click());
     expect(storage.operations.filter(({ key }) => key?.startsWith('story-native:book:') || key?.startsWith('story-native:draft:'))).toEqual([]);
+  });
+
+  it('does not block updates to a clean Book because another Book has an unsent draft', async () => {
+    const [first, second] = firstTwoBooks();
+    seedBooks([first, second]);
+    const { container } = await renderApp();
+    await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
+    const input = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '只属于第一本书的草稿');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="返回故事书架"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.book-list button')].find((button) => button.textContent?.includes(second.title))!.click());
+    await flushMicrotasks();
+    const saved = await deviceLibrary.saveBook({ ...second, title: '另一书目的外部更新' }, second.updatedAt);
+    await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: bookKey(second.id), newValue: JSON.stringify(saved) })));
+    expect(container.querySelector('.book-selector-card')?.textContent).toContain(saved.title);
+    expect(container.textContent).not.toContain('当前本地内容仍保留');
   });
 });

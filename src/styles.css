@@ -2071,6 +2071,21 @@ h4 {
   min-height: 44px;
 }
 
+.chapter-card > details > summary:hover,
+.chapter-card > details > summary:has(.inline-title-display:focus-visible),
+.section-row:hover .section-open,
+.section-row:has(.inline-title-display:focus-visible) .section-open {
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.section-row:hover .section-title-cell,
+.section-row:has(.inline-title-display:focus-visible) .section-title-cell,
+.section-row[data-selected="true"] .section-title-cell,
+.section-row:has(.section-open[aria-current]) .section-title-cell {
+  color: var(--accent-strong);
+}
+
 .selection-mode .section-row {
   grid-template-columns: 3.25rem minmax(0, 1fr) 2.75rem 2.75rem;
 }
@@ -3976,8 +3991,14 @@ h4 {
   min-width: 0;
 }
 
-.inline-title-display {
+.inline-title-display,
+.inline-title-display:hover,
+.inline-title-display:active {
   background: transparent;
+  color: inherit;
+  border-color: transparent;
+  box-shadow: none;
+  scale: none;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -3993,6 +4014,20 @@ h4 {
   max-width: 100%;
   flex: 1 1 12rem;
   padding: 0.25rem 0.4rem;
+}
+
+.inline-title-display:focus-visible {
+  outline: none;
+}
+
+.writer-heading .inline-title-display:focus-visible {
+  color: var(--accent-strong);
+}
+
+.chapter-title-cell .inline-title:has(.inline-title-input),
+.section-title-cell .inline-title:has(.inline-title-input) {
+  display: flex;
+  min-height: 44px;
 }
 
 .inline-title-status {

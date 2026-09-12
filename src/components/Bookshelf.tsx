@@ -1507,12 +1507,6 @@ export function Bookshelf(props: BookshelfProps) {
                             event.preventDefault();
                             return;
                           }
-                          const target = event.target;
-                          if (target instanceof Element
-                            && target.closest('.chapter-title-cell')
-                            && !(target instanceof HTMLInputElement)) {
-                            event.preventDefault();
-                          }
                         }}
                         onClick={(event) => {
                           if (!selectionMode) return;
@@ -1532,6 +1526,13 @@ export function Bookshelf(props: BookshelfProps) {
                               value={chapter.title}
                               label="章节名称"
                               disabled={!canWrite}
+                              onActivate={() => setOpenChapterIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(chapter.id)) next.delete(chapter.id);
+                                else next.add(chapter.id);
+                                return next;
+                              })}
+                              title="单击展开或收起，双击修改标题"
                               onSave={(title) => props.onRenameChapter(chapter.id, title)}
                               className="chapter-inline-title"
                             />}
@@ -1610,6 +1611,8 @@ export function Bookshelf(props: BookshelfProps) {
                                     value={section.title}
                                     label="小节名称"
                                     disabled={!canWrite}
+                                    onActivate={() => props.onOpenSection(section.id)}
+                                    title="单击打开，双击修改标题"
                                     onSave={(title) => props.onRenameSection(chapter.id, section.id, title)}
                                     className="section-inline-title"
                                   />}
