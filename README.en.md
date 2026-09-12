@@ -42,6 +42,17 @@ The default bind address is `127.0.0.1`. To use the same host from another devic
 
 Configured Providers may use HTTP or HTTPS on public, loopback, LAN, or private-network addresses without an extra opt-in flag. Metadata and link-local targets and redirects remain rejected to avoid sending credentials to unintended services.
 
+### Try the hosted build on your computer
+
+To explore the browser edition with demo books, run:
+
+```bash
+npm run build
+npm run preview
+```
+
+Open the address shown in the terminal, normally `http://localhost:4327`. This previews the same build and web runtime used for cloud hosting: demo books and your changes stay in this browser, and continuations use the Fake Provider without a key. It does not start the file-based library server or publish anything to the cloud. Press Ctrl+C to stop the preview.
+
 ## Connecting an AI service
 
 In local-host mode, you choose the Provider and model. The app sends the writing material included in your context plan to that service, so choose an endpoint you trust. Your model selection is remembered in this browser. Connection settings and API keys stay on the host, separately from your books.

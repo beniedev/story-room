@@ -1958,14 +1958,14 @@ h4 {
   gap: 0.3rem;
 }
 
-.chapter-card summary > span:nth-child(2),
+.chapter-card > details:not(.directory-object-menu) > summary > span:nth-child(2),
 .section-title-cell {
   display: grid;
   gap: 0.18rem;
   min-width: 0;
 }
 
-.chapter-card summary > span:last-child {
+.chapter-card > details:not(.directory-object-menu) > summary > span:last-child {
   color: var(--muted);
   font-size: 0.74rem;
   white-space: nowrap;
@@ -1992,7 +1992,7 @@ h4 {
   margin: 0;
 }
 
-.chapter-card summary {
+.chapter-card > details:not(.directory-object-menu) > summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -2099,17 +2099,17 @@ h4 {
   margin: 0;
 }
 
-.directory-panel .chapter-card summary {
+.directory-panel .chapter-card > details:not(.directory-object-menu) > summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.8rem;
   min-height: 56px;
-  padding: 0.7rem 6.4rem 0.7rem 0.8rem;
+  padding: 0.7rem 7.2rem 0.7rem 0.8rem;
 }
 
-.selection-mode .chapter-card summary {
-  padding-inline-end: 0.8rem;
+.selection-mode .chapter-card > details:not(.directory-object-menu) > summary {
+  padding-inline-end: 3.7rem;
 }
 
 .selection-mode .chapter-index {
@@ -2133,7 +2133,7 @@ h4 {
 .section-row {
   position: relative;
   display: grid;
-  grid-template-columns: 3.25rem minmax(0, 1fr) 2.75rem;
+  grid-template-columns: 3.25rem minmax(0, 1fr) 2.75rem 2.75rem;
   align-items: stretch;
   min-width: 0;
   min-height: 44px;
@@ -2149,7 +2149,7 @@ h4 {
   gap: 0.75rem;
   width: 100%;
   min-height: 44px;
-  padding: 0.7rem 0.8rem;
+  padding: 0.7rem 3.55rem 0.7rem 0.8rem;
   text-align: start;
 }
 
@@ -2210,6 +2210,293 @@ h4 {
 
 .selection-mode .section-title-cell strong {
   pointer-events: none;
+}
+
+.directory-object-menu {
+  position: relative;
+  z-index: 3;
+  margin: 0;
+}
+
+.directory-object-menu[open] {
+  z-index: 20;
+}
+
+.directory-object-menu > summary {
+  list-style: none;
+}
+
+.directory-object-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.directory-panel .directory-object-menu > summary {
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: inherit;
+}
+
+.chapter-object-menu {
+  position: absolute;
+  inset-block-start: 0.35rem;
+  inset-inline-end: 0.35rem;
+}
+
+.section-object-menu {
+  grid-column: 4;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+}
+
+.directory-object-menu-trigger {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+}
+
+.directory-object-menu[open] .directory-object-menu-trigger,
+.directory-object-menu-trigger:hover,
+.directory-object-menu-trigger:focus-visible {
+  background: var(--surface-active);
+  color: var(--accent-strong);
+}
+
+.directory-object-menu-panel {
+  position: absolute;
+  inset-block-start: calc(100% + 0.25rem);
+  inset-inline-end: 0;
+  display: grid;
+  min-width: 12rem;
+  padding: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 14%);
+}
+
+.directory-object-menu-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 44px;
+  padding: 0.55rem 0.65rem;
+  text-align: start;
+  white-space: nowrap;
+}
+
+.directory-object-menu-action svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.directory-drag-handle {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 1px dashed color-mix(in srgb, var(--muted) 38%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--surface) 85%, var(--accent) 15%);
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.directory-drag-handle:active {
+  cursor: grabbing;
+}
+
+.directory-drag-handle svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.chapter-drag-handle {
+  position: absolute;
+  inset-block-start: 0.35rem;
+  inset-inline-end: 0.35rem;
+}
+
+.section-drag-handle {
+  grid-column: 4;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+}
+
+.chapter-card:has(> .chapter-object-menu[open]),
+.section-row:has(> .section-object-menu[open]) {
+  z-index: 20;
+}
+
+.chapter-card[data-dragging="true"],
+.section-row[data-dragging="true"] {
+  opacity: 0.62;
+}
+
+.chapter-card[data-drop-target="true"] > details > summary,
+.section-row[data-drop-target="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.inline-new-section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.2rem 0.45rem;
+  border: 1px dashed color-mix(in srgb, var(--muted) 38%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--surface-soft);
+}
+
+.inline-new-section-field {
+  min-width: 0;
+}
+
+.inline-new-section-field input {
+  width: 100%;
+  min-height: 44px;
+}
+
+.inline-new-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 0.3rem;
+}
+
+.inline-new-section-actions button {
+  min-height: 44px;
+}
+
+.inline-new-section-error {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--danger, #a43a3a);
+  font-size: 0.75rem;
+}
+
+.directory-operation-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.7rem;
+  margin-block: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--surface-soft);
+}
+
+.directory-operation-status > div {
+  min-width: 0;
+}
+
+.directory-operation-status p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.directory-operation-status small {
+  display: block;
+  margin-block-start: 0.2rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.directory-operation-status details {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.directory-operation-status details summary {
+  min-height: 44px;
+  padding: 0.55rem 0;
+  background: transparent;
+  font-size: 0.78rem;
+}
+
+.directory-operation-status ul,
+.directory-move-impact ul {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.35rem 0 0;
+  padding-inline-start: 1.15rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.confirm-dialog.directory-move-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  max-width: none;
+}
+
+.directory-move-dialog-body {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.directory-move-dialog-body > p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.directory-move-field {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.directory-move-field select {
+  width: 100%;
+  min-height: 44px;
+}
+
+.directory-move-impact {
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-card);
+  background: var(--surface-soft);
+}
+
+.directory-move-impact > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.directory-move-impact-note {
+  margin-block-start: 0.25rem !important;
+  font-size: 0.72rem !important;
+}
+
+.directory-move-impact details {
+  margin-block-start: 0.35rem;
+}
+
+.directory-move-impact details summary {
+  min-height: 44px;
+  padding: 0.5rem 0;
+  background: transparent;
+  font-size: 0.78rem;
 }
 
 .empty-section {
@@ -3753,11 +4040,11 @@ h4 {
     padding-inline: 0.4rem;
   }
 
-  .chapter-card summary {
+  .chapter-card > details:not(.directory-object-menu) > summary {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .chapter-card summary > span:last-child {
+  .chapter-card > details:not(.directory-object-menu) > summary > span:last-child {
     display: none;
   }
 

@@ -11,6 +11,7 @@ export const applySummaryReferenceSelection = (
   book: Book,
   targetSectionId: string,
   entries: Array<{ sourceSectionId: string; draft: SectionMemoryDraft; provenance: SectionMemoryProvenance }>,
+  retainedInactiveSectionIds?: string[],
 ): Book => {
   const sections = book.chapters.flatMap((chapter) => chapter.sections);
   const targetOrdinal = sections.findIndex((section) => section.id === targetSectionId);
@@ -23,9 +24,18 @@ export const applySummaryReferenceSelection = (
     const source = sections[sourceOrdinal];
     sources.set(source.id, commitSectionMemoryDraft(source, entry.draft, entry.provenance));
   }
+  const inactiveReferences = (sections[targetOrdinal].contextReferences ?? []).filter((reference) => {
+    const sourceOrdinal = sections.findIndex((section) => section.id === reference.sectionId);
+    return sourceOrdinal >= targetOrdinal;
+  });
+  if (retainedInactiveSectionIds?.some((id) => !inactiveReferences.some((reference) => reference.sectionId === id))) {
+    throw new Error('待保留的前文引用已经改变，请重新查看后确认。');
+  }
   const references: SectionContextReference[] = [...sources.keys()].map((sectionId) => ({
     sectionId, mode: 'summary', reason: 'manual',
   }));
+  references.push(...inactiveReferences.filter((reference) => retainedInactiveSectionIds === undefined
+    || retainedInactiveSectionIds.includes(reference.sectionId)));
   return {
     ...book,
     chapters: book.chapters.map((chapter) => ({

@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from 'react';
+import { act, type ReactNode, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ContextCompositionDrawer } from '../src/components/ContextCompositionDrawer';
 import { ContextToolsDrawer } from '../src/components/ContextToolsDrawer';
 import { SourceLoadScopePage } from '../src/components/Bookshelf';
+import { contextToolDraftKey, type ContextToolDraftSession } from '../src/contextToolDrafts';
 import type {
   Book,
   ContextPlan,
   PromptBlock,
   SectionMemoryDraft,
+  SectionMemoryProvenance,
 } from '../src/types';
 import { hashSectionContent } from '../src/sectionMemory';
 
@@ -283,6 +285,440 @@ describe('context drawers real interactions', () => {
     await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
     expect(container.textContent).toContain('请先填写或生成梗概，或取消勾选；不会加载原文。');
     expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
+    await unmount(root);
+  });
+
+  it('restores a session draft after closing and clears it only on explicit discard', async () => {
+    const book = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    const props = { ...makeToolProps(book), sessionDrafts };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => disclosure?.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !textarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(textarea, '会话内修改的梗概');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    expect(sessionDrafts.get(key)?.hasChanges).toBe(true);
+
+    await act(async () => root.render(<ContextToolsDrawer {...props} open={false} />));
+    await act(async () => root.render(<ContextToolsDrawer {...props} open />));
+    const reopenedDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="收起已有 Memory梗概"]');
+    expect(reopenedDisclosure).toBeTruthy();
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')?.value)
+      .toBe('会话内修改的梗概');
+    expect(container.textContent).toContain('放弃本次修改');
+
+    const discard = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('放弃本次修改'));
+    await act(async () => discard?.click());
+    expect(sessionDrafts.has(key)).toBe(false);
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')).toBeNull();
+    await unmount(root);
+  });
+
+  it('keeps a late generation in its original target session after switching sections', async () => {
+    const book = makeBook();
+    const switchedBook: Book = {
+      ...book,
+      chapters: book.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.map((item) => item.id === 'target-ui'
+          ? { ...item, id: 'target-other', title: '另一个当前小节', contextReferences: [] }
+          : item),
+      })),
+    };
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let resolveGeneration!: (draft: SectionMemoryDraft) => void;
+    const props = {
+      ...makeToolProps(book),
+      sessionDrafts,
+      onGenerateMemory: vi.fn(() => new Promise<SectionMemoryDraft>((resolve) => {
+        resolveGeneration = resolve;
+      })),
+    };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    await act(async () => disclosure?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-generate')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认生成'));
+    await act(async () => confirm?.click());
+    await act(async () => root.render(
+      <ContextToolsDrawer
+        {...props}
+        open={false}
+        book={switchedBook}
+        section={switchedBook.chapters[0]!.sections[4]!}
+      />,
+    ));
+    await act(async () => root.render(
+      <ContextToolsDrawer
+        {...props}
+        open
+        book={switchedBook}
+        section={switchedBook.chapters[0]!.sections[4]!}
+      />,
+    ));
+
+    await act(async () => {
+      resolveGeneration(memoryDraft);
+      await Promise.resolve();
+    });
+    const oldKey = contextToolDraftKey(book.id, 'target-ui');
+    expect(sessionDrafts.get(oldKey)?.generatedDrafts['source-no-memory']).toEqual(memoryDraft);
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-no-memory')).toBeNull();
+    await unmount(root);
+  });
+
+  it('does not recreate a discarded session when its generation resolves late', async () => {
+    const book = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let resolveGeneration!: (draft: SectionMemoryDraft) => void;
+    const props = {
+      ...makeToolProps(book),
+      sessionDrafts,
+      onGenerateMemory: vi.fn(() => new Promise<SectionMemoryDraft>((resolve) => {
+        resolveGeneration = resolve;
+      })),
+    };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]')?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-generate')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认生成'));
+    await act(async () => confirm?.click());
+    const close = container.querySelector<HTMLButtonElement>('.confirm-dialog [aria-label="关闭确认"]');
+    await act(async () => close?.click());
+    const discard = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('放弃本次修改'));
+    await act(async () => discard?.click());
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    expect(sessionDrafts.has(key)).toBe(false);
+
+    await act(async () => {
+      resolveGeneration(memoryDraft);
+      await Promise.resolve();
+    });
+    expect(sessionDrafts.has(key)).toBe(false);
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-no-memory')).toBeNull();
+    await unmount(root);
+  });
+
+  it('drops source ids that no longer exist and keeps read-only expansion out of pending drafts', async () => {
+    const book = makeBook();
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    const sessionDrafts = new Map<string, ContextToolDraftSession>([[key, {
+      bookId: book.id,
+      sectionId: 'target-ui',
+      hasChanges: true,
+      selectedSectionIds: ['source-ready', 'deleted-source'],
+      expandedSectionIds: ['deleted-source'],
+      memoryDrafts: { 'deleted-source': memoryDraft },
+      generatedDrafts: { 'deleted-source': memoryDraft },
+      summaryErrors: { 'deleted-source': '旧错误' },
+    }]]);
+    const bookWithoutSource: Book = {
+      ...book,
+      chapters: book.chapters.map((chapter) => ({
+        ...chapter,
+        sections: chapter.sections.filter((item) => item.id !== 'deleted-source'),
+      })),
+    };
+    const props = { ...makeToolProps(bookWithoutSource), sessionDrafts };
+    const { container, root } = await render(<ContextToolsDrawer {...props} canEdit={false} />);
+    expect(sessionDrafts.has(key)).toBe(false);
+    expect(container.textContent).not.toContain('旧错误');
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => disclosure?.click());
+    expect(sessionDrafts.has(key)).toBe(false);
+    await unmount(root);
+  });
+
+  it('keeps edited summaries and errors after a failed save', async () => {
+    const book = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    const props = {
+      ...makeToolProps(book),
+      sessionDrafts,
+      onSaveMemoriesAndLoad: vi.fn(async () => { throw new Error('书目暂时无法保存'); }),
+    };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => disclosure?.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !textarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(textarea, '保存失败后仍保留');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => {
+      confirm?.click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('梗概保存并加载失败');
+    expect(sessionDrafts.get(contextToolDraftKey(book.id, 'target-ui'))?.hasChanges).toBe(true);
+
+    await act(async () => root.render(<ContextToolsDrawer {...props} open={false} />));
+    await act(async () => root.render(<ContextToolsDrawer {...props} open />));
+    const reopened = container.querySelector<HTMLButtonElement>('[aria-label="收起已有 Memory梗概"]');
+    expect(reopened).toBeTruthy();
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')?.value)
+      .toBe('保存失败后仍保留');
+    await unmount(root);
+  });
+
+  it('does not revive a deleted session when an unedited save rejects after unmount', async () => {
+    const book = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let rejectSave!: (error: Error) => void;
+    const props = {
+      ...makeToolProps(book),
+      sessionDrafts,
+      onSaveMemoriesAndLoad: vi.fn(() => new Promise<void>((_resolve, reject) => {
+        rejectSave = reject;
+      })),
+    };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => {
+      confirm?.click();
+      await Promise.resolve();
+    });
+
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    expect(sessionDrafts.has(key)).toBe(true);
+    sessionDrafts.delete(key);
+    await unmount(root);
+    await act(async () => {
+      rejectSave(new Error('保存已取消'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(sessionDrafts.has(key)).toBe(false);
+  });
+
+  it('shows selected current-or-later references and reports explicit retention choices', async () => {
+    const baseBook = makeBook();
+    const baseChapter = baseBook.chapters[0]!;
+    const futureSection = { id: 'future-reference', title: '未来引用', content: '未来正文。' };
+    const targetSection = {
+      ...baseChapter.sections[4]!,
+      contextReferences: [
+        { sectionId: 'source-ready', mode: 'full' as const, reason: 'manual' as const },
+        { sectionId: 'future-reference', mode: 'summary' as const, reason: 'manual' as const },
+      ],
+    };
+    const book: Book = {
+      ...baseBook,
+      chapters: [{
+        ...baseChapter,
+        sections: [...baseChapter.sections.slice(0, 4), targetSection, futureSection],
+      }],
+    };
+    const props = makeToolProps(book, targetSection);
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    const futureDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开未来引用梗概"]');
+    const futureCheckbox = futureDisclosure?.closest('.context-reference-row')
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(container.textContent).toContain('位于当前小节或之后，暂不加载');
+    expect(futureCheckbox?.checked).toBe(true);
+    expect(futureCheckbox?.disabled).toBe(false);
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    expect(container.textContent).toContain('仍保留 1 条位于当前小节或之后的既有引用，但暂不进入上下文。');
+    const cancel = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '取消');
+    await act(async () => cancel?.click());
+    await act(async () => futureCheckbox?.click());
+    expect(futureCheckbox?.checked).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => confirm?.click());
+    expect(props.onSaveMemoriesAndLoad).toHaveBeenCalledWith([{
+      sourceSectionId: 'source-ready',
+      draft: memoryDraft,
+      provenance: 'manual',
+    }], []);
+    await unmount(root);
+  });
+
+  it('keeps the save confirmation through optimistic parent updates and clears only the saved session', async () => {
+    const initialBook = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let resolveSave!: () => void;
+    const saveFinished = new Promise<void>((resolve) => { resolveSave = resolve; });
+    let setCurrentBook: ((next: Book) => void) | undefined;
+    const onGenerateMemory = vi.fn(async () => memoryDraft);
+    const onClose = vi.fn();
+    const onCancelGeneration = vi.fn();
+    const onSaveMemoriesAndLoad = vi.fn(async (entries: Array<{
+      sourceSectionId: string;
+      draft: SectionMemoryDraft;
+      provenance: SectionMemoryProvenance;
+    }>) => {
+      const nextReferences = entries.map((entry) => ({
+        sourceSectionId: entry.sourceSectionId,
+        mode: 'summary' as const,
+        reason: 'manual' as const,
+      }));
+      setCurrentBook?.({
+        ...initialBook,
+        chapters: initialBook.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => item.id === 'target-ui'
+            ? { ...item, contextReferences: nextReferences.map((reference) => ({
+                sectionId: reference.sourceSectionId,
+                mode: reference.mode,
+                reason: reference.reason,
+              })) }
+            : item),
+        })),
+      });
+      await saveFinished;
+    });
+    function Harness() {
+      const [currentBook, updateBook] = useState(initialBook);
+      setCurrentBook = updateBook;
+      return (
+        <ContextToolsDrawer
+          open
+          book={currentBook}
+          section={currentBook.chapters[0]!.sections[4]!}
+          onGenerateMemory={onGenerateMemory}
+          onSaveMemoriesAndLoad={onSaveMemoriesAndLoad}
+          busy={false}
+          onCancelGeneration={onCancelGeneration}
+          onClose={onClose}
+          sessionDrafts={sessionDrafts}
+        />
+      );
+    }
+
+    const { container, root } = await render(<Harness />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => disclosure?.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !textarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(textarea, '父级保存中的梗概');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const noMemoryDisclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开无 Memory 前文梗概"]');
+    const noMemoryCheckbox = noMemoryDisclosure?.closest('.context-reference-row')
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    await act(async () => noMemoryCheckbox?.click());
+    await act(async () => noMemoryDisclosure?.click());
+    const noMemoryTextarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-no-memory');
+    if (!noMemoryTextarea) throw new Error('No-memory textarea is unavailable.');
+    await act(async () => {
+      valueSetter.call(noMemoryTextarea, '新增选择的梗概');
+      noMemoryTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => confirm?.click());
+    expect(onSaveMemoriesAndLoad).toHaveBeenCalledOnce();
+    expect(container.querySelector<HTMLDialogElement>('.confirm-dialog')?.textContent)
+      .toContain('正在保存并加载梗概…');
+
+    await act(async () => {
+      resolveSave();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector<HTMLDialogElement>('.confirm-dialog')?.textContent)
+      .toContain('梗概保存并加载成功');
+    expect(sessionDrafts.has(contextToolDraftKey(initialBook.id, 'target-ui'))).toBe(false);
+    const savedNoMemoryRow = [...container.querySelectorAll<HTMLElement>('.context-reference-row')]
+      .find((row) => row.textContent?.includes('无 Memory 前文'));
+    expect(savedNoMemoryRow?.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
+    await unmount(root);
+  });
+
+  it('does not clear a newer same-target edit when an older save resolves', async () => {
+    const initialBook = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let resolveSave!: () => void;
+    const saveFinished = new Promise<void>((resolve) => { resolveSave = resolve; });
+    let setCurrentBook: ((next: Book) => void) | undefined;
+    const onSaveMemoriesAndLoad = vi.fn(async (entries: Array<{
+      sourceSectionId: string;
+      draft: SectionMemoryDraft;
+      provenance: SectionMemoryProvenance;
+    }>) => {
+      setCurrentBook?.({
+        ...initialBook,
+        chapters: initialBook.chapters.map((chapter) => ({
+          ...chapter,
+          sections: chapter.sections.map((item) => item.id === 'target-ui'
+            ? { ...item, contextReferences: entries.map((entry) => ({
+                sectionId: entry.sourceSectionId,
+                mode: 'summary' as const,
+                reason: 'manual' as const,
+              })) }
+            : item),
+        })),
+      });
+      await saveFinished;
+    });
+    function Harness() {
+      const [currentBook, updateBook] = useState(initialBook);
+      setCurrentBook = updateBook;
+      return (
+        <ContextToolsDrawer
+          open
+          book={currentBook}
+          section={currentBook.chapters[0]!.sections[4]!}
+          onGenerateMemory={vi.fn(async () => memoryDraft)}
+          onSaveMemoriesAndLoad={onSaveMemoriesAndLoad}
+          busy={false}
+          onCancelGeneration={vi.fn()}
+          onClose={vi.fn()}
+          sessionDrafts={sessionDrafts}
+        />
+      );
+    }
+
+    const { container, root } = await render(<Harness />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]');
+    await act(async () => disclosure?.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !textarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(textarea, '首次保存的内容');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => confirm?.click());
+    await act(async () => {
+      valueSetter.call(textarea, '后续编辑必须保留');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      resolveSave();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(sessionDrafts.get(contextToolDraftKey(initialBook.id, 'target-ui'))?.hasChanges).toBe(true);
+    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')?.value)
+      .toBe('后续编辑必须保留');
     await unmount(root);
   });
 

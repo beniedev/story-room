@@ -371,7 +371,7 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(app).toMatch(/normalizeBook\(await \(options\.persistedOnly && api\.runtime === 'device'\s*\? api\.loadPersistedBook\(bookId\)\s*: api\.loadBook\(bookId\)\)\)/);
     expect(source).toContain('const candidate = normalizeBook(book);');
-    expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries)');
+    expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries, retainedInactiveSectionIds)');
     expect(source).toContain('source.ordinal >= targetOrdinal');
     expect(source).not.toContain("mode: 'full', reason: 'manual'");
     expect(source).not.toContain('应用建议');
@@ -557,7 +557,8 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const source = `${app}\n${shelf}\n${writer}\n${memory}\n${tools}`;
     expect(source).toContain("openNameDialog({ kind: 'new-book'");
-    expect(source).toContain("openNameDialog({ kind: 'new-section'");
+    expect(shelf).toContain('className="inline-new-section"');
+    expect(shelf).toContain('在下方新建小节');
     expect(source).toContain("openCurrentBookNameDialog({ kind: 'rename-book'");
     expect(shelf).toContain('<InlineTitle');
     expect(shelf).toContain('onRenameSection');

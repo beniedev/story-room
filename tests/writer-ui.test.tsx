@@ -416,6 +416,10 @@ describe('source selection visuals', () => {
       onAddSection: vi.fn(async () => undefined),
       onRenameChapter: vi.fn(async () => undefined),
       onRenameSection: vi.fn(async () => undefined),
+      onMoveDirectoryItem: vi.fn(async () => undefined),
+      onUndoDirectoryMove: vi.fn(async () => undefined),
+      canUndoDirectoryMove: false,
+      directoryBusy: false,
       onDeleteSelection: vi.fn(async () => undefined),
       onDeleteSources: vi.fn(async () => undefined),
     };
@@ -497,6 +501,10 @@ describe('source selection visuals', () => {
         onAddSection: vi.fn(async () => undefined),
         onRenameChapter: vi.fn(async () => undefined),
         onRenameSection: vi.fn(async () => undefined),
+        onMoveDirectoryItem: vi.fn(async () => undefined),
+        onUndoDirectoryMove: vi.fn(async () => undefined),
+        canUndoDirectoryMove: false,
+        directoryBusy: false,
         onDeleteSelection: vi.fn(async () => undefined),
         onDeleteSources: vi.fn(async () => undefined),
       };

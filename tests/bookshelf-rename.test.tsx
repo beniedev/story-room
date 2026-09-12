@@ -50,6 +50,10 @@ const renderBookshelf = async (overrides: Partial<ComponentProps<typeof Bookshel
     onAddSection: vi.fn(async () => undefined),
     onRenameChapter: vi.fn(async () => undefined),
     onRenameSection: vi.fn(async () => undefined),
+    onMoveDirectoryItem: vi.fn(async () => undefined),
+    onUndoDirectoryMove: vi.fn(async () => undefined),
+    canUndoDirectoryMove: false,
+    directoryBusy: false,
     onDeleteSelection: vi.fn(async () => undefined),
     onDeleteSources: vi.fn(async () => undefined),
     ...overrides,
@@ -132,9 +136,9 @@ describe('bookshelf directory title interactions', () => {
     const onOpenSection = vi.fn();
     const { container, root } = await renderBookshelf({ onOpenSection });
     try {
-      const selectionToggle = container.querySelector<HTMLButtonElement>('button[aria-label="选择章节或小节"]')!;
+      const selectionToggle = container.querySelector<HTMLButtonElement>('button[aria-label="整理目录"]')!;
       await act(async () => selectionToggle.click());
-      expect(container.querySelector('.directory-title-hint')).toBeNull();
+      expect(container.querySelector('.directory-title-hint')?.textContent).toContain('拖动把手调整顺序');
       expect(container.querySelector('.chapter-inline-title')).toBeNull();
       expect(container.querySelector('.section-inline-title')).toBeNull();
 

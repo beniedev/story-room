@@ -37,6 +37,8 @@ import {
   deleteDirectorySelection,
   type DirectorySelection,
 } from './directorySelection';
+import { moveDirectoryItem, reverseDirectoryMove, type DirectoryMove } from './directoryOperations';
+import type { ContextToolDraftSession } from './contextToolDrafts';
 import {
   deleteSourceSelection,
   type SourceSelectionKind,
@@ -378,6 +380,11 @@ function App() {
   const [dirty, setDirty] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
+  const [directoryBusy, setDirectoryBusy] = useState(false);
+  const [directoryUndo, setDirectoryUndo] = useState<{ bookId: string; move: DirectoryMove } | null>(null);
+  const directoryBusyRef = useRef(false);
+  const contextToolDrafts = useRef(new Map<string, ContextToolDraftSession>());
+  const pendingContextDrafts = useRef(false);
   const [generationState, setGenerationState] = useState<'idle' | 'generating'>('idle');
   const [status, setStatus] = useState(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
   const [deviceWriterState, setDeviceWriterState] = useState<DeviceWriterState>(
@@ -479,6 +486,16 @@ function App() {
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
   const sectionChapter = useMemo(() => book?.chapters.find((chapter) =>
     chapter.sections.some((candidate) => candidate.id === sectionId)), [book, sectionId]);
+  useEffect(() => { setDirectoryUndo(null); }, [book?.id]);
+
+  const removeContextDraftSessions = (bookId: string, removedSectionIds?: Set<string>) => {
+    for (const [key, session] of contextToolDrafts.current) {
+      if (session.bookId === bookId && (!removedSectionIds || removedSectionIds.has(session.sectionId))) {
+        contextToolDrafts.current.delete(key);
+      }
+    }
+    pendingContextDrafts.current = [...contextToolDrafts.current.values()].some((session) => session.hasChanges);
+  };
   const authorNote = section?.note ?? '';
   const activeProviderProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
     ?? providerProfiles[0];
@@ -636,7 +653,7 @@ function App() {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
       const current = navigationState.current;
       const hasDraft = Object.values(current.sectionDrafts).some((draft) => draft.instruction.trim());
-      if (!current.dirty && !current.busy && !current.instruction.trim() && !hasDraft) return;
+      if (!current.dirty && !current.busy && !current.instruction.trim() && !hasDraft && !pendingContextDrafts.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -997,7 +1014,7 @@ function App() {
     return saved;
   };
 
-  const commitBookChange = async (recipe: (current: Book) => Book) => {
+  const commitBookChange = async (recipe: (current: Book) => Book, deferCommit = false) => {
     assertDeviceWriteAccess();
     const currentBook = bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
@@ -1006,10 +1023,12 @@ function App() {
       updatedAt: new Date().toISOString(),
     });
     const revision = advanceSaveRevision();
-    bookRef.current = candidate;
-    setBook(candidate);
-    setDirty(true);
-    if (api.runtime === 'device') cacheCurrentDraft(candidate);
+    if (!deferCommit) {
+      bookRef.current = candidate;
+      setBook(candidate);
+      setDirty(true);
+      if (api.runtime === 'device') cacheCurrentDraft(candidate);
+    }
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
       const saved = normalizeBook(await queueBookSave(candidate, revision));
@@ -1030,11 +1049,11 @@ function App() {
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
       return saved;
     } catch (error) {
-      if (!isBookConflictError(error)) {
+      if (!deferCommit && !isBookConflictError(error)) {
         bookRef.current = currentBook;
         setBook(currentBook);
         setDirty(false);
-      } else {
+      } else if (isBookConflictError(error)) {
         setDirty(true);
       }
       setStatus(isBookConflictError(error)
@@ -1700,6 +1719,7 @@ function App() {
       setDirty(false);
       await saveQueue.current.catch(() => undefined);
       await api.deleteBook(deletedBook.id);
+      removeContextDraftSessions(deletedBook.id);
       removeCachedBook(deletedBook.id);
       setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
       if (nextResolution) {
@@ -1786,21 +1806,64 @@ function App() {
     };
   });
 
-  const addSection = (chapterId: string, title: string) => commitBookChange((current) => {
-    const targetChapter = current.chapters.find((chapter) => chapter.id === chapterId);
-    if (!targetChapter) return current;
-    const next = {
-      id: makeId('section'),
-      title: title.trim() || `第 ${targetChapter.sections.length + 1} 节`,
-      content: '',
-    };
-    return {
-      ...current,
-      chapters: current.chapters.map((chapter) => chapter.id === chapterId
-        ? { ...chapter, sections: [...chapter.sections, next] }
-        : chapter),
-    };
+  const withDirectorySave = async (action: (current: Book) => Promise<void>) => {
+    assertDeviceWriteAccess();
+    if (directoryBusyRef.current || busyRef.current) throw new Error('请等待当前目录操作完成。');
+    const bookId = bookRef.current?.id;
+    if (!bookId) throw new Error('请先打开一本书。');
+    directoryBusyRef.current = true;
+    busyRef.current = true;
+    setDirectoryBusy(true);
+    setBusy(true);
+    try {
+      await ensureCurrentBookSaved();
+      const current = bookRef.current;
+      if (!current || current.id !== bookId) throw new Error('当前书目已经改变，请重新选择。');
+      await action(current);
+    } finally {
+      directoryBusyRef.current = false;
+      busyRef.current = false;
+      setDirectoryBusy(false);
+      setBusy(false);
+    }
+  };
+
+  const addSection = (chapterId: string, title: string, afterSectionId?: string) => withDirectorySave(async () => {
+    await commitBookChange((current) => {
+      const targetChapter = current.chapters.find((chapter) => chapter.id === chapterId);
+      if (!targetChapter) throw new Error('目标章节已经不存在，请重新选择。');
+      const insertionIndex = afterSectionId === undefined ? targetChapter.sections.length
+        : targetChapter.sections.findIndex((item) => item.id === afterSectionId) + 1;
+      if (afterSectionId !== undefined && insertionIndex === 0) throw new Error('目标小节已经改变，请重新选择新建位置。');
+      const next = {
+        id: makeId('section'),
+        title: title.trim() || `第 ${targetChapter.sections.length + 1} 节`,
+        content: '',
+      };
+      return {
+        ...current,
+        chapters: current.chapters.map((chapter) => chapter.id === chapterId
+          ? { ...chapter, sections: [...chapter.sections.slice(0, insertionIndex), next, ...chapter.sections.slice(insertionIndex)] }
+          : chapter),
+      };
+    }, true);
   });
+
+  const commitDirectoryMove = (move: DirectoryMove, undo = false) => withDirectorySave(async (current) => {
+    if (moveDirectoryItem(current, move) === current) return;
+    const inverse = reverseDirectoryMove(current, move);
+    await commitBookChange((latest) => {
+      if (latest.id !== current.id) throw new Error('当前书目已经改变，请重新选择。');
+      return moveDirectoryItem(latest, move);
+    }, true);
+    setDirectoryUndo(undo ? null : { bookId: current.id, move: inverse });
+    setStatus(undo ? '已撤销移动；后续正文修改已保留。' : '已移动，可撤销最近一次移动。');
+  });
+
+  const undoDirectoryMove = async () => {
+    if (!directoryUndo || directoryUndo.bookId !== bookRef.current?.id) throw new Error('当前书目没有可撤销的移动。');
+    await commitDirectoryMove(directoryUndo.move, true);
+  };
 
   const renameChapter = (chapterId: string, title: string) => commitBookChange((current) => ({
     ...current,
@@ -1885,10 +1948,10 @@ function App() {
     sourceSectionId: string;
     draft: SectionMemoryDraft;
     provenance: SectionMemoryProvenance;
-  }>) => {
+  }>, retainedInactiveSectionIds?: string[]) => {
     if (!book || !section) throw new Error('请先选择一个小节。');
     const targetSectionId = section.id;
-    await commitBookChange((current) => applySummaryReferenceSelection(current, targetSectionId, entries));
+    await commitBookChange((current) => applySummaryReferenceSelection(current, targetSectionId, entries, retainedInactiveSectionIds));
     setStatus(entries.length
       ? `已保存并加载 ${entries.length} 节前文梗概。`
       : '已取消加载前文梗概。');
@@ -1968,6 +2031,7 @@ function App() {
     if (!book) throw new Error('请先打开一本书。');
     const result = deleteDirectorySelection(book, selection);
     await commitBookChange(() => result.book);
+    removeContextDraftSessions(book.id, result.removedSectionIds);
     if (result.removedSectionIds.has(sectionId)) {
       setSectionId('');
       setInstruction('');
@@ -2244,7 +2308,11 @@ function App() {
             onAddCharacter={async (name) => { await addCharacter(name); }}
             onAddWorldRule={async (title) => { await addWorldRule(title); }}
             onAddChapter={async (title) => { await addChapter(title); }}
-            onAddSection={async (chapterId, title) => { await addSection(chapterId, title); }}
+            onAddSection={async (chapterId, title, afterSectionId) => { await addSection(chapterId, title, afterSectionId); }}
+            onMoveDirectoryItem={commitDirectoryMove}
+            onUndoDirectoryMove={undoDirectoryMove}
+            canUndoDirectoryMove={directoryUndo?.bookId === book.id}
+            directoryBusy={directoryBusy}
             onRenameChapter={async (chapterId, title) => { await renameChapter(chapterId, title); }}
             onRenameSection={async (chapterId, sectionId, title) => { await renameSection(chapterId, sectionId, title); }}
             onDeleteSelection={deleteSelection}
@@ -2304,6 +2372,8 @@ function App() {
           onCancelGeneration={cancelGeneration}
           onClose={closeContextTools}
           canEdit={canEdit}
+          sessionDrafts={contextToolDrafts.current}
+          onPendingDraftsChange={(pending) => { pendingContextDrafts.current = pending; }}
         />
       )}
 

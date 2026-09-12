@@ -33,20 +33,30 @@ Books in the browser belong to the current browser, origin, host, and port. Clea
 3. Choose **Import JSON backup** and select a previously exported JSON file. Import creates a recovery copy and shows a message equivalent to “A recovery copy of … was imported; the original Book was not overwritten.” The original Book is left untouched.
 4. Choose **Export current Book** to export an EPUB ebook, Markdown document, TXT plain text, or JSON full backup. EPUB, Markdown, and TXT are useful for reading or continued editing. JSON preserves character cards, settings, load scopes, manuscript structure, candidate versions, and outline history.
 
-The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. To delete a chapter or section, first choose **Select chapter or section**, then **Delete selected content**; export a backup before this kind of deletion.
+The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. Delete individual chapters and sections from their menus. For batch deletion, choose **Organize directory**, select entries, then choose **Delete selected content**. Export a backup before this kind of deletion.
 
 ### Chapters and sections
 
 A Book consists of chapters and sections:
 
 1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
-2. Choose **New section** on a chapter row and enter a section name.
+2. Choose **New section** from the chapter row's **More** menu and enter a section name.
 3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
 4. Double-click or double-tap a chapter or section title to rename it in place; a single pointer click on the title stays in the directory. With the title focused, Enter, Space, or F2 also starts editing.
 
 Press Enter, choose Save, or click outside the editor to submit. Escape or Cancel restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. Read-only pages allow reading but cannot rename titles.
 
 The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
+
+### Organize the directory
+
+The **More** (…) menu beside each chapter and section groups renaming, creation, moving, and deletion. You can also right-click or hold the row to open it. **New section below** opens a temporary input row: a section is created only after you confirm; cancelling leaves the directory as it was.
+
+Choose **Organize directory** at the top to select entries for batch deletion or use their drag handles to reorder chapters and sections or move sections between chapters. The rest of the page remains scrollable. If dragging is inconvenient, choose **Move to…** from an entry's menu and select a destination chapter and position. Empty chapters can also receive sections.
+
+After a successful save, **Undo** restores the most recent move. It restores only the position, keeping later prose edits and title changes. Failed saves leave the old order in place and let you retry.
+
+Directory order is story order. If moving an entry puts an existing reference after its target, the interface shows which sections are affected. The reference is retained but temporarily excluded. Moving it earlier restores its eligibility as previous material; summaries still need to be confirmed and fresh. Choose **Finish organizing** to return to the normal directory.
 
 ## Organize the Book's material first
 
@@ -105,6 +115,8 @@ Choose a block in the manuscript to select it:
 
 The manuscript remains continuous prose. Blocks help you locate input, answers, and candidate versions; they do not turn the novel into a chat transcript.
 
+Double-click prose to use the browser's word selection. Dragging text or holding to copy does not also select a manuscript block. The separate block-selection control is available when you want to select a block explicitly, including with a keyboard.
+
 ## Generate, regenerate, and manage candidate versions
 
 Enter what you want AI to process next in the input box at the bottom, then choose **Send and continue writing**. Author mode asks AI to write the next paragraph from that point. Character mode asks for an action, dialogue, or choice.
@@ -131,12 +143,14 @@ Cancellation only stops Story Room from applying a late result to the manuscript
 
 ## Select previous text and save summaries
 
-**Select previous text** lists only chapters and sections before the current section. It separates choosing what to load from confirming a change to the generation context, so merely expanding an entry does not alter that context:
+**Select previous text** lets you choose sections before the current section and also shows existing references made temporarily unavailable by directory moves. It separates choosing what to load from confirming a change to the generation context, so merely expanding an entry does not alter that context:
 
 1. Select the earlier material to reference. Choose a section title to expand or collapse its summary.
 2. If a summary does not exist, type one in **Enter this section's summary…**, or choose **Generate section summary**. AI-generated text first stays in the edit box as a draft and is not written to the Book until you confirm saving.
 3. After checking the selection, choose **Save and load summary**, then confirm in the dialog. With no selection, confirmation clears the current section's previous-text references, while the original earlier text and existing summaries remain.
-4. Closing **Previous text selection** without confirming leaves the pending selections and summary edits unapplied.
+4. Closing **Previous text selection** leaves pending selections and summary edits unapplied but keeps them in this page session. Reopen it, or return after switching sections, to continue editing. Choose **Discard these changes** to discard that pending draft.
+
+This draft has not been saved to the Book, does not change the context or its token estimate, and does not survive a page reload. Pending changes are included in the page's unsaved-work reminder when you leave. References made unavailable by a move are listed separately; keep them selected or explicitly deselect them. Confirmation does not silently remove them.
 
 Saved summaries are included as summary references for selected earlier sections; Story Room does not automatically load the full earlier manuscript. Internally, each summary is stored as structured <code>Section Memory</code> with a current version and a previous snapshot. Editing the manuscript can make an older summary stale, in which case you should review or regenerate it.
 
@@ -225,7 +239,9 @@ The guide uses English operation names for readability. The running interface cu
 | EPUB ebook / Markdown document / TXT plain text / JSON full backup | EPUB 电子书 / Markdown 文档 / TXT 纯文字 / JSON 完整备份 |
 | Manage current Book | 管理当前书目 |
 | Rename Book / Delete Book | 修改书名 / 删除书目 |
-| Select chapter or section / Delete selected content | 选择章节或小节 / 删除所选内容 |
+| Organize directory / Finish organizing / Delete selected content | 整理目录 / 完成整理目录 / 删除所选内容 |
+| More / Move to… / New section below / Undo | … / 移动到… / 在下方新建小节 / 撤销 |
+| Discard these changes | 放弃本次修改 |
 | New chapter / Chapter name | 新建章节 / 章节名称 |
 | New section / Section name | 新建小节 / 小节名称 |
 | Book settings / Select previous text / Settings | 本书设定 / 选择前文 / 设置 |

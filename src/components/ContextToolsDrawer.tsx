@@ -7,12 +7,74 @@ import {
 import { focusFirstDrawerElement } from './shared/dialogFocus';
 import { TextArea } from './shared/TextArea';
 import {
+  contextToolDraftKey,
+  hasPendingContextToolDrafts,
+  type ContextToolDraftSession,
+} from '../contextToolDrafts';
+import {
   DialogOperationStatus,
   idleDialogOperation,
   useDismissSuccessfulDialog,
   type DialogOperationState,
 } from './shared/DialogOperationStatus';
 import type { Book, SectionMemoryDraft, SectionMemoryProvenance } from '../types';
+
+const initialContextToolDraftSession = (
+  bookId: string,
+  sectionId: string,
+  selectedSectionIds: string[] = [],
+): ContextToolDraftSession => ({
+  bookId,
+  sectionId,
+  hasChanges: false,
+  selectedSectionIds: [...selectedSectionIds],
+  expandedSectionIds: [],
+  memoryDrafts: {},
+  generatedDrafts: {},
+  summaryErrors: {},
+});
+
+const copyContextToolDraftSession = (session: ContextToolDraftSession): ContextToolDraftSession => ({
+  ...session,
+  selectedSectionIds: [...session.selectedSectionIds],
+  expandedSectionIds: [...session.expandedSectionIds],
+  memoryDrafts: { ...session.memoryDrafts },
+  generatedDrafts: { ...session.generatedDrafts },
+  summaryErrors: { ...session.summaryErrors },
+});
+
+const filterContextToolDraftRecord = <T,>(
+  record: Record<string, T>,
+  validSourceSectionIds: Set<string>,
+): Record<string, T> => Object.fromEntries(
+  Object.entries(record).filter(([sourceSectionId]) => validSourceSectionIds.has(sourceSectionId)),
+) as Record<string, T>;
+
+const sanitizeContextToolDraftSession = (
+  session: ContextToolDraftSession,
+  validSourceSectionIds: Set<string>,
+  baselineSelectedSectionIds: string[],
+): ContextToolDraftSession => {
+  const next = copyContextToolDraftSession({
+    ...session,
+    selectedSectionIds: session.selectedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)),
+    expandedSectionIds: session.expandedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)),
+    memoryDrafts: filterContextToolDraftRecord(session.memoryDrafts, validSourceSectionIds),
+    generatedDrafts: filterContextToolDraftRecord(session.generatedDrafts, validSourceSectionIds),
+    summaryErrors: filterContextToolDraftRecord(session.summaryErrors, validSourceSectionIds),
+  });
+  const baseline = new Set(baselineSelectedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)));
+  const selectedChanged = next.selectedSectionIds.length !== baseline.size
+    || next.selectedSectionIds.some((sourceSectionId) => !baseline.has(sourceSectionId));
+  const hasValidPendingState = selectedChanged
+    || Object.keys(next.memoryDrafts).length > 0
+    || Object.keys(next.generatedDrafts).length > 0
+    || Object.keys(next.summaryErrors).length > 0;
+  return {
+    ...next,
+    hasChanges: session.hasChanges && hasValidPendingState,
+  };
+};
 
 export function ContextToolsDrawer({
   open,
@@ -24,20 +86,27 @@ export function ContextToolsDrawer({
   onCancelGeneration,
   onClose,
   canEdit = true,
+  sessionDrafts,
+  onPendingDraftsChange,
 }: {
   open: boolean;
   book: Book;
   section: Book['chapters'][number]['sections'][number];
   onGenerateMemory: (sourceSectionId: string) => Promise<SectionMemoryDraft>;
-  onSaveMemoriesAndLoad: (items: Array<{
-    sourceSectionId: string;
-    draft: SectionMemoryDraft;
-    provenance: SectionMemoryProvenance;
-  }>) => Promise<void>;
+  onSaveMemoriesAndLoad: (
+    items: Array<{
+      sourceSectionId: string;
+      draft: SectionMemoryDraft;
+      provenance: SectionMemoryProvenance;
+    }>,
+    retainedInactiveSectionIds?: string[],
+  ) => Promise<void>;
   busy: boolean;
   onCancelGeneration: () => void;
   onClose: () => void;
   canEdit?: boolean;
+  sessionDrafts?: Map<string, ContextToolDraftSession>;
+  onPendingDraftsChange?: (pending: boolean) => void;
 }) {
   const drawerRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -45,16 +114,127 @@ export function ContextToolsDrawer({
   const summaryConfirmDialog = useRef<HTMLDialogElement>(null);
   const summaryActionTrigger = useRef<HTMLElement | null>(null);
   const summaryActionAccepted = useRef(false);
+  const localSessionDraftsRef = useRef(new Map<string, ContextToolDraftSession>());
+  const sessionDraftsRef = useRef<Map<string, ContextToolDraftSession>>(
+    sessionDrafts ?? localSessionDraftsRef.current,
+  );
+  sessionDraftsRef.current = sessionDrafts ?? localSessionDraftsRef.current;
+  const sourceSectionIdsByBookRef = useRef(new Map<string, Set<string>>());
+  sourceSectionIdsByBookRef.current.set(book.id, new Set(book.chapters.flatMap((chapter) => (
+    chapter.sections.map((sourceSection) => sourceSection.id)
+  ))));
+  const currentSectionRef = useRef(section);
+  currentSectionRef.current = section;
+  const onPendingDraftsChangeRef = useRef(onPendingDraftsChange);
+  onPendingDraftsChangeRef.current = onPendingDraftsChange;
+  const initialSessionKey = contextToolDraftKey(book.id, section.id);
+  const initialSession = sessionDraftsRef.current.get(initialSessionKey)
+    ? copyContextToolDraftSession(sessionDraftsRef.current.get(initialSessionKey)!)
+    : initialContextToolDraftSession(
+        book.id,
+        section.id,
+        (section.contextReferences ?? []).map((reference) => reference.sectionId),
+      );
+  const activeSessionKeyRef = useRef(initialSessionKey);
+  const sessionStateRef = useRef(initialSession);
+  const [sessionState, setSessionState] = useState<ContextToolDraftSession>(initialSession);
+  sessionStateRef.current = sessionState;
+  const generationSequenceRef = useRef(0);
+  const generationOperationsRef = useRef(new Map<number, {
+    key: string;
+    bookId: string;
+    epoch: number;
+    sourceSectionId: string;
+    invalidated: boolean;
+    settled: boolean;
+  }>());
+  const sessionEpochsRef = useRef(new Map<string, number>());
+  const sessionRevisionsRef = useRef(new Map<string, number>());
+  const saveRequestSequenceRef = useRef(0);
+  const activeSaveRequestsRef = useRef(new Map<string, number>());
   const summaryGenerationRequest = useRef(0);
-  const [selectedSectionIds, setSelectedSectionIds] = useState<Set<string>>(new Set());
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const [memoryDrafts, setMemoryDrafts] = useState<Record<string, SectionMemoryDraft>>({});
-  const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, SectionMemoryDraft>>({});
   const [summaryBusyId, setSummaryBusyId] = useState('');
-  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
   const [pendingSummarySectionId, setPendingSummarySectionId] = useState('');
   const [pendingSummaryAction, setPendingSummaryAction] = useState<'generate' | 'save' | ''>('');
   const [summaryFeedback, setSummaryFeedback] = useState<DialogOperationState>(idleDialogOperation);
+  const [viewExpandedSections, setViewExpandedSections] = useState<Set<string>>(new Set());
+
+  const selectedSectionIds = useMemo(() => new Set(sessionState.selectedSectionIds), [sessionState.selectedSectionIds]);
+  const expandedSections = useMemo(() => {
+    const next = new Set(sessionState.expandedSectionIds);
+    if (!canEdit) for (const sourceSectionId of viewExpandedSections) next.add(sourceSectionId);
+    return next;
+  }, [canEdit, sessionState.expandedSectionIds, viewExpandedSections]);
+  const memoryDrafts = sessionState.memoryDrafts;
+  const summaryErrors = sessionState.summaryErrors;
+
+  const notifyPendingDrafts = () => {
+    onPendingDraftsChangeRef.current?.(hasPendingContextToolDrafts(sessionDraftsRef.current));
+  };
+
+  const sessionForKey = (key: string) => {
+    const stored = sessionDraftsRef.current.get(key);
+    if (stored) return stored;
+    return activeSessionKeyRef.current === key ? sessionStateRef.current : undefined;
+  };
+
+  const updateSession = (
+    key: string,
+    patch: Partial<ContextToolDraftSession>,
+    markChanges = false,
+  ) => {
+    const current = sessionForKey(key);
+    if (!current) return undefined;
+    if (!sessionDraftsRef.current.has(key)) {
+      sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
+    }
+    sessionRevisionsRef.current.set(key, (sessionRevisionsRef.current.get(key) ?? 0) + 1);
+    const next = copyContextToolDraftSession({
+      ...current,
+      ...patch,
+      hasChanges: markChanges || current.hasChanges,
+    });
+    sessionDraftsRef.current.set(key, next);
+    if (activeSessionKeyRef.current === key) {
+      sessionStateRef.current = next;
+      setSessionState(next);
+    }
+    notifyPendingDrafts();
+    return next;
+  };
+
+  const latestGenerationForKey = (key: string) => [...generationOperationsRef.current.entries()]
+    .filter(([, operation]) => operation.key === key && !operation.settled && !operation.invalidated)
+    .sort(([left], [right]) => left - right)
+    .at(-1)?.[1];
+
+  const resetSession = (key: string, selectedIds: string[]) => {
+    const next = initialContextToolDraftSession(book.id, section.id, selectedIds);
+    sessionStateRef.current = next;
+    if (activeSessionKeyRef.current === key) setSessionState(next);
+    return next;
+  };
+
+  const clearSessionDraft = (key: string, selectedIds?: string[]) => {
+    sessionDraftsRef.current.delete(key);
+    sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
+    sessionRevisionsRef.current.set(key, (sessionRevisionsRef.current.get(key) ?? 0) + 1);
+    if (activeSessionKeyRef.current === key) {
+      resetSession(key, selectedIds
+        ?? (currentSectionRef.current.contextReferences ?? []).map((reference) => reference.sectionId));
+    }
+    notifyPendingDrafts();
+  };
+
+  const invalidateGenerationForKey = (key: string) => {
+    let hasActiveOperation = false;
+    for (const operation of generationOperationsRef.current.values()) {
+      if (operation.key !== key || operation.settled) continue;
+      operation.invalidated = true;
+      hasActiveOperation = true;
+    }
+    if (hasActiveOperation) onCancelGeneration();
+  };
 
   useEffect(() => {
     const drawer = drawerRef.current;
@@ -64,39 +244,91 @@ export function ContextToolsDrawer({
       const frame = window.requestAnimationFrame(() => focusFirstDrawerElement(drawer));
       return () => window.cancelAnimationFrame(frame);
     }
+    summaryGenerationRequest.current += 1;
+    summaryActionAccepted.current = true;
+    if (summaryConfirmDialog.current?.open) summaryConfirmDialog.current.close();
+    setPendingSummarySectionId('');
+    setPendingSummaryAction('');
+    setSummaryFeedback(idleDialogOperation);
     if (drawer.open) drawer.close();
     return undefined;
   }, [open]);
 
+  const referenceSignature = JSON.stringify((section.contextReferences ?? [])
+    .map((reference) => [reference.sectionId, reference.mode, reference.reason]));
   useEffect(() => {
-    summaryGenerationRequest.current += 1;
-    setSelectedSectionIds(new Set((section.contextReferences ?? []).map((reference) => reference.sectionId)));
-    setExpandedSections(new Set());
-    setMemoryDrafts({});
-    setGeneratedDrafts({});
-    setSummaryBusyId('');
-    setSummaryErrors({});
-    summaryConfirmDialog.current?.close();
-    setPendingSummarySectionId('');
-    setPendingSummaryAction('');
-    setSummaryFeedback(idleDialogOperation);
+    const targetChanged = activeSessionKeyRef.current !== initialSessionKey;
+    const preserveOpenConfirmation = !targetChanged && Boolean(summaryConfirmDialog.current?.open);
+    activeSessionKeyRef.current = initialSessionKey;
+    const baselineSelectedSectionIds = (section.contextReferences ?? []).map((reference) => reference.sectionId);
+    const validSourceSectionIds = new Set(book.chapters.flatMap((chapter) => (
+      chapter.sections.map((sourceSection) => sourceSection.id)
+    )));
+    const stored = sessionDraftsRef.current.get(initialSessionKey);
+    const activeGeneration = latestGenerationForKey(initialSessionKey);
+    const generationSourceExists = activeGeneration
+      ? validSourceSectionIds.has(activeGeneration.sourceSectionId)
+      : true;
+    const next = stored
+      ? sanitizeContextToolDraftSession(stored, validSourceSectionIds, baselineSelectedSectionIds)
+      : initialContextToolDraftSession(book.id, section.id, baselineSelectedSectionIds);
+    let restoredSession = next;
+    if (stored) {
+      const keepForGeneration = Boolean(activeGeneration && generationSourceExists);
+      if (keepForGeneration || next.hasChanges || next.expandedSectionIds.length || Object.keys(next.memoryDrafts).length
+        || Object.keys(next.generatedDrafts).length || Object.keys(next.summaryErrors).length) {
+        restoredSession = keepForGeneration
+          ? { ...next, hasChanges: true }
+          : next;
+        sessionDraftsRef.current.set(initialSessionKey, restoredSession);
+      } else {
+        sessionDraftsRef.current.delete(initialSessionKey);
+        sessionEpochsRef.current.set(initialSessionKey, (sessionEpochsRef.current.get(initialSessionKey) ?? 0) + 1);
+        sessionRevisionsRef.current.set(initialSessionKey, (sessionRevisionsRef.current.get(initialSessionKey) ?? 0) + 1);
+      }
+    } else if (activeGeneration) {
+      activeGeneration.invalidated = true;
+    }
+    if (activeGeneration && !generationSourceExists) {
+      activeGeneration.invalidated = true;
+      onCancelGeneration();
+    }
+    sessionStateRef.current = restoredSession;
+    setSessionState(restoredSession);
+    setViewExpandedSections(new Set());
+    setSummaryBusyId(activeGeneration && !activeGeneration.invalidated ? activeGeneration.sourceSectionId : '');
+    if (!preserveOpenConfirmation) {
+      summaryGenerationRequest.current += 1;
+      summaryActionAccepted.current = true;
+      if (summaryConfirmDialog.current?.open) summaryConfirmDialog.current.close();
+      setPendingSummarySectionId('');
+      setPendingSummaryAction('');
+      setSummaryFeedback(idleDialogOperation);
+    }
+    notifyPendingDrafts();
     return undefined;
-  }, [open, book.id, section.id]);
+  }, [book.chapters, initialSessionKey, referenceSignature, sessionDrafts]);
 
   const currentReferences = useMemo(() => new Map((section.contextReferences ?? [])
     .map((reference) => [reference.sectionId, reference.mode] as const)), [section.contextReferences]);
-  const { referenceSections, referenceChapters, selectableReferenceSections } = useMemo(() => {
+  const { referenceSections, displayedReferenceSections, referenceChapters, selectableReferenceSections, previousSectionIds } = useMemo(() => {
     const locations = (open ? book.chapters : []).flatMap((chapter, chapterIndex) =>
       chapter.sections.map((item, sectionIndex) => ({ chapter, section: item, chapterIndex, sectionIndex })));
     const targetOrdinal = locations.findIndex((item) => item.section.id === section.id);
     const referenceSections = locations.slice(0, Math.max(0, targetOrdinal));
+    const previousSectionIds = new Set(referenceSections.map((item) => item.section.id));
+    const displayedReferenceSections = locations.filter((item) => previousSectionIds.has(item.section.id)
+      || currentReferences.has(item.section.id)
+      || selectedSectionIds.has(item.section.id));
     const referenceChapters = (open ? book.chapters : []).map((chapter) => ({
       chapter,
-      sections: referenceSections.filter((item) => item.chapter.id === chapter.id),
+      sections: displayedReferenceSections.filter((item) => item.chapter.id === chapter.id),
     })).filter((item) => item.sections.length > 0);
     return { referenceSections, referenceChapters,
+      displayedReferenceSections,
+      previousSectionIds,
       selectableReferenceSections: referenceSections.filter((item) => item.section.content.trim()) };
-  }, [open, book.chapters, section.id]);
+  }, [open, book.chapters, section.id, currentReferences, selectedSectionIds]);
   const selectedReferenceCount = selectableReferenceSections
     .filter((item) => selectedSectionIds.has(item.section.id)).length;
   const allSelected = selectableReferenceSections.length > 0
@@ -107,25 +339,43 @@ export function ContextToolsDrawer({
     if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
   }, [someSelected]);
 
+  const setSelectedSectionIds = (next: Set<string>) => {
+    updateSession(activeSessionKeyRef.current, {
+      selectedSectionIds: [...next],
+    }, true);
+  };
   const toggleAll = () => {
     if (!canEdit) return;
-    setSelectedSectionIds(allSelected ? new Set() : new Set(selectableReferenceSections.map((item) => item.section.id)));
+    const selectableIds = selectableReferenceSections.map((item) => item.section.id);
+    const nextSelected = new Set(selectedSectionIds);
+    for (const sourceSectionId of selectableIds) {
+      if (allSelected) nextSelected.delete(sourceSectionId);
+      else nextSelected.add(sourceSectionId);
+    }
+    setSelectedSectionIds(nextSelected);
   };
   const toggleSelection = (sourceSectionId: string) => {
     if (!canEdit) return;
-    setSelectedSectionIds((current) => {
-      const next = new Set(current);
-      if (next.has(sourceSectionId)) next.delete(sourceSectionId);
-      else next.add(sourceSectionId);
-      return next;
-    });
+    const nextSelected = new Set(selectedSectionIds);
+    if (nextSelected.has(sourceSectionId)) nextSelected.delete(sourceSectionId);
+    else nextSelected.add(sourceSectionId);
+    setSelectedSectionIds(nextSelected);
   };
   const toggleSection = (sourceSectionId: string) => {
-    setExpandedSections((current) => {
-      const next = new Set(current);
-      if (next.has(sourceSectionId)) next.delete(sourceSectionId);
-      else next.add(sourceSectionId);
-      return next;
+    if (!canEdit) {
+      setViewExpandedSections((current) => {
+        const next = new Set(current);
+        if (next.has(sourceSectionId)) next.delete(sourceSectionId);
+        else next.add(sourceSectionId);
+        return next;
+      });
+      return;
+    }
+    const nextExpanded = new Set(expandedSections);
+    if (nextExpanded.has(sourceSectionId)) nextExpanded.delete(sourceSectionId);
+    else nextExpanded.add(sourceSectionId);
+    updateSession(activeSessionKeyRef.current, {
+      expandedSectionIds: [...nextExpanded],
     });
   };
   const emptyMemoryDraft = (): SectionMemoryDraft => ({
@@ -140,32 +390,85 @@ export function ContextToolsDrawer({
       ?? draftFromSectionMemory(item.section.memory)
       ?? emptyMemoryDraft()
   );
+  const memoryDraftForSession = (
+    session: ContextToolDraftSession,
+    item: typeof referenceSections[number],
+  ) => (
+    session.memoryDrafts[item.section.id]
+      ?? draftFromSectionMemory(item.section.memory)
+      ?? emptyMemoryDraft()
+  );
   const summaryValue = (item: typeof referenceSections[number]) => memoryDraftFor(item).synopsis;
   const updateSummary = (item: typeof referenceSections[number], synopsis: string) => {
     if (!canEdit) return;
-    setMemoryDrafts((current) => ({
-      ...current,
-      [item.section.id]: { ...memoryDraftFor(item), synopsis },
-    }));
-    setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
+    const current = sessionForKey(activeSessionKeyRef.current);
+    if (!current) return;
+    updateSession(activeSessionKeyRef.current, {
+      memoryDrafts: {
+        ...current.memoryDrafts,
+        [item.section.id]: { ...memoryDraftFor(item), synopsis },
+      },
+      summaryErrors: { ...current.summaryErrors, [item.section.id]: '' },
+    }, true);
   };
   const generateSummary = async (item: typeof referenceSections[number]) => {
     if (!canEdit) return emptyMemoryDraft();
-    setSummaryBusyId(item.section.id);
-    setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
+    const key = activeSessionKeyRef.current;
+    const operationId = ++generationSequenceRef.current;
+    const operation = {
+      key,
+      bookId: book.id,
+      epoch: 0,
+      sourceSectionId: item.section.id,
+      invalidated: false,
+      settled: false,
+    };
+    generationOperationsRef.current.set(operationId, operation);
+    const current = sessionForKey(key);
+    if (current) {
+      updateSession(key, {
+        summaryErrors: { ...current.summaryErrors, [item.section.id]: '' },
+      }, true);
+    }
+    operation.epoch = sessionEpochsRef.current.get(key) ?? 0;
+    if (activeSessionKeyRef.current === key) setSummaryBusyId(item.section.id);
     try {
       const draft = await onGenerateMemory(item.section.id);
-      setGeneratedDrafts((current) => ({ ...current, [item.section.id]: draft }));
-      setMemoryDrafts((current) => ({ ...current, [item.section.id]: draft }));
+      const completed = generationOperationsRef.current.get(operationId);
+      if (completed && !completed.invalidated
+        && sessionEpochsRef.current.get(key) === completed.epoch
+        && sourceSectionIdsByBookRef.current.get(completed.bookId)?.has(completed.sourceSectionId)
+        && sessionDraftsRef.current.has(key)) {
+        const stored = sessionDraftsRef.current.get(key)!;
+        updateSession(key, {
+          generatedDrafts: { ...stored.generatedDrafts, [item.section.id]: draft },
+          memoryDrafts: { ...stored.memoryDrafts, [item.section.id]: draft },
+        }, true);
+      }
       return draft;
     } catch (error) {
-      setSummaryErrors((current) => ({
-        ...current,
-        [item.section.id]: error instanceof Error ? error.message : '梗概生成失败。',
-      }));
+      const failed = generationOperationsRef.current.get(operationId);
+      if (failed && !failed.invalidated
+        && sessionEpochsRef.current.get(key) === failed.epoch
+        && sourceSectionIdsByBookRef.current.get(failed.bookId)?.has(failed.sourceSectionId)
+        && sessionDraftsRef.current.has(key)) {
+        const stored = sessionDraftsRef.current.get(key)!;
+        updateSession(key, {
+          summaryErrors: {
+            ...stored.summaryErrors,
+            [item.section.id]: error instanceof Error ? error.message : '梗概生成失败。',
+          },
+        }, true);
+      }
       throw error;
     } finally {
-      setSummaryBusyId('');
+      const completed = generationOperationsRef.current.get(operationId);
+      if (completed) completed.settled = true;
+      if (activeSessionKeyRef.current === key) {
+        const next = latestGenerationForKey(key);
+        setSummaryBusyId(next?.sourceSectionId ?? '');
+      }
+      generationOperationsRef.current.delete(operationId);
     }
   };
   const requestSummaryAction = (
@@ -181,15 +484,28 @@ export function ContextToolsDrawer({
   };
   const saveableSummaryItems = referenceSections.filter((item) => selectedSectionIds.has(item.section.id));
   const legacyFullCount = [...currentReferences.values()].filter((mode) => mode !== 'summary').length;
+  const inactiveExistingSectionIds = displayedReferenceSections
+    .filter((item) => !previousSectionIds.has(item.section.id) && currentReferences.has(item.section.id))
+    .map((item) => item.section.id);
+  const retainedInactiveSectionIds = inactiveExistingSectionIds
+    .filter((sourceSectionId) => selectedSectionIds.has(sourceSectionId));
   const requestSummarySave = () => {
     if (!canEdit) return;
     const missing = saveableSummaryItems.filter((item) => !summaryValue(item).trim());
     if (missing.length) {
-      setSummaryErrors((current) => ({
-        ...current,
-        ...Object.fromEntries(missing.map((item) => [item.section.id, '请先填写或生成梗概，或取消勾选；不会加载原文。'])),
-      }));
-      setExpandedSections((current) => new Set([...current, ...missing.map((item) => item.section.id)]));
+      const current = sessionForKey(activeSessionKeyRef.current);
+      if (current) {
+        updateSession(activeSessionKeyRef.current, {
+          summaryErrors: {
+            ...current.summaryErrors,
+            ...Object.fromEntries(missing.map((item) => [item.section.id, '请先填写或生成梗概，或取消勾选；不会加载原文。'])),
+          },
+          expandedSectionIds: [...new Set([
+            ...current.expandedSectionIds,
+            ...missing.map((item) => item.section.id),
+          ])],
+        }, true);
+      }
       return;
     }
     summaryActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -214,39 +530,83 @@ export function ContextToolsDrawer({
     }
     summaryConfirmDialog.current?.close();
   };
+  const discardCurrentDraft = () => {
+    if (!canEdit || !sessionState.hasChanges) return;
+    const key = activeSessionKeyRef.current;
+    invalidateGenerationForKey(key);
+    clearSessionDraft(key);
+    setSummaryBusyId('');
+    summaryGenerationRequest.current += 1;
+    summaryActionAccepted.current = true;
+    if (summaryConfirmDialog.current?.open) summaryConfirmDialog.current.close();
+    setPendingSummarySectionId('');
+    setPendingSummaryAction('');
+    setSummaryFeedback(idleDialogOperation);
+  };
   const saveSummariesAndLoad = async (items: typeof referenceSections) => {
+    const key = activeSessionKeyRef.current;
+    const session = sessionForKey(key);
+    if (!session) throw new Error('当前前文草稿已失效，请重新打开。');
+    if (!sessionDraftsRef.current.has(key)) {
+      sessionDraftsRef.current.set(key, copyContextToolDraftSession(session));
+      sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
+      notifyPendingDrafts();
+    }
+    const sessionRevision = sessionRevisionsRef.current.get(key) ?? 0;
+    const sessionEpoch = sessionEpochsRef.current.get(key) ?? 0;
+    const saveRequest = ++saveRequestSequenceRef.current;
+    activeSaveRequestsRef.current.set(key, saveRequest);
     const entries = items.map((item) => {
-      const draft = memoryDraftFor(item);
+      const draft = memoryDraftForSession(session, item);
       return {
         sourceSectionId: item.section.id,
         draft,
         provenance: sectionMemoryProvenanceAfterReview(
           item.section.memory,
           draft,
-          generatedDrafts[item.section.id],
+          session.generatedDrafts[item.section.id],
         ),
       };
     });
+    const inactiveExistingSectionIds = displayedReferenceSections
+      .filter((item) => !previousSectionIds.has(item.section.id) && currentReferences.has(item.section.id))
+      .map((item) => item.section.id);
+    const retainedInactiveSectionIds = inactiveExistingSectionIds
+      .filter((sourceSectionId) => session.selectedSectionIds.includes(sourceSectionId));
+    const savedSelectionIds = [...new Set([
+      ...items.map((item) => item.section.id),
+      ...retainedInactiveSectionIds,
+    ])];
     try {
-      await onSaveMemoriesAndLoad(entries);
-      setGeneratedDrafts((current) => {
-        const next = { ...current };
-        for (const item of items) delete next[item.section.id];
-        return next;
-      });
-      setSummaryErrors((current) => {
-        const next = { ...current };
-        for (const item of items) next[item.section.id] = '';
-        return next;
-      });
+      if (inactiveExistingSectionIds.length) {
+        await onSaveMemoriesAndLoad(entries, retainedInactiveSectionIds);
+      } else {
+        await onSaveMemoriesAndLoad(entries);
+      }
+      if (!sessionDraftsRef.current.has(key)
+        || sessionEpochsRef.current.get(key) !== sessionEpoch
+        || sessionRevisionsRef.current.get(key) !== sessionRevision
+        || activeSaveRequestsRef.current.get(key) !== saveRequest) return;
+      clearSessionDraft(key, savedSelectionIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : '梗概保存失败，请重试。';
-      setSummaryErrors((current) => {
-        const next = { ...current };
-        for (const item of items) next[item.section.id] = message;
-        return next;
-      });
+      const current = sessionDraftsRef.current.get(key);
+      if (current
+        && sessionEpochsRef.current.get(key) === sessionEpoch
+        && sessionRevisionsRef.current.get(key) === sessionRevision
+        && activeSaveRequestsRef.current.get(key) === saveRequest) {
+        updateSession(key, {
+          summaryErrors: {
+            ...current.summaryErrors,
+            ...Object.fromEntries(items.map((item) => [item.section.id, message])),
+          },
+        }, true);
+      }
       throw error;
+    } finally {
+      if (activeSaveRequestsRef.current.get(key) === saveRequest) {
+        activeSaveRequestsRef.current.delete(key);
+      }
     }
   };
   const confirmSummaryAction = () => {
@@ -276,13 +636,14 @@ export function ContextToolsDrawer({
     if (action === 'save') {
       summaryActionAccepted.current = true;
       setSummaryFeedback({ phase: 'pending', title: '正在保存并加载梗概…' });
+      const request = ++summaryGenerationRequest.current;
       void saveSummariesAndLoad(saveableSummaryItems)
         .then(() => {
-          if (!summaryConfirmDialog.current?.open) return;
+          if (summaryGenerationRequest.current !== request || !summaryConfirmDialog.current?.open) return;
           setSummaryFeedback({ phase: 'success', title: '梗概保存并加载成功' });
         })
         .catch((error) => {
-          if (!summaryConfirmDialog.current?.open) return;
+          if (summaryGenerationRequest.current !== request || !summaryConfirmDialog.current?.open) return;
           setSummaryFeedback({
             phase: 'error',
             title: '梗概保存并加载失败',
@@ -336,7 +697,8 @@ export function ContextToolsDrawer({
           <p className="helper-copy">勾选只作待确认选择；确认保存后才加载梗概，不加载前文原文。关闭后未确认的修改不生效。</p>
           {!canEdit && <p className="helper-copy">当前页面为只读，可查看已保存的前文设置；关闭其他编辑页后可修改。</p>}
           {legacyFullCount > 0 && <p className="helper-copy">当前设置仍含 {legacyFullCount} 节全文引用；确认后将按勾选结果改为梗概引用。</p>}
-          {referenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
+          {sessionState.hasChanges && <p className="helper-copy">当前有未确认修改；可选择“放弃本次修改”恢复本次打开前的状态。</p>}
+          {displayedReferenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
             <div className="source-scope-drawer context-reference-scope" data-open>
               <div className="source-load-tab">
                 <label className="source-load-toggle" title="选择全部前文">
@@ -374,6 +736,16 @@ export function ContextToolsDrawer({
                   <Check aria-hidden="true" />
                 </button>
               </div>
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className="quiet-action"
+                  onClick={discardCurrentDraft}
+                  disabled={!canEdit || !sessionState.hasChanges}
+                >
+                  放弃本次修改
+                </button>
+              </div>
               <div className="source-scope-content">
                 <div className="source-scope-chapters" aria-label="可加载的前文">
                   {referenceChapters.map((chapterItem) => (
@@ -382,6 +754,7 @@ export function ContextToolsDrawer({
                       {chapterItem.sections.map((item) => {
                         const selected = selectedSectionIds.has(item.section.id);
                         const expanded = expandedSections.has(item.section.id);
+                        const isPrevious = previousSectionIds.has(item.section.id);
                         const panelId = `context-summary-${item.section.id}`;
                         const value = summaryValue(item);
                         const summaryBusy = summaryBusyId === item.section.id;
@@ -406,7 +779,10 @@ export function ContextToolsDrawer({
                                 aria-label={expanded ? `收起${item.section.title}梗概` : `展开${item.section.title}梗概`}
                                 onClick={() => toggleSection(item.section.id)}
                               >
-                                <span>{item.section.title}{!value.trim() && <small> · 尚无梗概</small>}</span>
+                                <span>{item.section.title}
+                                  {!isPrevious && <small> · 位于当前小节或之后，暂不加载</small>}
+                                  {!value.trim() && <small> · 尚无梗概</small>}
+                                </span>
                                 <ChevronRight aria-hidden="true" />
                               </button>
                             </div>
@@ -429,7 +805,7 @@ export function ContextToolsDrawer({
                                   <button
                                     type="button"
                                     className="icon-button context-summary-generate"
-                                    disabled={!canEdit || (busy && !summaryBusy) || !hasContent}
+                                    disabled={!canEdit || (busy && !summaryBusy) || !hasContent || !isPrevious}
                                     onClick={() => summaryBusy ? onCancelGeneration() : requestSummaryAction(item, 'generate')}
                                     aria-busy={summaryBusy || undefined}
                                     aria-label={summaryBusy ? '取消生成该节梗概' : '生成该节梗概'}
@@ -513,8 +889,8 @@ export function ContextToolsDrawer({
             <p id="summary-confirm-dialog-description">
               {pendingSummaryAction === 'save'
                 ? (saveableSummaryItems.length
-                    ? `只保存并加载勾选的 ${saveableSummaryItems.length} 节梗概；未勾选的前文引用将移除，原文和已有梗概均保留。`
-                    : '会取消当前小节的全部前文引用；前文原文和已有梗概均保留。')
+                    ? `只保存并加载勾选的 ${saveableSummaryItems.length} 节梗概；未勾选的前文引用将移除，原文和已有梗概均保留。${retainedInactiveSectionIds.length ? ` 仍保留 ${retainedInactiveSectionIds.length} 条位于当前小节或之后的既有引用，但暂不进入上下文。` : ''}`
+                    : `会取消当前小节的全部前文引用；前文原文和已有梗概均保留。${retainedInactiveSectionIds.length ? ` 仍保留 ${retainedInactiveSectionIds.length} 条位于当前小节或之后的既有引用，但暂不进入上下文。` : ''}`)
                 : `会用 AI 生成的内容替换「${pendingSummarySection?.section.title ?? ''}」编辑框里的梗概；确认保存前不会写入书目。`}
             </p>
             <div className="dialog-actions">

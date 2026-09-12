@@ -128,7 +128,7 @@ describe('browser IDs without crypto.randomUUID', () => {
       addButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const input = await waitForElement(() => container.querySelector<HTMLInputElement>('#name-dialog-input'));
+    const input = await waitForElement(() => container.querySelector<HTMLInputElement>('.inline-new-section input'));
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     if (!valueSetter) throw new Error('HTML input value setter is unavailable.');
     await act(async () => {
@@ -263,8 +263,9 @@ describe('browser IDs without crypto.randomUUID', () => {
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 900 })));
       expect(container.querySelector<HTMLDialogElement>('#context-tools-drawer')?.open).toBe(false);
       await act(async () => container.querySelector<HTMLButtonElement>('.writer-context-tools-button')?.click());
-      expect(container.querySelector<HTMLInputElement>('.context-reference-checkbox input')?.checked).toBe(true);
+      expect(container.querySelector<HTMLInputElement>('.context-reference-checkbox input')?.checked).toBe(false);
       expect(saves).toBe(0);
+      await act(async () => container.querySelector<HTMLInputElement>('.context-reference-checkbox input')?.click());
 
       const confirm = async () => {
         await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
