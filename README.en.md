@@ -2,165 +2,65 @@ English | [简体中文](README.md)
 
 # Story Room
 
-Story Room is a small workspace for writing stories, keeping notes close, and asking AI for help when you want it.
+A local-first writing space that keeps your manuscript, characters, and worldbuilding together.
 
-Start with a scene, a character, or a few lines you want to follow. Your manuscript stays as continuous prose. Each book has its own characters, world notes, outline, and chapters, and you choose which material accompanies a generation request. You can write as the author or from a character's first-person perspective, compare possible continuations, and keep the version that fits your story.
+Start with a scene or a few lines, ask AI to continue, compare candidates, and keep the version that fits your story. Each book has its own material. Write as the author or choose a character and take part in first person. The manuscript stays in continuous prose for reading and editing.
 
-Your stories stay local: in readable files when you run the app on your computer, or in your browser when you use the device build. AI requests send the writing material you selected to the model service you configure; Story Room has no cloud manuscript storage or automatic sync.
+This is an early **Alpha**, and the interface is currently in Chinese. Try it out, and keep independent backups of work you care about.
 
-This is an early Alpha. Try it, explore, and share feedback. Keep separate backups of writing you care about while the project grows.
+## Give the link to your agent
 
-## Make yourself at home
+Send this repository link to an AI agent that can read code and work on your computer:
 
-You'll need Node.js 22.18+ or 24, and npm. From the project directory, run:
+**https://github.com/beniedev/story-room**
 
-```bash
-npm ci
-npm run dev
-```
+The repository points it to an [installation and usage guide](docs/AGENT_GUIDE.md). It can check your system and existing environment, get the code, install dependencies, start the app, and open the page. You do not need to choose a runtime edition or learn terminal commands first.
 
-Open `http://127.0.0.1:4310`. Pick a sample book or create your own, open a section, and start writing. The built-in Fake Provider lets you try the writing flow with sample output before connecting an AI service. To use your own model, add an OpenAI-compatible Provider in Settings.
+If you want to be more explicit, send:
 
-The interface is currently in Chinese. The [English user guide](docs/USER_GUIDE.md) includes a button-reference table for the labels you see in the app.
+> Please install and start https://github.com/beniedev/story-room, then help me connect my AI service, start writing, and keep a backup. Read its AGENTS.md and installation guide first, and preserve my existing manuscripts and configuration.
 
-For a walkthrough, open the [User guide](docs/USER_GUIDE.md). If you're working with an AI assistant, the [Agent guide](docs/AGENT_GUIDE.md) explains the features, code entry points, and maintenance workflow.
+For the first AI connection, the agent guides you to enter a trusted service's URL, model ID, and API key in the app. Enter the key locally, not in the conversation. Story Room does not include a model service or subscription.
 
-## Where your stories live
+Prefer installing it yourself? Follow [Installation and access](docs/USER_GUIDE.md#installation-and-access). The project uses Node.js **22.x (at least 22.18.0) or 24.x**, with npm.
 
-| How you run it | Where books are saved | AI support |
-| --- | --- | --- |
-| On your computer (local host) | Readable files under `.data/`; `STORY_DATA_DIR` can choose another directory | Fake Provider or your configured OpenAI-compatible Provider |
-| In the browser (hosted/device build) | Unencrypted `localStorage`, belonging to that browser and website address | Sample generation only; connection tests can contact your configured `/models` endpoint |
+## A look inside
 
-Take a copy with you whenever you like. EPUB, Markdown, and TXT exports contain your chosen manuscript. Use **complete JSON** for a backup that also keeps alternative answers, branches, book settings, context selections, and Section Memory, including its previous snapshot when present. Importing that JSON from the bookshelf restores a new book without overwriting an existing one.
+![Desktop bookshelf, mobile writing, and mobile character settings](docs/images/preview.png)
 
-Browser books belong to the current browser and origin (the scheme, host, and port). Clearing site data removes them. Export before clearing that data or moving to another browser; the device build does not upload or merge your books.
+## Start your first book
 
-### Opening your local host from another device
+1. Choose **新建书目** (New Book), enter a title, and confirm. A new book includes a chapter and section.
+2. In **本书设定** (Book settings), add characters, worldbuilding, and a plot outline, and confirm where the material should load.
+3. Open a section, write a few lines at the bottom, and choose **发送并续写** (Send and continue). Edit the prose, try **再生成一版** (Regenerate version), and use the candidate arrows to select a version.
+4. Use **选择前文** (Select previous text) to save summaries of earlier sections and choose what this section should reference. Check **本轮上下文概览** (Context overview) before generating.
+5. Return to the shelf and use **导出当前书目** (Export current Book) to keep a backup.
 
-The default bind address is `127.0.0.1`. To use the same host from another device on a trusted LAN or private network, choose the bind address explicitly, for example `npm run dev -- --host 0.0.0.0`. The app does not add an access password, token, or Host allowlist; any device that can reach the chosen address can use it. State-changing browser requests that include an `Origin` header must remain same-origin.
+The [User guide](docs/USER_GUIDE.md) covers controls, author and character modes, directory organization, and recovery. It includes a table of the actual Chinese interface labels. A [Chinese User guide](docs/USER_GUIDE.zh-CN.md) is also available.
 
-Configured Providers may use HTTP or HTTPS on public, loopback, LAN, or private-network addresses without an extra opt-in flag. Metadata and link-local targets and redirects remain rejected to avoid sending credentials to unintended services.
+## Manuscripts, AI, and backups
 
-### Try the hosted build on your computer
+Books are readable local files on the computer running the app. **设置 → 保存位置** (Settings → Storage location) shows the library directory. When another device accesses that host over a trusted network, the books still live on the host computer. The app has no cloud manuscript storage or automatic sync.
 
-To explore the browser edition with demo books, run:
+Generation sends **the material included in the current context** to your configured Provider, including confirmed summaries of selected earlier sections. Requests also contain location information such as Book, chapter, and section titles. Local-first describes manuscript storage; it does not mean real AI requests stay on your device. Keys are stored in a separate local plaintext configuration file, outside book backups.
 
-```bash
-npm run build
-npm run preview
-```
+Submitted manuscript edits save automatically. **Unsent or unconfirmed editor text may not be in the book or its JSON backup.** Check the save status and keep unsubmitted text separately before leaving.
 
-Open the address shown in the terminal, normally `http://localhost:4327`. This previews the same build and web runtime used for cloud hosting: demo books and your changes stay in this browser, and continuations use the Fake Provider without a key. It does not start the file-based library server or publish anything to the cloud. Press Ctrl+C to stop the preview.
+- **EPUB, Markdown, TXT** export the currently adopted prose for reading or further editing.
+- **JSON full backup** preserves book material, remaining candidates, previous-text selections, and summary snapshots for recovery. Importing creates a copy without replacing the original book.
 
-## Connecting an AI service
+Multiple tabs can edit. If the same book encounters a save conflict, the page retains its edits; the app does not automatically merge them or overwrite a newer version. Follow [Saving and recovery](docs/USER_GUIDE.md#automatic-saving-conflicts-and-recovery). Transaction recovery does not replace independent backups.
 
-In local-host mode, you choose the Provider and model. The app sends the writing material included in your context plan to that service, so choose an endpoint you trust. Your model selection is remembered in this browser. Connection settings and API keys stay on the host, separately from your books.
+## Current boundaries and feedback
 
-<details>
-<summary>How connections, keys, and connection tests work</summary>
+The local host defaults to this computer only, with no login or access password. For use from other devices, ask your agent to configure access within a trusted network. Any device that can reach the service can use it; do not expose it directly to the public internet.
 
-The local host supports the deterministic Fake Provider and OpenAI-compatible endpoints. The context plan and prompt for a generation request are assembled internally and sent to the Provider endpoint configured by the user. `/api/context-plan` returns a compact preview; `/api/generate` returns the draft and source-signature metadata for answer comparison, without echoing the internal messages. The writing UI does not display raw Provider messages. The local-host API key is stored as plaintext in `.data/private/providers.json` by default; set `STORY_PROVIDER_CONFIG` to choose another file. On POSIX, the file is written with mode `0600`. Windows file permissions are not treated as an equivalent credential store. Changing a saved profile's endpoint or kind requires entering its key again.
+The app can recover some interrupted saves and deletions, but cannot guarantee protection against power loss or disk corruption. Do not run two copies against the same library directory. There is no account sync, multi-user collaboration, or desktop installer. CI tests and builds on Windows, macOS, and Ubuntu with Node 22/24; it does not mean every browser or Provider has been tested in use.
 
-In hosted/device mode, generation remains Fake. A Provider test sends a temporary key to the configured `/models` endpoint; page scripts can read that input while the page is running, and the key is not persisted by the app. A successful test proves only that the endpoint responded and, when it returned a model list, that the configured model ID was present. It does not prove that `/chat/completions` accepts this app's generation parameters.
+Bug reports with small fictional stories are welcome. Do not attach private manuscripts, backups, or keys. Follow [Security](SECURITY.md) for security reports. [Privacy](PRIVACY.md) and the [Threat model](docs/THREAT_MODEL.md) explain data and trust boundaries.
 
-</details>
+Development checks and code entry points are in the [Agent guide](docs/AGENT_GUIDE.md#verification-entry-points).
 
-## A few things to try
+## License and third-party assets
 
-- Keep character cards, world rules, and chapters together inside each book.
-- Write a passage yourself, then ask for a continuation or a different answer.
-- Compare answer candidates and choose the one you want in the manuscript.
-- Open the context drawer to see what writing material will be included and why.
-- Adjust the theme and typeface, or use the interface at a mobile-sized width.
-- Export a reading copy or a complete JSON backup.
-
-### Looking after your draft
-
-Edits save automatically. If the app finds that you're working from an older saved version, it keeps your local work available and asks you to export or reload. It won't merge competing edits for you.
-
-<details>
-<summary>Local-host save and recovery details</summary>
-
-Every update still saves and validates the whole Book. The client sends the `updatedAt` value from the version it loaded, and the local host compares that value inside its serialized save queue. If another page saved first, the stale request is rejected with HTTP 409 instead of overwriting the newer Book. The page keeps its local edits and answer candidates available, stops further stale autosaves, and offers JSON export or an explicit reload; it does not attempt an automatic merge.
-
-Before publishing a local-host save, the store records a private transaction journal and snapshots the previous managed Book files plus the library index. A failed in-process save is rolled back immediately. Book deletion uses the same recovery area: the complete Book tree is first moved into its prepared transaction, the library update is published, and only then is the deletion committed and physically cleaned. After a restart, an uncommitted save or deletion is rolled back, while a committed transaction is retained or completed and its cleanup is retried safely. Reads, saves, imports, and deletes use the same process-local queue so a normal request cannot observe the store halfway through that recovery. This protects transaction consistency, not against disk loss or two independent host processes sharing one data directory, so important work still needs external backups.
-
-</details>
-
-### Multiple browser tabs
-
-Every tab can edit, including different Books on the same device. Library writes are automatically serialized; there is no editor ownership or takeover step. If two pages edit the same Book, the stale save is rejected and its local text stays available for export or reload. A clean page automatically displays the latest saved version.
-
-Books persist on the device. Unsaved recovery drafts are isolated in each tab's session storage and survive a reload of that tab. Closing the tab ends its session; confirm that the Book was saved before closing, and export JSON if saving fails. A legacy shared draft is transferred into the first page that opens that Book. Other pages cannot overwrite or clear this page's draft.
-
-Coordination covers one browser storage area and origin. Refresh older tabs after upgrading. Different devices, browser profiles, and independent local hosts do not synchronize automatically.
-
-### Trying another continuation
-
-Use the regenerate action to try another answer, then browse the candidates with the arrows. Choosing one updates the manuscript and saves your choice. If your selected model profile has been removed, the app selects an available profile.
-
-<details>
-<summary>Which text is used, and how long alternatives are kept</summary>
-
-After editing an already-sent user passage, use the regenerate action on its answer to generate a new candidate from the latest adopted text before that answer. The old answer, its alternative candidates, and later passages are excluded from that request. If the manuscript ends with a user passage, the generate-answer action beneath it generates an answer without duplicating the user passage or consuming the next draft in the bottom input.
-
-The candidate arrows switch the current manuscript version immediately and save the choice in the background; they do not start generation. The existing edit, delete, and regenerate actions apply to the displayed answer. Generating another candidate selects it automatically. Subsequent generation, ordinary exports, statistics, and Section Memory freshness use the current version. Switching an answer in the middle of a section preserves later passages, which may need a continuity review.
-
-Candidates remain available across refreshes until the next new input receives an answer that is successfully saved. At that point, only the current version of the preceding answer is retained; its other candidates are removed. Failure or cancellation preserves those choices. Regenerating an answer or continuing without a new input does not clear candidates. Complete JSON backups include the candidates still present in the Book.
-
-Candidate source signatures record changes in writing material without storing another full prompt snapshot. Existing Books remain readable without a bulk migration, and candidate counts have no application-defined cap.
-
-</details>
-
-Settings includes a streaming-output toggle that is off by default and remembered in the current browser. When enabled, manuscript generation displays incoming text progressively. A complete result uses the same manuscript and candidate-saving flow as a non-streamed answer. If generation is cancelled or fails, the partial text remains available to select and copy on the page; it is not saved into the Book. Starting another generation replaces that temporary preview, and reloading the page clears it. Section Memory generation still waits for its complete structured result. Hosted/device mode remains Fake.
-
-<details>
-<summary>Streaming format for local API clients</summary>
-
-`POST /api/generate` accepts an optional boolean `stream`. A streamed response uses `application/x-ndjson` with `delta` events containing `text`, followed by a `result` event containing the ordinary generation result, or an `error` event. Only the final `result` means generation completed; an interrupted connection is not a completed answer. Requests without streaming retain the JSON response format.
-
-</details>
-
-### Giving the model the right context
-
-The writing page's Context drawer shows the active Provider limits, an approximate input budget, and an overview of included material and reasons for the current request. If a request is over budget or material is excluded or degraded, the preview says so explicitly. It does not display raw Provider messages or hidden model reasoning. The local-host Provider still receives the internally assembled messages for that generation; the API returns only the context preview or generated draft needed by the app.
-
-Cancelling a generation aborts the local request and propagates the abort to the Provider fetch. Generation has no application-defined deadline; the author can cancel while waiting. A late result cannot write to the manuscript or Memory, and cancellation does not clear the author's current input or note. This cannot retract work already accepted by a configured endpoint or remove that endpoint's logs.
-
-The Book-level plot outline (`plotOutline`) is included in normal continuation and block-regeneration prompts as future guidance. A Section `note`, shown as the current section guidance in the writing page, is included in non-summary prompts for that Section; notes from other Sections are not included. Legacy Section `plan` data remains readable and exportable but is not inserted into Provider prompts. Book summaries and Canon facts are likewise stored/exportable Book data, not hidden prompt sources. In the previous-section selector, a checkbox loads or removes an earlier Section, while the rest of its row expands an inline synopsis editor. A Section Memory is a five-field structured summary that starts as a model draft or manual draft; generating a synopsis changes only the local draft until the user confirms save-and-load. The current Memory and its previous snapshot are persisted with the Book and included in complete JSON export.
-
-Model-generated memory is never inserted into ordinary continuation until it is confirmed. Hosted/device generation remains Fake, and there is no automatic cloud storage or synchronization. Provider keys and endpoints remain a trust boundary: only enter a temporary device test key when you trust the current page and destination URL; local-host keys are stored as described above.
-
-## What to expect from this Alpha
-
-- API requests, Provider responses, and Section Memory have no application-defined size or item-count caps. Saves still transfer and validate the whole Book. The app reuses saves of the same unchanged revision, and the host skips rewriting identical source and manuscript files. Large Books still require more memory and I/O. A future Section/source revision API is outlined in the [English incremental-save design](docs/INCREMENTAL_SAVE.md); that API is not implemented.
-- Context estimates are advisory and do not block generation. Model context and output settings accept positive safe integers; the configured Provider determines its actual supported limits.
-- Browser `localStorage` is not encrypted and is readable by same-origin scripts. Clearing site data deletes device-local Books, and the device runtime does not provide filesystem-style transaction recovery.
-- The local host and Provider endpoint are not a production deployment. Browser, operating-system, or configured endpoint compromise is outside this demo's guarantees.
-- There is no cloud storage, account sync, multi-user collaboration, RAG, embeddings, or desktop wrapper.
-
-For more about data handling, recovery boundaries, and reporting a problem, see the English [`SECURITY.md`](SECURITY.md), [`PRIVACY.md`](PRIVACY.md), and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
-
-## Helping out
-
-Bug reports and focused improvements are welcome. A small reproduction using made-up story text is especially helpful; please keep private manuscripts, exported books, and credentials out of issues and patches. Use the private reporting route in the English [`SECURITY.md`](SECURITY.md) for a security concern.
-
-To check a local change:
-
-```bash
-npm test
-npm run typecheck
-npm run build
-npm run build:local
-npm run privacy:scan
-npm run license:check
-```
-
-## Typeface and notices
-
-The optional LXGW WenKai Lite font is distributed under the SIL Open Font License 1.1; see the English [`public/fonts/OFL.txt`](public/fonts/OFL.txt). Package and asset attribution is recorded in the English [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-## License
-
-The project code is available under the [MIT License](LICENSE). Bundled third-party assets remain under their respective licenses.
+Project code uses the [MIT License](LICENSE). The optional LXGW WenKai Lite font uses the [SIL Open Font License 1.1](public/fonts/OFL.txt). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for other attributions.

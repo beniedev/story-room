@@ -629,8 +629,10 @@ describe('writing UI contract', () => {
     expect(source).toContain('const promptCompositionGroup');
     expect(source).toContain("title: '正在写'");
     expect(source).toContain("title: '前文梗概/全文'");
-    expect(source).toContain('API Key 会以明文保存在本机配置文件');
-    expect(source).toContain('只有在你信任本机和 Provider 端点时才使用');
+    expect(source).toContain('API Key 以明文保存在运行服务的电脑上');
+    expect(source).toContain('不保存在浏览器存储中');
+    expect(source).toContain('不会随书稿备份导出');
+    expect(source).toContain('仅连接你信任的服务');
     expect(source).toContain('仅在你信任当前页面和目标 URL 时输入 API Key');
     expect(source).toContain('当前页面脚本可读取且不会持久化');
     expect(source).toContain('type="password"');

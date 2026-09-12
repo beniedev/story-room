@@ -86,7 +86,7 @@ export function ProviderSettings({
             </div>
 
             <p className="provider-secret-note">{providerRuntime === 'host'
-              ? 'API Key 会以明文保存在本机配置文件（默认 .data/private/providers.json）中；不会写入书稿或浏览器。只有在你信任本机和 Provider 端点时才使用；留空可继续使用已保存的 Key。'
+              ? 'API Key 以明文保存在运行服务的电脑上，不保存在浏览器存储中，也不会随书稿备份导出。仅连接你信任的服务；编辑已有方案且 URL 未变时，留空可沿用已保存的 Key。'
               : '仅在你信任当前页面和目标 URL 时输入 API Key；测试时临时 Key 会直接发送到填写的 URL，当前页面脚本可读取且不会持久化。'}</p>
             <p className="compact-setting-note">测试只检查 /models 是否可达及模型是否出现在返回列表中，不代表已验证实际生成接口的参数兼容性。</p>
             <div className="provider-form-actions">

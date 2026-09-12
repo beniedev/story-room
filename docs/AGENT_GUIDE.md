@@ -2,25 +2,79 @@ English | [简体中文](AGENT_GUIDE.zh-CN.md)
 
 # AI Agent Guide
 
-This guide is for AI agents that explain Story Room, fix issues, or maintain the repository. It gathers the current implementation entry points and the boundaries that are easy to miss, so an agent can explain the product accurately before starting in the right module.
+This guide helps AI agents install, start, and explain Story Room for users. The first part follows the path from a repository link to writing; later sections retain the entry points and contracts needed for troubleshooting and code maintenance.
 
 This is public project documentation. It does not replace the repository root [`AGENTS.md`](../AGENTS.md). The security, data, collaboration, and release rules in `AGENTS.md` are hard rules; this guide adds feature facts, a code map, and verification entry points. When code or tests change, re-check this page against the current code, tests, and applicable rules. Do not treat an old guide as an implementation promise.
 
-## Explaining features to users
+## Help a user install, start, and use Story Room
 
-Start with the following short explanation, then expand it to fit the user's question:
+When a user supplies only this repository link and wants to use the app, follow the local installation path: inspect the system and existing environment, get the source, install dependencies, start and open the app, then guide model setup and writing. Do not ask the user to choose an edition or try a demo first. Ask only when missing information affects existing data or cannot be determined locally; follow explicit review or development requests as given.
 
-> Story Room is a local-first workspace for continuous novel writing. Each Book keeps the manuscript, chapters, character cards, world setting, plot outline, and writing guidance isolated. You can continue in author mode or choose a character and write from that character's first-person viewpoint. AI output is saved as candidate manuscript versions that you can compare and keep. In local-host mode, books are written to readable files and can use an OpenAI-compatible Provider you trust. In hosted/device browser mode, books stay in the current browser's `localStorage`, and generation uses the Fake Provider. The application has no cloud sync, so important work should be exported as a JSON backup.
+### 1. Check the existing environment
 
-When answering a concrete question, explain the current runtime first, then where data is stored and which control performs the action. The interface is currently in Chinese; use the [Interface labels table](USER_GUIDE.md#interface-labels) for the exact labels. Do not describe “Provider testing” as real generation support in device mode, and do not describe “context preview” as hidden reasoning. If a user needs to know whether a control exists, check the actual rendered label in the current component.
+Check the operating system, shell, target directory, `node --version`, and `npm --version`. Supported Node versions are **22.x from 22.18.0, or 24.x**, matching `^22.18.0 || ^24.0.0` in `package.json`. Other major versions are outside the declared range.
 
-When explaining generation, cover at least these points:
+For an existing installation, identify its startup method, working-tree changes, and library directory before reusing it. Do not read the contents of key configuration files or overwrite `.data/`, configuration, or uncommitted files. If a prerequisite is missing, explain the component and target version and act within the user's authorization; do not silently change the system's default runtime.
 
-1. “Send and continue” continues from the current section. “Generate answer” under the last user input does not repeat that input.
-2. “Regenerate” adds a candidate. “Previous version” and “Next version” only switch and save the current candidate; they do not call the AI again.
-3. With “Streaming output” enabled, unfinished temporary text is still a draft. Cancelling or failing does not write it to the Book.
+### 2. Get the source and start the local service
 
-When explaining materials and context, make clear that “Save and load” is an explicit confirmation action. Writing guidance, the plot outline, character cards, world setting, and previous-text summaries enter later generation only after confirmation. The context overview shows included material and the reasons for inclusion; it does not show raw Provider messages or hidden model reasoning.
+For a new checkout, these commands work in PowerShell and common POSIX shells; they contain no shell-specific environment assignments:
+
+```bash
+git clone https://github.com/beniedev/story-room.git
+cd story-room
+npm ci
+```
+
+Use the existing directory if source is already available. A ZIP download does not require Git; extract it and run `npm ci`. If repository access fails, report the access status rather than asking for GitHub credentials. The `private: true` package flag prevents npm publication; it does not describe GitHub visibility.
+
+Run `npm run dev` in the project directory to start the local API and page together. Open **http://127.0.0.1:4310** by default. Complete startup, verification, and opening the page rather than only returning commands to the user.
+
+Keep the terminal running; `Ctrl+C` stops it. Start again with `npm run dev` from the same directory. Installation does not require a background service. If the agent uses a background process to keep the app running, record the process it started and how to stop it; do not stop unrelated processes.
+
+Use loopback by default. If the user wants access from other devices on a trusted network, explain `npm run dev -- --host 0.0.0.0`: other devices open the host computer's address, not `0.0.0.0` or their own `localhost`. Devices that can reach the service can use it. Ordinary installation does not include public deployment, background-service installation, or adding access steps to the product.
+
+### 3. Verify the result
+
+Check the process and startup errors, then open the actual page. A fresh local-host installation can be checked with same-origin `GET /api/health`, which returns JSON `{"ok":true}`. The default URL is `http://127.0.0.1:4310/api/health`.
+
+Also check that JavaScript/CSS load, the shelf renders, and **设置 → 保存位置** (Settings → Storage location) matches the intended runtime. Report an HTTP 200, a running process, passing unit tests, and a successful user workflow as distinct results.
+
+Do not use private manuscripts for installation tests. Installation verification can use synthetic content in a clearly named test book. Before creating anything in an existing library, explain what will be added and let the user choose the appropriate book.
+
+### 4. Connect the user's AI service
+
+In local-host mode, guide the user to **设置 → 模型连接** (Settings → Model connections) to enter a trusted service's URL, model ID, and key. Have the user enter the key in the interface, not the conversation; do not read or print key files. Before real generation, explain that selected writing material goes to that service, and proceed only when the user has authorized that call.
+
+Choose **保存连接方案** (Save connection profile) after entering the fields. The success callback selects the saved profile automatically; confirm the name and model beneath **Model connections** and at the top of the manuscript page. Select an existing profile through **连接方案** (Connection profile), handling any unsaved-change prompt first. Testing neither saves a profile nor replaces verification of real generation.
+
+**测试** (Test) checks `/models` connectivity and model matching when a list is returned. It does not prove that `/chat/completions` accepts the generation parameters. The initial built-in test connection is not a real model service; its output does not prove real AI is available. If service details are missing, finish installation and clearly identify the fields the user must enter locally. Do not substitute test mode for that delivery. Collect only sanitized error information, without credentials, manuscript text, raw requests, or configuration.
+
+### 5. Guide the first writing session and backup
+
+1. Choose **新建书目** (New Book) and confirm. A new book includes a chapter and section. With a real Provider selected, guide the user to enter text in a section and choose **发送并续写** (Send and continue). The user decides whether to send and what text to use.
+2. In **本书设定** (Book settings), explain material loading: writing style and plot outline use **保存并加载** (Save and load); character and world entries have separate scope controls where chapters and sections are selected and confirmed.
+3. **选择前文** (Select previous text) manages summaries of earlier sections; it is not the character or world settings screen. Confirm summaries and selections with **保存并加载梗概** (Save and load summaries).
+4. On the shelf, choose **导出当前书目** (Export current Book), select JSON, then use **导入 JSON 备份** (Import JSON backup) to restore a copy. Check that it opens and the original remains. A completed download alone does not verify recovery.
+5. Distinguish a saved book, a session recovery draft, and unsubmitted editor text. Editor contents may not be in JSON. Preserve them separately during a conflict before exporting the book and deciding whether to reload.
+
+The [User guide](USER_GUIDE.md) supplies detailed steps and an [Interface labels table](USER_GUIDE.md#interface-labels). Keep the actual Chinese labels when explaining actions in English.
+
+### 6. Troubleshoot common problems
+
+| Symptom | Check and response |
+| --- | --- |
+| Port occupied | Identify whether an existing Story Room uses it. Reuse that instance or stop a process this task started; do not terminate unknown processes. `STORY_API_PORT` controls the API port; the development frontend port is in `vite.config.ts`. Do not assume one `PORT` setting changes both. |
+| Page unavailable or blank | Check the command, address, process errors, and static responses. Restart the matching preview after rebuilding and check the actual page; a successful HTML response does not prove JS/CSS are correct. |
+| Books missing in another browser or real generation unavailable | Check the address, actual storage location, and selected Provider; the symptom alone does not establish the cause. Locate and protect the original library instead of replacing it with an empty one or clearing browser data. |
+| Save conflict | Preserve unsubmitted text, export the current Book, then let the user choose whether to reload and manually adopt content. Do not overwrite a newer version or clear storage. |
+| Provider test passes but generation fails | Separate model discovery from generation. Check sanitized errors, the selected profile, and parameters rather than assuming a key failure or changing the endpoint automatically. |
+
+Do not use deletion of `.data/`, clearing site data, or overwriting configuration as default troubleshooting. Multiple tabs can edit; users do not need to manage which page owns editing rights.
+
+## Development and maintenance
+
+The following sections cover code, tests, and storage contracts. `hosted/device`, Fake, and `npm run preview` remain internal screenshot and regression tools, not product editions to offer ordinary users. Installation delivery follows the local-host path above.
 
 ## Fact and action boundaries
 
@@ -49,6 +103,8 @@ Author mode and character mode share the persistence, context-plan, Provider req
 ### Context is explicitly selected
 
 `contextPlan.ts` calculates the material that may be sent to the Provider and the reason each item is included. Previous-text references require user confirmation. A section summary must be usable and fresh Memory; a model-generated draft cannot enter ordinary continuation before confirmation. Context-token estimates are for preview and guidance. They are not the Provider's actual limits and must not become arbitrary application-level length limits.
+
+`packetFor` includes the current Book, chapter, and section titles and positions. Selected, eligible `Section.memory` is sent as a previous-section reference. Legacy `Book.summaries` and `Book.canonFacts` are not current planner sources; this does not mean all summaries remain on the device.
 
 ### Local-host and hosted/device
 
@@ -201,3 +257,23 @@ If a user asks for a new feature, find the narrowest implementation entry in cod
 | Import might overwrite the original Book | `bookImport.ts` and the App's import callback | JSON import creates a recovery copy; the original Book is not overwritten. |
 
 For behavior not covered here, preserve the evidence and the smallest synthetic reproduction, then return to the source-of-truth order. Do not cover an unknown state with a speculative success message or documentation claim.
+
+## Local runtime and API details
+
+These details support installation troubleshooting and API maintenance. Ordinary users can write with the settings screen and existing startup scripts. Maintainers can verify the built local host with `npm run build:local` and `npm run server`, defaulting to `http://127.0.0.1:4311`; this does not require users to choose another edition.
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `STORY_DATA_DIR` | `.data/` | Local library root |
+| `STORY_PROVIDER_CONFIG` | `.data/private/providers.json` | Separate Provider configuration file, potentially containing plaintext keys |
+| `STORY_API_PORT` | `4311` | Local API port; the development Vite proxy reads the same value |
+| `STORY_HOST` | `127.0.0.1` | Bind address for `npm run server`; `npm run dev` sets it from `--host` |
+| `STORY_STATIC_DIR` | `dist-local` | Static directory served by `npm run server` |
+
+Paths resolve from the startup working directory. `STORY_DATA_DIR` and `STORY_PROVIDER_CONFIG` are independent: neither changes the other or migrates files. `scripts/dev.mjs` reads the project's `.env.local`; direct `npm run server` does not, so variables must come from its startup environment. PowerShell uses `$env:NAME = 'value'`; POSIX shells support `NAME=value command`. Check the startup method before supplying commands, and do not read or print key values.
+
+Local Provider keys are plaintext. POSIX writes use `0600`; Windows permissions are not treated as an equivalent credential store. Changing a saved profile's `endpoint` or `kind` requires re-entering its key. User-configured HTTP/HTTPS Providers may use public, loopback, LAN, or private-network addresses; metadata and link-local targets and redirects remain rejected.
+
+`POST /api/context-plan` returns a compact preview. `POST /api/generate` returns a draft and candidate source signature without echoing internal messages. A boolean `stream` option selects `application/x-ndjson`: lines contain `{"type":"delta","text":"…"}`, followed by `{"type":"result","result":{…}}` carrying the ordinary result, or `{"type":"error","error":"…"}`. Only the final `result` establishes completion; a disconnected stream is not a complete answer. Non-streaming requests still return JSON. Section summaries wait for a complete structured result rather than the manuscript's streaming display.
+
+Saves still transfer and validate the entire Book and compare the saved `updatedAt` revision. Repeated saves of an unchanged version reuse the result; the local host skips rewriting unchanged source and manuscript files. The app imposes no arbitrary manuscript, candidate, request, or response size caps; large books still need more memory and I/O. Context and output settings accept positive safe integers, with actual support determined by the Provider. Context estimates inform rather than block generation. The [incremental-save API](INCREMENTAL_SAVE.md) is not implemented.

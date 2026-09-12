@@ -2665,7 +2665,7 @@ function SettingsDrawer({
         </select>
         <p className="compact-setting-note">{{
           paper: '白色内容页、灰蓝边缘与分级标题色。',
-          manga: '沿用酒馆的粉紫交互语言。',
+          manga: '少女漫画风格的粉紫配色与交互。',
           gray: '冷灰纸面配酒红、赭金与墨蓝标题。',
           purple: '白色正文配淡紫边缘与深紫层级。',
         }[theme]}</p>

@@ -16,6 +16,10 @@ const binaryAllowlist = new Map([
     format: 'brotli-font',
     sha256: 'b3eb68cfb287957f43c8752dcac219a144b41306d71b2b46cdf3dbc2f89e126a',
   }],
+  ['docs/images/preview.png', {
+    format: 'png',
+    sha256: '46ee26cda200f96a405820abc189924a8c20e467f9158c7caee174089ca9c1c0',
+  }],
 ]);
 
 for (const [file, entry] of binaryAllowlist) {
@@ -36,6 +40,10 @@ for (const file of binaryAllowlist.keys()) {
 const syntheticNetworkRules = [
   { file: 'README.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
   { file: 'README.en.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
+  { file: 'docs/USER_GUIDE.zh-CN.md', pattern: /127\.0\.0\.1/g },
+  { file: 'docs/USER_GUIDE.md', pattern: /127\.0\.0\.1/g },
+  { file: 'docs/AGENT_GUIDE.zh-CN.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1)/g },
+  { file: 'docs/AGENT_GUIDE.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1)/g },
   { file: 'SECURITY.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'docs/decisions/0001-local-host-web-demo.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'server/main.ts', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|0\.0\.0\.0|::1)/g },
@@ -164,6 +172,8 @@ const inspectPng = (bytes, label) => {
       break;
     }
     const data = bytes.subarray(dataStart, dataEnd);
+    // IDAT contains compressed pixels, not text; scan metadata chunks instead.
+    if (type !== 'IDAT') addBinaryFindings(`${label} ${type}`, data);
 
     if (type === 'IHDR') {
       if (sawHeader || length !== 13) findings.push(`${label}: invalid PNG IHDR`);
@@ -389,7 +399,7 @@ const isBinary = (bytes, relativeFile) => {
 const inspectAllowedBinary = (relativeFile, bytes, entry) => {
   const actualHash = createHash('sha256').update(bytes).digest('hex');
   if (actualHash !== entry.sha256) findings.push(`${relativeFile}: SHA-256 mismatch (expected fixed allowlist hash)`);
-  addBinaryFindings(relativeFile, bytes);
+  if (entry.format !== 'png') addBinaryFindings(relativeFile, bytes);
   if (entry.format === 'png') inspectPng(bytes, relativeFile);
   else if (entry.format === 'ico') inspectIco(bytes, relativeFile);
   else if (entry.format === 'brotli-font') {
