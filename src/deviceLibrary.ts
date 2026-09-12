@@ -1,6 +1,7 @@
 import { createExampleBooks } from './fixtures';
 import { makeId } from './components/shared/id';
 import { buildContextPlan, toContextPlanPreview } from './contextPlan';
+import { assertDeviceWriterLease } from './deviceWriterLease';
 import {
   normalizeBook,
   serializeSectionMemoryDraft,
@@ -38,6 +39,7 @@ const readJson = <T>(key: string): T | null => {
 };
 
 const writeLibrary = (entries: BookIndexEntry[]) => {
+  assertDeviceWriterLease();
   localStorage.setItem(libraryKey, JSON.stringify(entries));
 };
 
@@ -67,6 +69,14 @@ const isBook = (value: unknown): value is Book => {
     && Array.isArray(book.branches);
 };
 
+const isBookIndexEntry = (value: unknown): value is BookIndexEntry => {
+  if (!value || typeof value !== 'object') return false;
+  const entry = value as Partial<BookIndexEntry>;
+  return typeof entry.id === 'string'
+    && typeof entry.title === 'string'
+    && typeof entry.updatedAt === 'string';
+};
+
 const cachedBooks = () => {
   const books: Book[] = [];
   for (let index = 0; index < localStorage.length; index += 1) {
@@ -83,10 +93,15 @@ const cachedBooks = () => {
 };
 
 const ensureLibrary = (): BookIndexEntry[] => {
+  assertDeviceWriterLease();
   const recovered = cachedBooks();
   const byId = new Map(recovered.map((book) => [book.id, book]));
-  const existing = readJson<BookIndexEntry[]>(libraryKey) ?? [];
-  if (existing.length > 0 && byId.size > 0) {
+  const existingValue = localStorage.getItem(libraryKey);
+  const existing = existingValue === null ? null : readJson<unknown>(libraryKey);
+  if (existing !== null && (!Array.isArray(existing) || !existing.every(isBookIndexEntry))) {
+    throw new Error('当前设备的书库索引已损坏，请导入备份恢复。');
+  }
+  if (existing !== null && existing.length > 0) {
     const ordered = existing.flatMap((entry) => {
       const cached = byId.get(entry.id);
       if (!cached) return [];
@@ -99,6 +114,8 @@ const ensureLibrary = (): BookIndexEntry[] => {
     return entries;
   }
 
+  if (existing !== null) return existing;
+
   for (const example of createExampleBooks()) {
     if (!byId.has(example.id)) byId.set(example.id, example);
   }
@@ -109,15 +126,26 @@ const ensureLibrary = (): BookIndexEntry[] => {
   return entries;
 };
 
-const loadBook = (bookId: string): Book => {
-  ensureLibrary();
+const listPersistedBooks = (): BookIndexEntry[] => {
+  const value = readJson<unknown>(libraryKey);
+  if (value === null) return [];
+  if (!Array.isArray(value) || !value.every(isBookIndexEntry)) {
+    throw new Error('当前设备的书库索引已损坏，请导入备份恢复。');
+  }
+  return value;
+};
+
+const loadPersistedBook = (bookId: string): Book => {
   const book = readJson<unknown>(bookKey(bookId));
   if (!book) throw new Error(`找不到 Book：${bookId}`);
   if (!isBook(book)) throw new Error(`Book 数据已损坏：${bookId}`);
   return normalizeBook(book);
 };
 
+const loadBook = loadPersistedBook;
+
 const writeBook = (book: Book, options: { expectedUpdatedAt?: string; createOnly?: boolean } = {}): Book => {
+  assertDeviceWriterLease();
   const existingValue = localStorage.getItem(bookKey(book.id));
   let previousUpdatedAt: string | undefined;
   if (options.createOnly) {
@@ -148,6 +176,7 @@ const writeBook = (book: Book, options: { expectedUpdatedAt?: string; createOnly
 };
 
 const createBook = (title: string): Book => {
+  assertDeviceWriterLease();
   let id = makeId('book');
   while (localStorage.getItem(bookKey(id))) id = makeId('book');
   return writeBook({
@@ -170,6 +199,7 @@ const createBook = (title: string): Book => {
 };
 
 const importBook = (book: Book): Book => {
+  assertDeviceWriterLease();
   let id = makeId('book');
   while (localStorage.getItem(bookKey(id))) id = makeId('book');
   return writeBook({
@@ -180,6 +210,7 @@ const importBook = (book: Book): Book => {
 };
 
 const deleteBook = (bookId: string) => {
+  assertDeviceWriterLease();
   const library = ensureLibrary();
   if (!library.some((entry) => entry.id === bookId)) throw new Error(`找不到 Book：${bookId}`);
   localStorage.removeItem(bookKey(bookId));
@@ -195,7 +226,9 @@ const fakeDraft = (mode: GenerationRequest['mode']) => (
 
 export const deviceLibrary = {
   listBooks: async () => ensureLibrary(),
-  loadBook: async (bookId: string) => loadBook(bookId),
+  listPersistedBooks: async () => listPersistedBooks(),
+  loadBook: async (bookId: string) => loadPersistedBook(bookId),
+  loadPersistedBook: async (bookId: string) => loadPersistedBook(bookId),
   createBook: async (title: string) => createBook(title),
   saveBook: async (book: Book, expectedUpdatedAt: string) => writeBook(book, { expectedUpdatedAt }),
   importBook: async (book: Book) => importBook(book),

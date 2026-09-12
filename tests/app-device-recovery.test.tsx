@@ -5,6 +5,8 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExampleBooks } from '../src/fixtures';
 import { deviceLibrary } from '../src/deviceLibrary';
+import { createDeviceWriterLease } from '../src/deviceWriterLease';
+import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 vi.mock('../src/api', async () => {
   const actual = await vi.importActual<typeof import('../src/api')>('../src/api');
@@ -40,6 +42,19 @@ const waitForStorage = async (milliseconds = 800) => {
   await act(async () => {
     await new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
   });
+};
+
+let lockEnvironment: ReturnType<typeof installFakeDeviceLocks>;
+
+const withDeviceWriter = async <T,>(work: () => Promise<T>): Promise<T> => {
+  const lease = createDeviceWriterLease(() => undefined);
+  await expect(lease.attempt()).resolves.toEqual({ role: 'writer' });
+  try {
+    return await work();
+  } finally {
+    lease.dispose();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 };
 
 const writeDraftEnvelope = (book: ReturnType<typeof createExampleBooks>[number], baseUpdatedAt: string | null) => {
@@ -90,10 +105,15 @@ beforeEach(() => {
     configurable: true,
     value: new MemoryStorage(),
   });
+  lockEnvironment = installFakeDeviceLocks();
 });
 
-afterEach(() => {
+afterEach(async () => {
   document.body.innerHTML = '';
+  // App unmounts dispose its lease in each test. Give the fake lock callback
+  // one turn to observe the release before restoring the global environment.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  lockEnvironment?.restore();
   vi.restoreAllMocks();
 });
 
@@ -140,9 +160,11 @@ describe('device storage recovery', () => {
 
   it('recovers and autosaves a draft whose base matches the current Book', async () => {
     const expected = createExampleBooks()[0]!;
-    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
-    if (!current) throw new Error('fixture book missing');
-    const stored = await deviceLibrary.loadBook(current.id);
+    const stored = await withDeviceWriter(async () => {
+      const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+      if (!current) throw new Error('fixture book missing');
+      return deviceLibrary.loadBook(current.id);
+    });
     const draft = {
       ...stored,
       title: '同基线本地草稿',
@@ -168,9 +190,11 @@ describe('device storage recovery', () => {
 
   it('keeps an old-base draft visible and blocks autosave after remount', async () => {
     const expected = createExampleBooks()[0]!;
-    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
-    if (!current) throw new Error('fixture book missing');
-    const baseline = await deviceLibrary.loadBook(current.id);
+    const baseline = await withDeviceWriter(async () => {
+      const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+      if (!current) throw new Error('fixture book missing');
+      return deviceLibrary.loadBook(current.id);
+    });
 
     const firstContainer = document.createElement('div');
     document.body.appendChild(firstContainer);
@@ -179,7 +203,8 @@ describe('device storage recovery', () => {
     await waitForElement(() => firstContainer.querySelector('.book-selector-card'));
     await act(async () => firstRoot.unmount());
 
-    const remote = await deviceLibrary.saveBook({ ...baseline, title: '另一页的新版本' }, baseline.updatedAt);
+    const remote = await withDeviceWriter(() =>
+      deviceLibrary.saveBook({ ...baseline, title: '另一页的新版本' }, baseline.updatedAt));
     const staleDraft = {
       ...baseline,
       title: '旧基线本地草稿',
@@ -221,10 +246,13 @@ describe('device storage recovery', () => {
 
   it('migrates a legacy raw draft as unknown-base content without overwriting the current Book', async () => {
     const expected = createExampleBooks()[0]!;
-    const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
-    if (!current) throw new Error('fixture book missing');
-    const baseline = await deviceLibrary.loadBook(current.id);
-    const remote = await deviceLibrary.saveBook({ ...baseline, title: '当前持久版本' }, baseline.updatedAt);
+    const baseline = await withDeviceWriter(async () => {
+      const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+      if (!current) throw new Error('fixture book missing');
+      return deviceLibrary.loadBook(current.id);
+    });
+    const remote = await withDeviceWriter(() =>
+      deviceLibrary.saveBook({ ...baseline, title: '当前持久版本' }, baseline.updatedAt));
     const legacyDraft = {
       ...baseline,
       title: '旧格式草稿',
@@ -257,11 +285,17 @@ describe('device storage recovery', () => {
   });
 
   it('preserves a stale next-book draft when deleting the current Book', async () => {
-    const entries = await deviceLibrary.listBooks();
-    const currentEntry = entries[0];
-    const nextEntry = entries[1];
-    if (!currentEntry || !nextEntry) throw new Error('fixture books missing');
-    const nextBaseline = await deviceLibrary.loadBook(nextEntry.id);
+    const { currentEntry, nextEntry, nextBaseline } = await withDeviceWriter(async () => {
+      const entries = await deviceLibrary.listBooks();
+      const currentEntry = entries[0];
+      const nextEntry = entries[1];
+      if (!currentEntry || !nextEntry) throw new Error('fixture books missing');
+      return {
+        currentEntry,
+        nextEntry,
+        nextBaseline: await deviceLibrary.loadBook(nextEntry.id),
+      };
+    });
 
     const container = document.createElement('div');
     document.body.appendChild(container);

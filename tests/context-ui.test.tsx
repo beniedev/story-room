@@ -170,6 +170,23 @@ afterEach(() => {
 });
 
 describe('context drawers real interactions', () => {
+  it('lets readers expand persisted summaries without changing their selection or content', async () => {
+    const props = makeToolProps(makeBook());
+    const { container, root } = await render(<ContextToolsDrawer {...props} canEdit={false} />);
+    const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]')!;
+    const checkbox = disclosure.closest('.context-reference-row')!.querySelector<HTMLInputElement>('input')!;
+    expect(checkbox.disabled).toBe(true);
+    await act(async () => disclosure.click());
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    const summary = container.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(summary.value).toBe(memoryDraft.synopsis);
+    expect(summary.readOnly).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('.context-summary-save')!.disabled).toBe(true);
+    expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
+    expect(props.onGenerateMemory).not.toHaveBeenCalled();
+    await unmount(root);
+  });
+
   it('renders compact prompt statistics without raw Provider or excluded-content disclosures', async () => {
     const trigger = document.createElement('button');
     document.body.appendChild(trigger);

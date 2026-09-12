@@ -261,6 +261,17 @@ describe('section writing guidance', () => {
 });
 
 describe('answer candidates and end-of-input response', () => {
+  it('keeps the pending-input response action disabled for readers', async () => {
+    const book = makeBook('book-reader-response', [{ id: 'pending-input', kind: 'user', content: 'Waiting for an answer.' }]);
+    const onGenerateForBlock = vi.fn();
+    const { container, root } = await render(<Writer {...writerProps(book)} canEdit={false} onGenerateForBlock={onGenerateForBlock} />);
+    const button = container.querySelector<HTMLButtonElement>('.respond-to-input-button')!;
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(onGenerateForBlock).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
   const candidateBook = makeBook('book-candidates', [{
     id: 'answer-block',
     kind: 'assistant',

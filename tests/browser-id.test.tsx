@@ -6,11 +6,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import App from '../src/App';
 import { makeId } from '../src/components/shared/id';
 import { deviceLibrary } from '../src/deviceLibrary';
+import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
 import * as proseFormatting from '../src/proseFormatting';
 import * as contextPlanner from '../src/contextPlan';
 import * as textMetrics from '../src/textMetrics';
+import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 const browserCrypto = globalThis.crypto;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -476,13 +478,21 @@ describe('browser IDs without crypto.randomUUID', () => {
   });
 
   it('creates a device-runtime Book with compatible IDs', async () => {
-    const created = await deviceLibrary.createBook('Fallback Book');
+    const environment = installFakeDeviceLocks();
+    const writerLease = createDeviceWriterLease(() => undefined);
+    try {
+      await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
+      const created = await deviceLibrary.createBook('Fallback Book');
 
-    expect(created.id).toMatch(new RegExp(`^book-${uuidPattern.source.slice(1, -1)}$`));
-    expect(created.chapters[0]?.id).toMatch(new RegExp(`^chapter-${uuidPattern.source.slice(1, -1)}$`));
-    expect(created.chapters[0]?.sections[0]?.id)
-      .toMatch(new RegExp(`^section-${uuidPattern.source.slice(1, -1)}$`));
-    expect((await deviceLibrary.loadBook(created.id)).title).toBe('Fallback Book');
+      expect(created.id).toMatch(new RegExp(`^book-${uuidPattern.source.slice(1, -1)}$`));
+      expect(created.chapters[0]?.id).toMatch(new RegExp(`^chapter-${uuidPattern.source.slice(1, -1)}$`));
+      expect(created.chapters[0]?.sections[0]?.id)
+        .toMatch(new RegExp(`^section-${uuidPattern.source.slice(1, -1)}$`));
+      expect((await deviceLibrary.loadBook(created.id)).title).toBe('Fallback Book');
+    } finally {
+      writerLease.dispose();
+      environment.restore();
+    }
   });
 
   it('keeps local prose, candidates, and input after a host conflict and blocks retry PUTs', async () => {

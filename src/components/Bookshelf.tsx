@@ -48,13 +48,14 @@ type BookSettingsView =
   | { kind: 'character-scope'; id: string }
   | { kind: 'world-scope'; id: string };
 
-function GuideEditor({ id, title, description, placeholder, value, onSave }: {
+function GuideEditor({ id, title, description, placeholder, value, onSave, canEdit = true }: {
   id: string;
   title: string;
   description: string;
   placeholder: string;
   value: string;
   onSave: (value: string) => Promise<void>;
+  canEdit?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
   return (
@@ -63,13 +64,13 @@ function GuideEditor({ id, title, description, placeholder, value, onSave }: {
         <p className="eyebrow">全局指引 · 作用于本书全部章与节</p>
         <div className="source-editor-title-row">
           <h1>{title}</h1>
-          <SaveAndLoadAction id={id} label={title} onConfirm={() => onSave(draft)} />
+          <SaveAndLoadAction id={id} label={title} onConfirm={() => onSave(draft)} canEdit={canEdit} />
         </div>
         <p>{description}</p>
       </header>
       <label className="guide-editor-field">
         <span className="sr-only">{title}</span>
-        <TextArea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} spellCheck />
+        <TextArea value={draft} readOnly={!canEdit} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} spellCheck />
       </label>
     </article>
   );
@@ -83,6 +84,7 @@ export function SourceLoadScopePage({
   chapters,
   loadedSectionIds,
   onConfirm,
+  canEdit = true,
 }: {
   sourceId: string;
   title: string;
@@ -91,6 +93,7 @@ export function SourceLoadScopePage({
   chapters: Book['chapters'];
   loadedSectionIds?: string[];
   onConfirm: (patch: { includeInPrompt: boolean; loadedSectionIds: string[] | undefined }) => Promise<void>;
+  canEdit?: boolean;
 }) {
   const selectAllRef = useRef<HTMLInputElement>(null);
   const confirmDialogRef = useRef<HTMLDialogElement>(null);
@@ -112,6 +115,7 @@ export function SourceLoadScopePage({
   }, [someSelected]);
 
   const applySelection = (nextIds: Set<string>) => {
+    if (!canEdit) return;
     setSelectedIds(new Set(sectionIds.filter((id) => nextIds.has(id))));
   };
 
@@ -124,6 +128,7 @@ export function SourceLoadScopePage({
   };
 
   const toggleSection = (sectionId: string, selected: boolean) => {
+    if (!canEdit) return;
     const nextIds = new Set(selectedIds);
     if (selected) nextIds.add(sectionId);
     else nextIds.delete(sectionId);
@@ -136,6 +141,7 @@ export function SourceLoadScopePage({
   };
 
   const confirmSelection = async () => {
+    if (!canEdit) return;
     if (confirmOperation.phase === 'pending') return;
     setConfirmOperation({ phase: 'pending', title: `正在保存${sourceLabel}加载范围…` });
     try {
@@ -157,6 +163,7 @@ export function SourceLoadScopePage({
           <p className="eyebrow">{bookTitle} · 加载范围</p>
           <h1 id={`${sourceId}-load-scope-title`}>{title}</h1>
           <p>选择生成时需要加载这份资料的章节小节。</p>
+          {!canEdit && <p className="helper-copy">当前页面为只读，可查看已保存的加载范围；关闭其他编辑页后可修改。</p>}
         </header>
         <div className="source-scope-drawer context-reference-scope" data-open>
           <div className="source-load-tab">
@@ -167,6 +174,7 @@ export function SourceLoadScopePage({
                 checked={allSelected}
                 aria-label={allSelected ? `取消全选${title}` : `全选${title}`}
                 onChange={() => applySelection(allSelected ? new Set() : new Set(sectionIds))}
+                disabled={!canEdit}
               />
             </label>
             <div className="context-reference-scope-title">
@@ -179,6 +187,7 @@ export function SourceLoadScopePage({
               aria-pressed={allSelected}
               aria-label={allSelected ? `取消全选${title}` : `全选${title}`}
               onClick={() => applySelection(allSelected ? new Set() : new Set(sectionIds))}
+              disabled={!canEdit}
             >
               <span>{allSelected ? '取消全选' : '全选'}</span>
             </button>
@@ -193,6 +202,7 @@ export function SourceLoadScopePage({
               aria-haspopup="dialog"
               aria-label={`确认载入${sourceLabel}`}
               title="确认载入"
+              disabled={!canEdit}
             >
               <Check aria-hidden="true" />
             </button>
@@ -208,6 +218,7 @@ export function SourceLoadScopePage({
                         type="checkbox"
                         checked={selectedIds.has(section.id)}
                         onChange={(event) => toggleSection(section.id, event.target.checked)}
+                        disabled={!canEdit}
                       />
                       <span>{section.title}</span>
                     </label>
@@ -266,10 +277,11 @@ export function SourceLoadScopePage({
   );
 }
 
-function SaveAndLoadAction({ id, label, onConfirm }: {
+function SaveAndLoadAction({ id, label, onConfirm, canEdit = true }: {
   id: string;
   label: string;
   onConfirm: () => Promise<void>;
+  canEdit?: boolean;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -283,6 +295,7 @@ function SaveAndLoadAction({ id, label, onConfirm }: {
   };
 
   const saveAndLoad = async () => {
+    if (!canEdit) return;
     if (operation.phase === 'pending') return;
     setOperation({ phase: 'pending', title: `正在保存并加载${label}…` });
     try {
@@ -308,6 +321,7 @@ function SaveAndLoadAction({ id, label, onConfirm }: {
           dialogRef.current?.showModal();
         }}
         aria-haspopup="dialog"
+        disabled={!canEdit}
         aria-label={`保存并加载${label}`}
         title="保存并加载"
       >
@@ -358,11 +372,12 @@ function SaveAndLoadAction({ id, label, onConfirm }: {
   );
 }
 
-function CharacterEditor({ bookTitle, character, onSave, onOpenScope }: {
+function CharacterEditor({ bookTitle, character, onSave, onOpenScope, canEdit = true }: {
   bookTitle: string;
   character: CharacterCard;
   onSave: (patch: Pick<CharacterCard, 'name' | 'role' | 'content'>) => Promise<void>;
   onOpenScope: () => void;
+  canEdit?: boolean;
 }) {
   const [draft, setDraft] = useState(() => ({
     name: character.name,
@@ -379,25 +394,26 @@ function CharacterEditor({ bookTitle, character, onSave, onOpenScope }: {
             <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${draft.name || character.name}的加载范围`} title="加载角色卡">
               <ListTree aria-hidden="true" />
             </button>
-            <SaveAndLoadAction id={`character-${character.id}`} label="角色卡" onConfirm={() => onSave(draft)} />
+            <SaveAndLoadAction id={`character-${character.id}`} label="角色卡" onConfirm={() => onSave(draft)} canEdit={canEdit} />
           </div>
         </div>
         <p>这里的资料只属于当前书目，并在生成时描述这个角色。</p>
       </header>
       <section className="source-editor-fields" aria-label={`${draft.name || character.name}角色卡内容`}>
-        <label>角色名<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
-        <label>角色要点<input value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} /></label>
-        <label>角色设定<TextArea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
+        <label>角色名<input value={draft.name} readOnly={!canEdit} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+        <label>角色要点<input value={draft.role} readOnly={!canEdit} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} /></label>
+        <label>角色设定<TextArea value={draft.content} readOnly={!canEdit} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
 }
 
-function WorldRuleEditor({ bookTitle, rule, onSave, onOpenScope }: {
+function WorldRuleEditor({ bookTitle, rule, onSave, onOpenScope, canEdit = true }: {
   bookTitle: string;
   rule: WorldRule;
   onSave: (patch: Pick<WorldRule, 'title' | 'content'>) => Promise<void>;
   onOpenScope: () => void;
+  canEdit?: boolean;
 }) {
   const [draft, setDraft] = useState(() => ({ title: rule.title, content: rule.content }));
   return (
@@ -410,14 +426,14 @@ function WorldRuleEditor({ bookTitle, rule, onSave, onOpenScope }: {
             <button type="button" className="icon-button source-scope-open" onClick={onOpenScope} aria-label={`选择${draft.title || rule.title}的加载范围`} title="加载世界观设定">
               <ListTree aria-hidden="true" />
             </button>
-            <SaveAndLoadAction id={`world-${rule.id}`} label="世界观设定" onConfirm={() => onSave(draft)} />
+            <SaveAndLoadAction id={`world-${rule.id}`} label="世界观设定" onConfirm={() => onSave(draft)} canEdit={canEdit} />
           </div>
         </div>
         <p>这条设定只属于当前书目，可按小节决定是否加载。</p>
       </header>
       <section className="source-editor-fields" aria-label={`${draft.title || rule.title}世界观设定内容`}>
-        <label>设定名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label>
-        <label>设定内容<TextArea value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
+        <label>设定名称<input value={draft.title} readOnly={!canEdit} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label>
+        <label>设定内容<TextArea value={draft.content} readOnly={!canEdit} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck /></label>
       </section>
     </article>
   );
@@ -434,6 +450,7 @@ function MissingSettingsItem({ label }: { label: string }) {
 
 interface BookshelfProps {
   settingsOnly?: boolean;
+  canEdit?: boolean;
   book: Book;
   library: BookIndexEntry[];
   selectedSectionId: string;
@@ -477,6 +494,7 @@ function DirectorySelectionIndicator({ state }: { state: DirectorySelectionState
 }
 
 export function Bookshelf(props: BookshelfProps) {
+  const canEdit = props.canEdit !== false;
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [nameOperation, setNameOperation] = useState<DialogOperationState>(idleDialogOperation);
@@ -546,22 +564,26 @@ export function Bookshelf(props: BookshelfProps) {
 
   const rememberTrigger = () => document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const openNameDialog = (dialog: NameDialogState) => {
+    if (!canEdit) return;
     nameDialogTrigger.current = rememberTrigger();
     setNameOperation(idleDialogOperation);
     setNameDialog(dialog);
   };
   const openDeleteDialog = (dialog: DeleteDialogState) => {
+    if (!canEdit) return;
     deleteDialogTrigger.current = rememberTrigger();
     setDeleteOperation(idleDialogOperation);
     setDeleteDialog(dialog);
   };
   const openCurrentBookNameDialog = (dialog: NameDialogState) => {
+    if (!canEdit) return;
     nameDialogTrigger.current = bookActionsTrigger.current;
     bookActionsMenu.current?.removeAttribute('open');
     setNameOperation(idleDialogOperation);
     setNameDialog(dialog);
   };
   const openCurrentBookDeleteDialog = () => {
+    if (!canEdit) return;
     deleteDialogTrigger.current = bookActionsTrigger.current;
     bookActionsMenu.current?.removeAttribute('open');
     setDeleteOperation(idleDialogOperation);
@@ -681,7 +703,7 @@ export function Bookshelf(props: BookshelfProps) {
 
   const submitNameDialog = async (event: FormEvent) => {
     event.preventDefault();
-    if (!nameDialog || nameOperation.phase === 'pending') return;
+    if (!canEdit || !nameDialog || nameOperation.phase === 'pending') return;
     const value = nameDialog.value.trim();
     if (!value) return;
     setNameOperation({ phase: 'pending', title: nameOperationCopy.pending });
@@ -706,7 +728,7 @@ export function Bookshelf(props: BookshelfProps) {
   };
 
   const confirmDelete = async () => {
-    if (!deleteDialog || deleteOperation.phase === 'pending') return;
+    if (!canEdit || !deleteDialog || deleteOperation.phase === 'pending') return;
     setDeleteOperation({ phase: 'pending', title: '正在删除…' });
     try {
       if (deleteDialog.kind === 'book') await props.onDeleteBook();
@@ -734,6 +756,7 @@ export function Bookshelf(props: BookshelfProps) {
   };
 
   const toggleSourceSelectionMode = (kind: SourceSelectionKind) => {
+    if (!canEdit) return;
     setSourceSelectionMode((current) => current === kind ? null : kind);
     setSelectedSourceIds(new Set());
   };
@@ -866,14 +889,15 @@ export function Bookshelf(props: BookshelfProps) {
                   type="button"
                   className="book-menu-action"
                   aria-haspopup="dialog"
+                  disabled={!canEdit}
                   onClick={() => openCurrentBookNameDialog({ kind: 'rename-book', value: props.book.title })}
                 ><Pencil aria-hidden="true" /><span>修改书名</span></button>
                 <button
                   type="button"
                   className="book-menu-action danger-icon"
                   aria-haspopup="dialog"
-                  disabled={props.library.length <= 1}
-                  title={props.library.length <= 1 ? '书库至少保留一本书' : undefined}
+                  disabled={!canEdit}
+                  title={!canEdit ? '当前页面为只读' : undefined}
                   onClick={openCurrentBookDeleteDialog}
                 ><Trash2 aria-hidden="true" /><span>删除书目</span></button>
               </div>
@@ -895,11 +919,12 @@ export function Bookshelf(props: BookshelfProps) {
                 title="本书设定"
               ><BookMarked aria-hidden="true" /></button>
               <div className="directory-actions">
-                <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-chapter', value: '' })} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
+                <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-chapter', value: '' })} disabled={!canEdit} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
                 <button
                   type="button"
                   className="icon-button"
                   aria-pressed={selectionMode}
+                  disabled={!canEdit}
                   onClick={() => {
                     setSelectionMode((current) => !current);
                     setSelection({ chapterIds: new Set(), sectionIds: new Set() });
@@ -911,7 +936,7 @@ export function Bookshelf(props: BookshelfProps) {
                   type="button"
                   className="icon-button danger-icon"
                   aria-haspopup="dialog"
-                  disabled={selection.chapterIds.size === 0 && selection.sectionIds.size === 0}
+                  disabled={!canEdit || (selection.chapterIds.size === 0 && selection.sectionIds.size === 0)}
                   onClick={() => openDeleteDialog({
                     kind: 'selection',
                     chapterIds: [...selection.chapterIds],
@@ -957,6 +982,7 @@ export function Bookshelf(props: BookshelfProps) {
                         type="button"
                         className="icon-button"
                         aria-haspopup="dialog"
+                        disabled={!canEdit}
                         onClick={() => openNameDialog({ kind: 'new-section', value: '', chapterId: chapter.id, chapterTitle: chapter.title })}
                         aria-label={`在${chapter.title}中新建小节`}
                         title="新建小节"
@@ -965,6 +991,7 @@ export function Bookshelf(props: BookshelfProps) {
                         type="button"
                         className="icon-button"
                         aria-haspopup="dialog"
+                        disabled={!canEdit}
                         onClick={() => openNameDialog({ kind: 'rename-chapter', value: chapter.title, chapterId: chapter.id })}
                         aria-label={`修改章节名称：${chapter.title}`}
                         title="修改章节名称"
@@ -1149,11 +1176,12 @@ export function Bookshelf(props: BookshelfProps) {
                 </summary>
                 <div className="source-group-content">
                   <div className="source-group-actions">
-                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-character', value: '' })} aria-label="新建角色卡" title="新建角色卡"><Plus aria-hidden="true" /></button>
+                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-character', value: '' })} disabled={!canEdit} aria-label="新建角色卡" title="新建角色卡"><Plus aria-hidden="true" /></button>
                     <button
                       type="button"
                       className="icon-button"
                       aria-pressed={sourceSelectionMode === 'character'}
+                      disabled={!canEdit}
                       onClick={() => toggleSourceSelectionMode('character')}
                       aria-label={sourceSelectionMode === 'character' ? '退出角色卡选择' : '选择角色卡'}
                       title={sourceSelectionMode === 'character' ? '退出选择' : '选择'}
@@ -1162,7 +1190,7 @@ export function Bookshelf(props: BookshelfProps) {
                       type="button"
                       className="icon-button danger-icon"
                       aria-haspopup="dialog"
-                      disabled={sourceSelectionMode !== 'character' || selectedSourceIds.size === 0}
+                      disabled={!canEdit || sourceSelectionMode !== 'character' || selectedSourceIds.size === 0}
                       onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'character', ids: [...selectedSourceIds] })}
                       aria-label="删除所选角色卡"
                       title={sourceSelectionMode === 'character' && selectedSourceIds.size ? '删除所选角色卡' : '请先选择角色卡'}
@@ -1203,11 +1231,12 @@ export function Bookshelf(props: BookshelfProps) {
                 </summary>
                 <div className="source-group-content">
                   <div className="source-group-actions">
-                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-world', value: '' })} aria-label="新建世界观设定" title="新建世界观设定"><Plus aria-hidden="true" /></button>
+                    <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-world', value: '' })} disabled={!canEdit} aria-label="新建世界观设定" title="新建世界观设定"><Plus aria-hidden="true" /></button>
                     <button
                       type="button"
                       className="icon-button"
                       aria-pressed={sourceSelectionMode === 'world'}
+                      disabled={!canEdit}
                       onClick={() => toggleSourceSelectionMode('world')}
                       aria-label={sourceSelectionMode === 'world' ? '退出世界观设定选择' : '选择世界观设定'}
                       title={sourceSelectionMode === 'world' ? '退出选择' : '选择'}
@@ -1216,7 +1245,7 @@ export function Bookshelf(props: BookshelfProps) {
                       type="button"
                       className="icon-button danger-icon"
                       aria-haspopup="dialog"
-                      disabled={sourceSelectionMode !== 'world' || selectedSourceIds.size === 0}
+                      disabled={!canEdit || sourceSelectionMode !== 'world' || selectedSourceIds.size === 0}
                       onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'world', ids: [...selectedSourceIds] })}
                       aria-label="删除所选世界观设定"
                       title={sourceSelectionMode === 'world' && selectedSourceIds.size ? '删除所选世界观设定' : '请先选择世界观设定'}
@@ -1258,6 +1287,7 @@ export function Bookshelf(props: BookshelfProps) {
               description="记录本书的情节走向、阶段目标与关键转折；生成时会作为全书的长期指导。"
               placeholder="记录主要情节、阶段目标与关键转折……"
               value={props.book.plotOutline ?? ''}
+              canEdit={canEdit}
               onSave={(value) => props.onBookChange((current) => ({ ...current, plotOutline: value }))}
             />
           ) : bookSettingsView.kind === 'style' ? (
@@ -1268,6 +1298,7 @@ export function Bookshelf(props: BookshelfProps) {
               description="指定本书的行文风格、语气和语言表达；适用于书内全部章节与小节。"
               placeholder="例如：克制、清澈；少用解释性旁白……"
               value={props.book.writingBrief}
+              canEdit={canEdit}
               onSave={(value) => props.onBookChange((current) => ({ ...current, writingBrief: value }))}
             />
           ) : bookSettingsView.kind === 'character' ? (
@@ -1283,6 +1314,7 @@ export function Bookshelf(props: BookshelfProps) {
                       : item),
                   }))}
                   onOpenScope={() => openSourceScope({ kind: 'character-scope', id: settingsCharacter.id })}
+                  canEdit={canEdit}
                 />
               : <MissingSettingsItem label="角色卡" />
           ) : bookSettingsView.kind === 'world' ? (
@@ -1298,6 +1330,7 @@ export function Bookshelf(props: BookshelfProps) {
                       : item),
                   }))}
                   onOpenScope={() => openSourceScope({ kind: 'world-scope', id: settingsWorldRule.id })}
+                  canEdit={canEdit}
                 />
               : <MissingSettingsItem label="世界观设定" />
           ) : bookSettingsView.kind === 'character-scope' ? (
@@ -1310,6 +1343,7 @@ export function Bookshelf(props: BookshelfProps) {
                   enabled={settingsCharacter.includeInPrompt}
                   chapters={props.book.chapters}
                   loadedSectionIds={settingsCharacter.loadedSectionIds}
+                  canEdit={canEdit}
                   onConfirm={(patch) => props.onBookChange((current) => ({
                     ...current,
                     characters: current.characters.map((item) => item.id === settingsCharacter.id
@@ -1328,6 +1362,7 @@ export function Bookshelf(props: BookshelfProps) {
                   enabled={settingsWorldRule.includeInPrompt}
                   chapters={props.book.chapters}
                   loadedSectionIds={settingsWorldRule.loadedSectionIds}
+                  canEdit={canEdit}
                   onConfirm={(patch) => props.onBookChange((current) => ({
                     ...current,
                     worldRules: current.worldRules.map((item) => item.id === settingsWorldRule.id

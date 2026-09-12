@@ -61,6 +61,12 @@ import { Writer } from './components/Writer';
 import { Bookshelf } from './components/Bookshelf';
 import { ProviderSettings } from './components/ProviderSettings';
 import { makeId } from './components/shared/id';
+import {
+  assertDeviceWriterLease,
+  createDeviceWriterLease,
+  hasDeviceWriterLease,
+  type DeviceWriterState,
+} from './deviceWriterLease';
 import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
 import {
   DialogOperationStatus,
@@ -225,6 +231,7 @@ const readCachedBook = (bookId: string, includeDraft = true) => {
 
 const cacheBook = (book: Book) => {
   if (api.runtime !== 'device') return false;
+  assertDeviceWriterLease();
   try {
     localStorage.setItem(bookCacheKey(book.id), JSON.stringify(normalizeBook(book)));
     return true;
@@ -235,6 +242,7 @@ const cacheBook = (book: Book) => {
 
 const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
   if (api.runtime !== 'device') return false;
+  assertDeviceWriterLease();
   try {
     const envelope: DeviceDraftEnvelope = {
       schemaVersion: 1,
@@ -251,6 +259,7 @@ const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
 
 const removeDraftBook = (bookId: string) => {
   if (api.runtime !== 'device') return;
+  assertDeviceWriterLease();
   try {
     localStorage.removeItem(bookDraftKey(bookId));
   } catch {
@@ -260,6 +269,7 @@ const removeDraftBook = (bookId: string) => {
 
 const removeCachedBook = (bookId: string) => {
   if (api.runtime !== 'device') return;
+  assertDeviceWriterLease();
   try {
     localStorage.removeItem(bookCacheKey(bookId));
     localStorage.removeItem(bookDraftKey(bookId));
@@ -307,9 +317,21 @@ type BookLoadResolution = {
 
 const resolveBookForLoad = async (
   bookId: string,
-  options: { ignoreDraft?: boolean } = {},
+  options: { ignoreDraft?: boolean; persistedOnly?: boolean } = {},
 ): Promise<BookLoadResolution> => {
-  const stored = normalizeBook(await api.loadBook(bookId));
+  const stored = normalizeBook(await (options.persistedOnly && api.runtime === 'device'
+    ? api.loadPersistedBook(bookId)
+    : api.loadBook(bookId)));
+  if (options.persistedOnly) {
+    return {
+      stored,
+      loaded: stored,
+      draft: null,
+      draftConflict: false,
+      loadedDirty: false,
+    };
+  }
+  if (api.runtime === 'device') assertDeviceWriterLease();
   const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
   const persistedCached = api.runtime === 'device' ? readCachedBook(bookId, false) : null;
   const draft = api.runtime === 'device' ? readDraftRecord(bookId) : null;
@@ -317,8 +339,6 @@ const resolveBookForLoad = async (
   const draftConflict = recoverDraft && (draft!.legacy || draft!.baseUpdatedAt !== stored.updatedAt);
   const cachedForLoad = options.ignoreDraft ? persistedCached : cached;
   const loaded = recoverDraft ? draft!.book : newerBook(stored, cachedForLoad);
-  if (api.runtime === 'device' && !draftConflict
-    && (!cachedForLoad || loaded.updatedAt === stored.updatedAt)) cacheBook(loaded);
   return {
     stored,
     loaded,
@@ -329,6 +349,7 @@ const resolveBookForLoad = async (
 };
 
 function App() {
+  const isDeviceRuntime = api.runtime === 'device';
   const [library, setLibrary] = useState<BookIndexEntry[]>([]);
   const [book, setBook] = useState<Book | null>(null);
   const [sectionId, setSectionId] = useState('');
@@ -358,7 +379,14 @@ function App() {
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
   const [generationState, setGenerationState] = useState<'idle' | 'generating'>('idle');
-  const [status, setStatus] = useState(api.runtime === 'device' ? '正在打开此设备的书库…' : '正在打开本机书库…');
+  const [status, setStatus] = useState(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
+  const [deviceWriterState, setDeviceWriterState] = useState<DeviceWriterState>(
+    isDeviceRuntime ? { role: 'checking' } : { role: 'writer' },
+  );
+  const [libraryReady, setLibraryReady] = useState(!isDeviceRuntime);
+  const [takeoverPending, setTakeoverPending] = useState(false);
+  const [readerRefreshAvailable, setReaderRefreshAvailable] = useState(false);
+  const [readerBookDeleted, setReaderBookDeleted] = useState(false);
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
@@ -372,6 +400,7 @@ function App() {
   const restoreShelfFocus = useRef(false);
   const [bookSettingsRequest, setBookSettingsRequest] = useState(0);
   const [newBookRequest, setNewBookRequest] = useState(0);
+  const [emptyBookDialogOpen, setEmptyBookDialogOpen] = useState(false);
   const [writerBookSettingsOpen, setWriterBookSettingsOpen] = useState(false);
   const [manuscriptEditorOpen, setManuscriptEditorOpen] = useState(false);
   const bookRef = useRef<Book | null>(null);
@@ -393,6 +422,20 @@ function App() {
   const streamingPending = useRef<{ controller: AbortController; key: string; content: string } | null>(null);
   const streamingFrame = useRef<number | null>(null);
   const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
+  const deviceLeaseRef = useRef<ReturnType<typeof createDeviceWriterLease> | null>(null);
+  const deviceWriterRoleRef = useRef(deviceWriterState.role);
+  const bootstrapCompleteRef = useRef(false);
+  const takeoverRequestRef = useRef<string | null | undefined>(undefined);
+  const libraryLoadGenerationRef = useRef(0);
+  const bookLoadGenerationRef = useRef(0);
+
+  const canEdit = !isDeviceRuntime || deviceWriterState.role === 'writer' && libraryReady;
+
+  const assertDeviceWriteAccess = () => {
+    if (!isDeviceRuntime) return;
+    if (!canEdit) throw new Error('当前页面为只读，请先成为编辑页。');
+    assertDeviceWriterLease();
+  };
 
   const cancelStreamingFrame = () => {
     if (streamingFrame.current === null) return;
@@ -403,6 +446,8 @@ function App() {
 
   useEffect(() => () => {
     generationAbort.current?.abort();
+    libraryLoadGenerationRef.current += 1;
+    bookLoadGenerationRef.current += 1;
     cancelStreamingFrame();
     streamingPending.current = null;
   }, []);
@@ -474,6 +519,36 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isDeviceRuntime) return undefined;
+    let active = true;
+    const lease = createDeviceWriterLease((next) => {
+      if (!active) return;
+      const previousRole = deviceWriterRoleRef.current;
+      deviceWriterRoleRef.current = next.role;
+      if (previousRole !== next.role) bookLoadGenerationRef.current += 1;
+      if (previousRole === 'writer' && next.role !== 'writer') {
+        bootstrapCompleteRef.current = false;
+        setLibraryReady(false);
+        generationAbort.current?.abort();
+      }
+      // A writer notification only grants the lock. Keep every editor
+      // control closed until the reconcile effect has read the latest data.
+      if (next.role === 'writer') setLibraryReady(false);
+      setDeviceWriterState(next);
+    });
+    deviceLeaseRef.current = lease;
+    void lease.attempt()
+      .catch(() => {
+        if (active) setDeviceWriterState({ role: 'reader', reason: 'error' });
+      });
+    return () => {
+      active = false;
+      if (deviceLeaseRef.current === lease) deviceLeaseRef.current = null;
+      lease.dispose();
+    };
+  }, [isDeviceRuntime]);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
@@ -517,9 +592,24 @@ function App() {
   }, [book]);
 
   useEffect(() => {
-    if (api.runtime !== 'device' || !book) return undefined;
+    if (!isDeviceRuntime) return undefined;
+    const currentBookId = book?.id;
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== bookCacheKey(book.id)) return;
+      const isLibraryUpdate = event.key === 'story-native:library';
+      const isAnyBookUpdate = event.key === null || event.key?.startsWith(bookCachePrefix) === true;
+      const isCurrentBookUpdate = Boolean(currentBookId && event.key === bookCacheKey(currentBookId));
+      if (!isLibraryUpdate && !isAnyBookUpdate) return;
+      if (deviceWriterState.role !== 'writer') {
+        setReaderRefreshAvailable(true);
+        if (isCurrentBookUpdate && !event.newValue) {
+          setReaderBookDeleted(true);
+          setStatus('当前书目已被其他页面删除；重新载入后可继续阅读现存书目。');
+        } else {
+          setStatus('内容已更新，可重新载入。');
+        }
+        return;
+      }
+      if (!currentBookId || !isCurrentBookUpdate) return;
       if (!event.newValue) {
         saveConflictRef.current = true;
         setSaveConflict(true);
@@ -540,7 +630,7 @@ function App() {
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, [book?.id]);
+  }, [book?.id, deviceWriterState.role, isDeviceRuntime]);
 
   useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
@@ -561,6 +651,7 @@ function App() {
   }, [view]);
 
   const rememberCurrentSectionDraft = () => {
+    if (isDeviceRuntime && !canEdit) return;
     if (!book || !sectionId) return;
     const key = sectionDraftKey(book.id, sectionId);
     const draft = { instruction };
@@ -573,6 +664,7 @@ function App() {
   };
 
   const updateInstructionDraft = (value: string) => {
+    if (isDeviceRuntime && !canEdit) return;
     setInstruction(value);
     if (!book || !sectionId) return;
     const key = sectionDraftKey(book.id, sectionId);
@@ -605,29 +697,86 @@ function App() {
   };
 
   useEffect(() => {
+    if (isDeviceRuntime && deviceWriterState.role === 'checking') return undefined;
+    const isInitialBootstrap = !bootstrapCompleteRef.current;
+    const requestedBookId = takeoverRequestRef.current;
+    const isTakeoverReconcile = isDeviceRuntime && deviceWriterState.role === 'writer'
+      && requestedBookId !== undefined;
+    const isFailedTakeover = isDeviceRuntime && deviceWriterState.role !== 'writer'
+      && requestedBookId !== undefined;
+
+    // An occupied takeover moves checking -> reader. Keep the current reader
+    // snapshot intact; only a successful takeover is allowed to reconcile it.
+    if (!isInitialBootstrap && !isTakeoverReconcile) {
+      if (isFailedTakeover) takeoverRequestRef.current = undefined;
+      return undefined;
+    }
+
+    const preferredBookId = isInitialBootstrap ? undefined : requestedBookId ?? undefined;
+    if (!isInitialBootstrap) takeoverRequestRef.current = undefined;
+    let active = true;
+    const loadGeneration = ++libraryLoadGenerationRef.current;
+    const expectedRole = deviceWriterState.role;
+    const persistedOnly = isDeviceRuntime && expectedRole !== 'writer';
+    const isCurrent = () => active
+      && loadGeneration === libraryLoadGenerationRef.current
+      && (!isDeviceRuntime || deviceWriterRoleRef.current === expectedRole);
+
+    setLibraryReady(false);
+    setLibrary([]);
+    setBook(null);
+    bookRef.current = null;
+    setSectionId('');
+    setInstruction('');
+    sectionDraftsRef.current = {};
+    setSectionDrafts({});
+    saveConflictRef.current = false;
+    persistedUpdatedAt.current = null;
+    draftBaseUpdatedAt.current = undefined;
+    advanceSaveRevision();
+    setDirty(false);
+    setSaveConflict(false);
+    setReaderRefreshAvailable(false);
+    setReaderBookDeleted(false);
+    setView('shelf');
+    setStatus(persistedOnly ? '正在读取已保存书目…' : isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
     void (async () => {
       try {
         const [entries, profiles] = await Promise.all([
-          api.listBooks(),
+          persistedOnly && api.runtime === 'device' ? api.listPersistedBooks() : api.listBooks(),
           api.listProviderProfiles(),
         ]);
+        if (!isCurrent()) return;
         setProviderProfiles(profiles);
         if (profiles.length > 0) {
           setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
             ? current
             : profiles[0]?.id ?? current);
         }
+        if (!isCurrent()) return;
         setLibrary(entries);
-        if (entries[0]) await openBook(entries[0].id);
-        if (!saveConflictRef.current) setStatus('');
+        const selectedBookId = preferredBookId && entries.some((entry) => entry.id === preferredBookId)
+          ? preferredBookId
+          : entries[0]?.id;
+        if (selectedBookId) {
+          await openBook(selectedBookId, { persistedOnly });
+        }
+        if (!isCurrent()) return;
+        bootstrapCompleteRef.current = true;
+        setLibraryReady(true);
+        if (!saveConflictRef.current && !persistedOnly) setStatus('');
       } catch (error) {
+        if (!isCurrent()) return;
+        bootstrapCompleteRef.current = true;
+        setLibraryReady(true);
         setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
     })();
-  }, []);
+    return () => { active = false; };
+  }, [deviceWriterState.role, isDeviceRuntime]);
 
   useEffect(() => {
-    if (!book || !dirty) return;
+    if (!book || !dirty || !canEdit) return;
     const candidate = normalizeBook(book);
     let cachedLocally = false;
     if (api.runtime === 'device') cachedLocally = cacheCurrentDraft(candidate);
@@ -671,16 +820,27 @@ function App() {
     }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [book, dirty]);
+  }, [book, canEdit, dirty]);
 
-  const openBook = async (bookId: string, options: { ignoreDraft?: boolean } = {}) => {
-    if (book && book.id !== bookId && dirty) await saveCurrent();
+  const openBook = async (bookId: string, options: { ignoreDraft?: boolean; persistedOnly?: boolean } = {}) => {
+    const loadGeneration = ++bookLoadGenerationRef.current;
+    const expectedRole = deviceWriterRoleRef.current;
+    const isCurrent = () => loadGeneration === bookLoadGenerationRef.current
+      && (!isDeviceRuntime || deviceWriterRoleRef.current === expectedRole);
+    const persistedOnly = options.persistedOnly ?? (isDeviceRuntime && expectedRole !== 'writer');
+    if (!persistedOnly && isDeviceRuntime) assertDeviceWriterLease();
+    if (book && book.id !== bookId && dirty && !persistedOnly) await saveCurrent();
+    if (!isCurrent()) return;
     rememberCurrentSectionDraft();
-    const { stored, loaded, draft, draftConflict, loadedDirty } = await resolveBookForLoad(bookId, options);
+    const { stored, loaded, draft, draftConflict, loadedDirty } = await resolveBookForLoad(bookId, {
+      ...options,
+      persistedOnly,
+    });
+    if (!isCurrent()) return;
     persistedUpdatedAt.current = stored.updatedAt;
-    draftBaseUpdatedAt.current = !options.ignoreDraft && draft !== null ? draft.baseUpdatedAt : undefined;
-    saveConflictRef.current = draftConflict;
-    setSaveConflict(draftConflict);
+    draftBaseUpdatedAt.current = !persistedOnly && !options.ignoreDraft && draft !== null ? draft.baseUpdatedAt : undefined;
+    saveConflictRef.current = !persistedOnly && draftConflict;
+    setSaveConflict(!persistedOnly && draftConflict);
     const revision = advanceSaveRevision();
     bookRef.current = loaded;
     setBook(loaded);
@@ -688,12 +848,76 @@ function App() {
     setSelectedCharacterId(loaded.characters[0]?.id ?? '');
     restoreSectionDraft(loaded.id, '');
     persistedRevision.current = loadedDirty ? null : revision;
-    setDirty(loadedDirty);
-    if (draftConflict) setStatus(bookConflictMessage);
+    setDirty(persistedOnly ? false : loadedDirty);
+    setReaderRefreshAvailable(false);
+    setReaderBookDeleted(false);
+    if (!persistedOnly && draftConflict) setStatus(bookConflictMessage);
     setView('shelf');
   };
 
+  const tryTakeover = async () => {
+    if (!isDeviceRuntime || takeoverPending || deviceWriterState.role === 'writer' || !libraryReady) return;
+    const lease = deviceLeaseRef.current;
+    if (!lease) {
+      setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
+      return;
+    }
+    takeoverRequestRef.current = bookRef.current?.id ?? null;
+    setTakeoverPending(true);
+    setStatus('正在尝试成为编辑页…');
+    try {
+      const next = await lease.attempt();
+      if (deviceLeaseRef.current !== lease) return;
+      if (next.role !== 'writer') takeoverRequestRef.current = undefined;
+      if (next.role === 'writer' && deviceWriterRoleRef.current === 'writer' && hasDeviceWriterLease()) {
+        setStatus('已获得编辑权限，正在重新读取书库…');
+      } else if (next.reason === 'occupied') {
+        setStatus('另一个编辑页仍在使用书库，请关闭后再试。');
+      } else if (next.reason === 'unsupported') {
+        setStatus('当前浏览器暂不支持安全编辑，请使用现代浏览器并在 HTTPS 或可信本地页面打开。');
+      } else {
+        setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
+      }
+    } catch {
+      takeoverRequestRef.current = undefined;
+      setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
+    } finally {
+      setTakeoverPending(false);
+    }
+  };
+
+  const refreshReader = async () => {
+    if (!isDeviceRuntime || deviceWriterState.role === 'writer') return;
+    const expectedRole = deviceWriterRoleRef.current;
+    setStatus('正在重新读取已保存书目…');
+    try {
+      const entries = await (api.runtime === 'device' ? api.listPersistedBooks() : api.listBooks());
+      if (deviceWriterRoleRef.current !== expectedRole) return;
+      setLibrary(entries);
+      const currentId = bookRef.current?.id;
+      const nextId = currentId && entries.some((entry) => entry.id === currentId)
+        ? currentId
+        : entries[0]?.id;
+      if (nextId) {
+        await openBook(nextId, { persistedOnly: true });
+      } else {
+        bookRef.current = null;
+        setBook(null);
+        setSectionId('');
+        setInstruction('');
+        setSectionDrafts({});
+        setDirty(false);
+        setStatus('书库中暂无可读书目；关闭编辑页后可尝试成为编辑页。');
+      }
+      setReaderRefreshAvailable(false);
+      setReaderBookDeleted(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '无法重新读取书库。');
+    }
+  };
+
   const changeBook = (recipe: (current: Book) => Book) => {
+    assertDeviceWriteAccess();
     advanceSaveRevision();
     const current = bookRef.current ?? book;
     if (!current) return;
@@ -704,6 +928,7 @@ function App() {
   };
 
   const queueBookSave = (candidate: Book, revision: number, autosaveRevision?: number): Promise<Book> => {
+    assertDeviceWriteAccess();
     const existing = saveFlights.current.get(revision);
     if (existing) return existing;
     let persisted = false;
@@ -740,6 +965,7 @@ function App() {
   };
 
   const saveCurrent = async (candidateOverride?: Book) => {
+    assertDeviceWriteAccess();
     const currentBook = candidateOverride ?? bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook(currentBook);
@@ -772,6 +998,7 @@ function App() {
   };
 
   const commitBookChange = async (recipe: (current: Book) => Book) => {
+    assertDeviceWriteAccess();
     const currentBook = bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
     const candidate = normalizeBook({
@@ -837,7 +1064,6 @@ function App() {
     if (!book) return;
     try {
       const normalized = normalizeBook(book);
-      if (api.runtime === 'device') cacheCurrentDraft(normalized);
       const file = createBookExport(normalized, format);
       const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
       const link = document.createElement('a');
@@ -1393,6 +1619,7 @@ function App() {
   };
 
   const createBook = async (title: string) => {
+    assertDeviceWriteAccess();
     setBusy(true);
     try {
       await ensureCurrentBookSaved();
@@ -1414,6 +1641,7 @@ function App() {
       setDirty(false);
       setView('shelf');
       setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
+      setEmptyBookDialogOpen(false);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '新建书目失败。');
       throw error;
@@ -1423,6 +1651,7 @@ function App() {
   };
 
   const importBookBackup = async (file: File) => {
+    assertDeviceWriteAccess();
     const imported = parseBookBackup(await file.text());
     if (saveConflictRef.current) {
       rememberCurrentSectionDraft();
@@ -1454,8 +1683,9 @@ function App() {
   };
 
   const deleteCurrentBook = async () => {
-    if (!book || library.length <= 1) {
-      const error = new Error('书库至少需要保留一本书。');
+    assertDeviceWriteAccess();
+    if (!book) {
+      const error = new Error('当前没有可删除的书目。');
       setStatus(error.message);
       throw error;
     }
@@ -1484,12 +1714,28 @@ function App() {
         persistedUpdatedAt.current = storedNextBook.updatedAt;
         saveConflictRef.current = draftConflict;
         setSaveConflict(draftConflict);
+        bookRef.current = loadedNextBook;
         setBook(loadedNextBook);
         setSectionId('');
         setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
         restoreSectionDraft(loadedNextBook.id, '');
         persistedRevision.current = loadedDirty ? null : revision;
         setDirty(loadedDirty);
+        setView('shelf');
+      } else {
+        bookRef.current = null;
+        setBook(null);
+        setSectionId('');
+        setSelectedCharacterId('');
+        setInstruction('');
+        sectionDraftsRef.current = {};
+        setSectionDrafts({});
+        draftBaseUpdatedAt.current = undefined;
+        persistedUpdatedAt.current = null;
+        persistedRevision.current = null;
+        saveConflictRef.current = false;
+        setSaveConflict(false);
+        setDirty(false);
         setView('shelf');
       }
       if (!saveConflictRef.current) setStatus(`已删除《${deletedBook.title}》。`);
@@ -1755,6 +2001,10 @@ function App() {
   };
 
   const reloadCurrentBook = async () => {
+    if (isDeviceRuntime && !canEdit) {
+      await refreshReader();
+      return;
+    }
     if (!book) return;
     if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
     await openBook(book.id, { ignoreDraft: true });
@@ -1821,6 +2071,17 @@ function App() {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
+      {isDeviceRuntime && deviceWriterState.role !== 'writer' && (
+        <DeviceAccessBanner
+          state={deviceWriterState}
+          pending={takeoverPending}
+          ready={libraryReady}
+          refreshAvailable={readerRefreshAvailable}
+          bookDeleted={readerBookDeleted}
+          onTakeover={() => void tryTakeover()}
+          onRefresh={() => void withBusy(refreshReader)}
+        />
+      )}
       {view === 'shelf' && <header className="app-header">
         <div className="header-context" aria-live="polite">
           <strong>故事书屋</strong>
@@ -1830,6 +2091,7 @@ function App() {
             ref={importInput}
             className="sr-only"
             type="file"
+            disabled={busy || !canEdit}
             accept="application/json,.json"
             aria-label="导入 JSON 备份"
             onChange={(event) => {
@@ -1842,7 +2104,7 @@ function App() {
             type="button"
             className="icon-button"
             onClick={() => importInput.current?.click()}
-            disabled={!book || busy}
+            disabled={busy || !canEdit}
             aria-label="导入 JSON 备份"
             title="导入 JSON 备份"
           >
@@ -1851,8 +2113,10 @@ function App() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => setNewBookRequest((current) => current + 1)}
-            disabled={!book}
+            onClick={() => book
+              ? setNewBookRequest((current) => current + 1)
+              : setEmptyBookDialogOpen(true)}
+            disabled={busy || !canEdit}
             aria-haspopup="dialog"
             aria-label="新建书目"
             title="新建书目"
@@ -1869,7 +2133,7 @@ function App() {
           >
             <Download aria-hidden="true" />
           </button>
-          {saveConflict && <button
+          {(saveConflict || readerRefreshAvailable) && <button
             type="button"
             className="icon-button"
             onClick={() => void withBusy(reloadCurrentBook)}
@@ -1892,7 +2156,7 @@ function App() {
       </header>}
 
       <main id="main-content" ref={mainContent}>
-        {book && view === 'write' && section && (
+        {book && libraryReady && view === 'write' && section && (
           <Writer
             book={book}
             section={section}
@@ -1914,6 +2178,7 @@ function App() {
             contextToolsOpen={contextToolsOpen}
             providerName={activeProviderProfile?.name ?? '未选择方案'}
             modelId={activeProviderProfile?.modelId ?? '未选择模型'}
+            canEdit={canEdit}
             onBack={navigateFromHeader}
             onOpenBookSettings={() => {
               setWriterBookSettingsOpen(true);
@@ -1941,9 +2206,10 @@ function App() {
             onGenerate={() => void generateContinuation()}
           />
         )}
-        {book && (view !== 'write' || writerBookSettingsOpen) && (
+        {book && libraryReady && (view !== 'write' || writerBookSettingsOpen) && (
           <Bookshelf
             settingsOnly={view === 'write'}
+            canEdit={canEdit}
             book={book}
             library={library}
             selectedSectionId={sectionId}
@@ -1980,8 +2246,24 @@ function App() {
             onDeleteSources={deleteSources}
           />
         )}
-        {!book && (
-          <p className="loading-copy">正在打开此设备的书库…</p>
+        {!book && !libraryReady && <p className="loading-copy">正在打开此设备的书库…</p>}
+        {!book && libraryReady && canEdit && (
+          <EmptyLibraryActions
+            open={emptyBookDialogOpen}
+            busy={busy}
+            onOpenChange={setEmptyBookDialogOpen}
+            onCreateBook={createBook}
+            onImport={() => importInput.current?.click()}
+          />
+        )}
+        {!book && libraryReady && !canEdit && (
+          <section className="reader-empty-state" aria-labelledby="reader-empty-title">
+            <h1 id="reader-empty-title">当前没有可读书目</h1>
+            <p>关闭其他编辑页后，可以尝试成为编辑页；已有书目会在这里显示并可导出。</p>
+            <button type="button" className="quiet-action" onClick={() => void tryTakeover()} disabled={takeoverPending}>
+              {takeoverPending ? '正在尝试成为编辑页…' : '尝试成为编辑页'}
+            </button>
+          </section>
         )}
       </main>
 
@@ -2016,6 +2298,7 @@ function App() {
           busy={busy}
           onCancelGeneration={cancelGeneration}
           onClose={closeContextTools}
+          canEdit={canEdit}
         />
       )}
 
@@ -2027,6 +2310,170 @@ function App() {
       />
 
     </div>
+  );
+}
+
+
+function DeviceAccessBanner({
+  state,
+  pending,
+  ready,
+  refreshAvailable,
+  bookDeleted,
+  onTakeover,
+  onRefresh,
+}: {
+  state: DeviceWriterState;
+  pending: boolean;
+  ready: boolean;
+  refreshAvailable: boolean;
+  bookDeleted: boolean;
+  onTakeover: () => void;
+  onRefresh: () => void;
+}) {
+  const copy = state.role === 'checking'
+    ? {
+        title: pending ? '正在尝试成为编辑页…' : '正在检查此设备的编辑权限…',
+        detail: pending ? '当前内容仍可阅读，确认完成前保持只读。' : '确认完成前不会打开编辑器或恢复草稿。',
+      }
+      : state.reason === 'unsupported'
+        ? {
+            title: '当前页面为只读。',
+            detail: '当前浏览器或页面环境暂不支持安全编辑，请使用现代浏览器并在 HTTPS 或可信本地页面打开；也可以使用本机运行方式继续编辑。',
+          }
+      : state.reason === 'error'
+        ? {
+            title: '当前页面为只读。',
+            detail: '此页面暂时无法获得安全编辑权限，请关闭其他编辑页后重试。',
+          }
+        : bookDeleted
+          ? {
+              title: '当前书目已被其他页面删除。',
+              detail: '当前页面保留已读内容；重新载入后可继续阅读现存书目。',
+            }
+          : {
+              title: '另一个 Story Room 标签页正在编辑此设备书库。当前页面为只读。',
+              detail: '可以阅读已保存内容和导出当前书目；关闭编辑页后可尝试成为编辑页。',
+            };
+  return (
+    <div className="device-access-banner" role="status" aria-live="polite" aria-atomic="true">
+      <div className="device-access-copy">
+        <strong>{copy.title}</strong>
+        <span>{copy.detail}</span>
+      </div>
+      <div className="device-access-actions">
+        {refreshAvailable && (
+          <button type="button" className="quiet-action" onClick={onRefresh} disabled={pending}>
+            重新载入书库
+          </button>
+        )}
+        {(state.role !== 'checking' || pending) && (
+          <button
+            type="button"
+            className="primary-action"
+            onClick={onTakeover}
+            disabled={pending || !ready}
+            aria-busy={pending || undefined}
+          >
+            {pending ? '正在尝试成为编辑页…' : '尝试成为编辑页'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+function EmptyLibraryActions({
+  open,
+  busy,
+  onOpenChange,
+  onCreateBook,
+  onImport,
+}: {
+  open: boolean;
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreateBook: (title: string) => Promise<void>;
+  onImport: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const [title, setTitle] = useState('');
+  const [operation, setOperation] = useState<DialogOperationState>(idleDialogOperation);
+
+  useEffect(() => {
+    if (open) {
+      setOperation(idleDialogOperation);
+      if (!dialogRef.current?.open) dialogRef.current?.showModal();
+      titleInputRef.current?.focus();
+    } else if (dialogRef.current?.open) {
+      dialogRef.current.close();
+    }
+  }, [open]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle || operation.phase === 'pending') return;
+    setOperation({ phase: 'pending', title: '正在新建书目…' });
+    try {
+      await onCreateBook(trimmedTitle);
+      setOperation({ phase: 'success', title: '新建书目成功' });
+      onOpenChange(false);
+      setTitle('');
+    } catch (error) {
+      setOperation({
+        phase: 'error',
+        title: '新建书目失败',
+        detail: error instanceof Error ? error.message : '请稍后重试。',
+      });
+    }
+  };
+
+  return (
+    <section className="empty-library-state" aria-labelledby="empty-library-title">
+      <h1 id="empty-library-title">书库还是空的</h1>
+      <p>新建一本书开始写作，或导入 JSON 备份继续工作。</p>
+      <div className="empty-library-actions">
+        <button type="button" className="primary-action" onClick={() => onOpenChange(true)} disabled={busy}>
+          新建书目
+        </button>
+        <button type="button" className="quiet-action" onClick={onImport} disabled={busy}>
+          导入 JSON 备份
+        </button>
+      </div>
+      <dialog
+        ref={dialogRef}
+        className="name-dialog"
+        aria-labelledby="empty-book-dialog-title"
+        onClose={() => {
+          if (operation.phase !== 'pending') onOpenChange(false);
+        }}
+      >
+        <form method="dialog" onSubmit={submit}>
+          <div className="dialog-heading">
+            <div>
+              <span className="eyebrow">故事书屋</span>
+              <h2 id="empty-book-dialog-title">新建书目</h2>
+            </div>
+            <button type="button" className="icon-button" onClick={() => onOpenChange(false)} disabled={operation.phase === 'pending'} aria-label="关闭新建书目对话框" title="关闭"><X aria-hidden="true" /></button>
+          </div>
+          <label className="dialog-field">
+            <span>书名</span>
+            <input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="输入书名" disabled={operation.phase === 'pending'} />
+          </label>
+          {operation.phase === 'error' && <p className="dialog-error" role="alert">{operation.detail}</p>}
+          {operation.phase === 'success' && <p className="dialog-success" role="status">{operation.title}</p>}
+          <div className="dialog-actions">
+            <button type="button" className="quiet-action" onClick={() => onOpenChange(false)} disabled={operation.phase === 'pending'}>取消</button>
+            <button type="submit" className="primary-action" disabled={!title.trim() || operation.phase === 'pending'}>
+              {operation.phase === 'pending' ? '正在新建…' : '确认新建'}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </section>
   );
 }
 

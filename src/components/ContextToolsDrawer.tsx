@@ -23,6 +23,7 @@ export function ContextToolsDrawer({
   busy,
   onCancelGeneration,
   onClose,
+  canEdit = true,
 }: {
   open: boolean;
   book: Book;
@@ -36,6 +37,7 @@ export function ContextToolsDrawer({
   busy: boolean;
   onCancelGeneration: () => void;
   onClose: () => void;
+  canEdit?: boolean;
 }) {
   const drawerRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -106,9 +108,11 @@ export function ContextToolsDrawer({
   }, [someSelected]);
 
   const toggleAll = () => {
+    if (!canEdit) return;
     setSelectedSectionIds(allSelected ? new Set() : new Set(selectableReferenceSections.map((item) => item.section.id)));
   };
   const toggleSelection = (sourceSectionId: string) => {
+    if (!canEdit) return;
     setSelectedSectionIds((current) => {
       const next = new Set(current);
       if (next.has(sourceSectionId)) next.delete(sourceSectionId);
@@ -138,6 +142,7 @@ export function ContextToolsDrawer({
   );
   const summaryValue = (item: typeof referenceSections[number]) => memoryDraftFor(item).synopsis;
   const updateSummary = (item: typeof referenceSections[number], synopsis: string) => {
+    if (!canEdit) return;
     setMemoryDrafts((current) => ({
       ...current,
       [item.section.id]: { ...memoryDraftFor(item), synopsis },
@@ -145,6 +150,7 @@ export function ContextToolsDrawer({
     setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
   };
   const generateSummary = async (item: typeof referenceSections[number]) => {
+    if (!canEdit) return emptyMemoryDraft();
     setSummaryBusyId(item.section.id);
     setSummaryErrors((current) => ({ ...current, [item.section.id]: '' }));
     try {
@@ -166,6 +172,7 @@ export function ContextToolsDrawer({
     item: typeof referenceSections[number],
     action: 'generate' | 'save',
   ) => {
+    if (!canEdit) return;
     summaryActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setPendingSummarySectionId(item.section.id);
     setPendingSummaryAction(action);
@@ -175,6 +182,7 @@ export function ContextToolsDrawer({
   const saveableSummaryItems = referenceSections.filter((item) => selectedSectionIds.has(item.section.id));
   const legacyFullCount = [...currentReferences.values()].filter((mode) => mode !== 'summary').length;
   const requestSummarySave = () => {
+    if (!canEdit) return;
     const missing = saveableSummaryItems.filter((item) => !summaryValue(item).trim());
     if (missing.length) {
       setSummaryErrors((current) => ({
@@ -242,6 +250,7 @@ export function ContextToolsDrawer({
     }
   };
   const confirmSummaryAction = () => {
+    if (!canEdit) return;
     const action = pendingSummaryAction;
     if (action === 'generate') {
       const item = referenceSections.find((candidate) => candidate.section.id === pendingSummarySectionId);
@@ -325,6 +334,7 @@ export function ContextToolsDrawer({
 
         <section className="context-reference-section" aria-label="加载前文梗概">
           <p className="helper-copy">勾选只作待确认选择；确认保存后才加载梗概，不加载前文原文。关闭后未确认的修改不生效。</p>
+          {!canEdit && <p className="helper-copy">当前页面为只读，可查看已保存的前文设置；关闭其他编辑页后可修改。</p>}
           {legacyFullCount > 0 && <p className="helper-copy">当前设置仍含 {legacyFullCount} 节全文引用；确认后将按勾选结果改为梗概引用。</p>}
           {referenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
             <div className="source-scope-drawer context-reference-scope" data-open>
@@ -336,7 +346,7 @@ export function ContextToolsDrawer({
                     checked={allSelected}
                     aria-label={allSelected ? '取消选择全部前文' : '选择全部前文'}
                     onChange={toggleAll}
-                    disabled={busy}
+                    disabled={!canEdit || busy}
                   />
                 </label>
                 <div className="context-reference-scope-title">
@@ -349,14 +359,14 @@ export function ContextToolsDrawer({
                   aria-pressed={allSelected}
                   aria-label={allSelected ? '取消全选前文' : '全选前文'}
                   onClick={toggleAll}
-                  disabled={busy}
+                  disabled={!canEdit || busy}
                 >
                   <span>{allSelected ? '取消全选' : '全选'}</span>
                 </button>
                 <button
                   type="button"
                   className="primary-action icon-button context-summary-save"
-                  disabled={busy || (selectedSectionIds.size === 0 && currentReferences.size === 0)}
+                  disabled={!canEdit || busy || (selectedSectionIds.size === 0 && currentReferences.size === 0)}
                   onClick={requestSummarySave}
                   aria-label="保存并加载梗概"
                   title={saveableSummaryItems.length ? '保存并加载勾选的梗概' : '确认取消加载前文'}
@@ -384,7 +394,7 @@ export function ContextToolsDrawer({
                                   type="checkbox"
                                   checked={selected}
                                   onChange={() => toggleSelection(item.section.id)}
-                                  disabled={busy || (!hasContent && !selected)}
+                                  disabled={!canEdit || busy || (!hasContent && !selected)}
                                 />
                                 <span className="sr-only">选择{item.section.title}梗概</span>
                               </label>
@@ -407,6 +417,7 @@ export function ContextToolsDrawer({
                                   <TextArea
                                     id={`context-summary-textarea-${item.section.id}`}
                                     value={value}
+                                    readOnly={!canEdit}
                                     onChange={(event) => updateSummary(item, event.target.value)}
                                     aria-invalid={Boolean(summaryErrors[item.section.id]) || undefined}
                                     aria-describedby={summaryErrors[item.section.id] ? `context-summary-error-${item.section.id}` : undefined}
@@ -418,7 +429,7 @@ export function ContextToolsDrawer({
                                   <button
                                     type="button"
                                     className="icon-button context-summary-generate"
-                                    disabled={(busy && !summaryBusy) || !hasContent}
+                                    disabled={!canEdit || (busy && !summaryBusy) || !hasContent}
                                     onClick={() => summaryBusy ? onCancelGeneration() : requestSummaryAction(item, 'generate')}
                                     aria-busy={summaryBusy || undefined}
                                     aria-label={summaryBusy ? '取消生成该节梗概' : '生成该节梗概'}

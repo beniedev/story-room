@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBookExport } from '../src/bookExport';
 import { parseBookBackup } from '../src/bookImport';
 import { deviceLibrary } from '../src/deviceLibrary';
+import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
+import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -17,15 +19,23 @@ class MemoryStorage implements Storage {
 }
 
 describe('JSON Book backup recovery', () => {
+  let environment: ReturnType<typeof installFakeDeviceLocks>;
+  let writerLease: ReturnType<typeof createDeviceWriterLease>;
+
   afterEach(() => {
+    writerLease.dispose();
+    environment.restore();
     vi.useRealTimers();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: new MemoryStorage(),
     });
+    environment = installFakeDeviceLocks();
+    writerLease = createDeviceWriterLease(() => undefined);
+    await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
   });
 
   it('round-trips the complete Book shape and rejects a broken body mirror', () => {

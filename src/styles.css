@@ -305,6 +305,15 @@ button:disabled {
   opacity: 0.58;
 }
 
+input:disabled,
+select:disabled,
+textarea:disabled,
+input[readonly],
+textarea[readonly] {
+  cursor: default;
+  background: var(--surface-soft);
+}
+
 button[aria-busy="true"] {
   cursor: wait;
 }
@@ -469,6 +478,99 @@ h4 {
 .app-shell {
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+.device-access-banner {
+  position: relative;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: min(100%, var(--workspace-wide-max));
+  margin-inline: auto;
+  padding: 0.65rem max(var(--workspace-gutter), calc((100vw - var(--workspace-wide-max)) / 2 + var(--workspace-gutter)));
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+.device-access-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.device-access-copy strong,
+.device-access-copy span {
+  overflow-wrap: anywhere;
+}
+
+.device-access-copy span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.device-access-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.device-access-actions button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.reader-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  width: min(100%, var(--workspace-max));
+  margin: 4rem auto;
+  padding: 1.5rem var(--workspace-gutter);
+  text-align: center;
+}
+
+.reader-empty-state h1,
+.reader-empty-state p {
+  margin: 0;
+}
+
+.reader-empty-state p {
+  max-width: 36rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.empty-library-state {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  width: min(100%, var(--workspace-max));
+  margin: 4rem auto;
+  padding: 1.5rem var(--workspace-gutter);
+  text-align: center;
+}
+
+.empty-library-state h1,
+.empty-library-state p {
+  margin: 0;
+}
+
+.empty-library-state p {
+  max-width: 36rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.empty-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
 .app-header {
@@ -1090,6 +1192,10 @@ h4 {
 
 .instruction-dock textarea:focus {
   background: var(--field-focus, var(--field));
+}
+
+.instruction-dock[data-readonly] {
+  opacity: 0.86;
 }
 
 .instruction-dock .writer-send-hint {
@@ -2374,6 +2480,34 @@ h4 {
   font-weight: 650;
 }
 
+.name-dialog > form {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0 1rem 1rem;
+}
+
+.dialog-field {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.dialog-error,
+.dialog-success {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.dialog-error {
+  color: var(--danger);
+}
+
+.dialog-success {
+  color: var(--accent-strong);
+}
+
 .confirm-dialog-body > p {
   margin: 0;
   color: var(--muted);
@@ -3417,6 +3551,20 @@ h4 {
 @media (max-width: 46rem) {
   button {
     min-height: 44px;
+  }
+
+  .device-access-banner {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 0.65rem var(--workspace-gutter);
+  }
+
+  .device-access-actions {
+    justify-content: stretch;
+  }
+
+  .device-access-actions button {
+    flex: 1 1 10rem;
   }
 
   input,

@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { deviceLibrary } from '../src/deviceLibrary';
+import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
+import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -15,11 +17,22 @@ class MemoryStorage implements Storage {
 }
 
 describe('device-local library', () => {
-  beforeEach(() => {
+  let environment: ReturnType<typeof installFakeDeviceLocks>;
+  let writerLease: ReturnType<typeof createDeviceWriterLease>;
+
+  beforeEach(async () => {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: new MemoryStorage(),
     });
+    environment = installFakeDeviceLocks();
+    writerLease = createDeviceWriterLease(() => undefined);
+    await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
+  });
+
+  afterEach(() => {
+    writerLease.dispose();
+    environment.restore();
   });
 
   it('seeds examples and keeps creates, edits, and deletes on the current device', async () => {
@@ -140,5 +153,56 @@ describe('device-local library', () => {
     }, undefined, (delta) => deltas.push(delta));
 
     expect(deltas).toEqual([result.draft]);
+  });
+
+  it('keeps persisted reads pure for a reader and guards every device mutation', async () => {
+    await deviceLibrary.listBooks();
+    const persistedBefore = await deviceLibrary.listPersistedBooks();
+    const storageBefore = Array.from({ length: localStorage.length }, (_, index) => {
+      const key = localStorage.key(index)!;
+      return [key, localStorage.getItem(key)] as const;
+    });
+    try {
+      writerLease.dispose();
+      await expect(deviceLibrary.listBooks()).rejects.toThrow('不是设备书库编辑页');
+      await expect(deviceLibrary.createBook('reader')).rejects.toThrow('不是设备书库编辑页');
+      await expect(deviceLibrary.importBook(createExampleBooks()[0]!)).rejects.toThrow('不是设备书库编辑页');
+      const book = await deviceLibrary.loadPersistedBook(persistedBefore[0]!.id);
+      await expect(deviceLibrary.saveBook(book, book.updatedAt)).rejects.toThrow('不是设备书库编辑页');
+      await expect(deviceLibrary.deleteBook(book.id)).rejects.toThrow('不是设备书库编辑页');
+      await expect(deviceLibrary.listPersistedBooks()).resolves.toEqual(persistedBefore);
+      await expect(deviceLibrary.loadPersistedBook(book.id)).resolves.toEqual(book);
+      const storageAfter = Array.from({ length: localStorage.length }, (_, index) => {
+        const key = localStorage.key(index)!;
+        return [key, localStorage.getItem(key)] as const;
+      });
+      expect(storageAfter).toEqual(storageBefore);
+    } finally {
+      writerLease.dispose();
+    }
+  });
+
+  it('preserves an explicit empty index instead of reseeding examples', async () => {
+    for (const entry of [...await deviceLibrary.listBooks()]) {
+      await deviceLibrary.deleteBook(entry.id);
+    }
+
+    expect(await deviceLibrary.listBooks()).toEqual([]);
+    expect(await deviceLibrary.listPersistedBooks()).toEqual([]);
+    expect(localStorage.getItem('story-native:library')).toBe('[]');
+    expect([...Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))])
+      .not.toContain('story-native:book:example-1');
+  });
+
+  it('repairs an index that only references missing Books without reseeding examples', async () => {
+    localStorage.setItem('story-native:library', JSON.stringify([{
+      id: 'deleted-book',
+      title: '已删除书目',
+      updatedAt: new Date().toISOString(),
+    }]));
+
+    expect(await deviceLibrary.listBooks()).toEqual([]);
+    expect(localStorage.getItem('story-native:library')).toBe('[]');
+    expect(localStorage.getItem('story-native:book:the-observatory')).toBeNull();
   });
 });

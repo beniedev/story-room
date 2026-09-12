@@ -53,6 +53,7 @@ interface WriterProps {
   streamingDraft?: StreamingDraftView | null;
   providerName: string;
   modelId: string;
+  canEdit?: boolean;
   onBack: () => void;
   onOpenBookSettings: () => void;
   onOpenSettings: () => void;
@@ -105,10 +106,11 @@ const ManuscriptBlockCopy = memo(function ManuscriptBlockCopy({ block }: { block
   return <span className="manuscript-block-copy">{renderBlockContent(block)}</span>;
 });
 
-const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelect, children }: {
+const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelect, canEdit, children }: {
   block: SectionBlock;
   selected: boolean;
   onSelect: (id: string) => void;
+  canEdit: boolean;
   children?: ReactNode;
 }) {
   return (
@@ -116,14 +118,14 @@ const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelec
       <div className="manuscript-block" data-kind={block.kind} onClick={() => onSelect(block.id)}>
         <ManuscriptBlockCopy block={block} />
       </div>
-      <button
-        type="button"
-        className="manuscript-block-select icon-button"
-        aria-pressed={selected}
-        aria-label={`${selected ? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段`}
-        title={`${selected ? '取消选择' : '选择'}片段`}
-        onClick={() => onSelect(block.id)}
-      ><MousePointer2 aria-hidden="true" /></button>
+      {canEdit && <button
+          type="button"
+          className="manuscript-block-select icon-button"
+          aria-pressed={selected}
+          aria-label={`${selected ? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段`}
+          title={`${selected ? '取消选择' : '选择'}片段`}
+          onClick={() => onSelect(block.id)}
+        ><MousePointer2 aria-hidden="true" /></button>}
       {children}
     </div>
   );
@@ -184,6 +186,7 @@ const StreamingDraftBlock = memo(function StreamingDraftBlock({ draft }: { draft
 });
 
 export function Writer(props: WriterProps) {
+  const canEdit = props.canEdit !== false;
   const selectedCharacter = props.book.characters.find((character) => character.id === props.selectedCharacterId);
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
   const blocks = useMemo(() => props.section ? sectionBlocks(props.section) : [],
@@ -420,6 +423,7 @@ export function Writer(props: WriterProps) {
   };
 
   const openTitleDialog = () => {
+    if (!canEdit) return;
     if (document.activeElement instanceof HTMLElement) {
       titleTrigger.current = document.activeElement;
     }
@@ -450,6 +454,7 @@ export function Writer(props: WriterProps) {
   };
 
   const openBlockEditor = () => {
+    if (!canEdit) return;
     if (!selectedBlock) return;
     readerScrollPosition.current = manuscriptWrapRef.current?.scrollTop ?? 0;
     blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -471,6 +476,7 @@ export function Writer(props: WriterProps) {
   };
 
   const openDeleteBlockDialog = () => {
+    if (!canEdit) return;
     if (!selectedBlock) return;
     blockActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setCandidateDeleteId(selectedBlock.kind === 'assistant' && selectedCandidates.length > 1
@@ -503,7 +509,7 @@ export function Writer(props: WriterProps) {
   }, []);
 
   const selectCandidate = (block: SectionBlock, index: number) => {
-    if (block.kind !== 'assistant') return;
+    if (!canEdit || block.kind !== 'assistant') return;
     const candidates = selectedBlock?.id === block.id ? selectedCandidates : getAnswerCandidates(block);
     const candidate = candidates[index];
     if (!candidate) return;
@@ -543,7 +549,7 @@ export function Writer(props: WriterProps) {
     );
   };
 
-  if (editingBlock) {
+  if (editingBlock && canEdit) {
     const editorLabel = editingBlock.kind === 'user' ? '用户输入' : 'AI 输出';
     return (
       <article className="block-editor-page" aria-labelledby="block-editor-title">
@@ -668,7 +674,7 @@ export function Writer(props: WriterProps) {
               type="button"
               className="icon-button"
               onClick={openTitleDialog}
-              disabled={!props.section || props.busy}
+              disabled={!canEdit || !props.section || props.busy}
               aria-label="修改小节名称"
               title="修改小节名称"
             ><Pencil aria-hidden="true" /></button>
@@ -703,8 +709,8 @@ export function Writer(props: WriterProps) {
           <div className="manuscript" aria-label="连续小说正文">
             {blocks.map((block) => (
               <Fragment key={block.id}>
-                <ManuscriptBlock block={block} selected={selectedBlockId === block.id} onSelect={selectManuscriptBlock}>
-                  {selectedBlockId === block.id && (
+                <ManuscriptBlock block={block} selected={selectedBlockId === block.id} onSelect={selectManuscriptBlock} canEdit={canEdit}>
+                  {canEdit && selectedBlockId === block.id && (
                     <div className="manuscript-block-actions" data-block-id={block.id} role="group" aria-label={`所选${block.kind === 'user' ? '用户输入' : 'AI 输出'}操作`}>
                       {block.kind === 'assistant' && <button
                         type="button"
@@ -738,13 +744,13 @@ export function Writer(props: WriterProps) {
                   && props.streamingDraft.targetBlockId === block.id && (
                   <StreamingDraftBlock draft={props.streamingDraft} />
                 )}
-                {selectedBlockId === block.id && block.kind === 'assistant' && selectedCandidates.length > 1 && candidateNavigation(block)}
+                {canEdit && selectedBlockId === block.id && block.kind === 'assistant' && selectedCandidates.length > 1 && candidateNavigation(block)}
                 {block.id === lastNonEmptyBlockId && block.kind === 'user' && (
                   <button
                     type="button"
                     className="respond-to-input-button quiet-action"
                     onClick={() => props.onGenerateForBlock?.(block.id)}
-                    disabled={props.busy || !props.onGenerateForBlock}
+                    disabled={!canEdit || props.busy || !props.onGenerateForBlock}
                   >生成回答</button>
                 )}
               </Fragment>
@@ -769,7 +775,7 @@ export function Writer(props: WriterProps) {
         )}
       </div>
 
-      <form ref={instructionDockRef} className="instruction-dock" onSubmit={(event) => { event.preventDefault(); props.onGenerate(); }}>
+      <form ref={instructionDockRef} className="instruction-dock" data-readonly={!canEdit || undefined} onSubmit={(event) => { event.preventDefault(); if (canEdit) props.onGenerate(); }}>
         <details
           ref={actionMenu}
           className="writer-action-menu"
@@ -779,7 +785,7 @@ export function Writer(props: WriterProps) {
             closeActionMenu(true);
           }}
         >
-          <summary className="icon-button writer-menu-trigger" title="写作操作" aria-disabled={props.busy || undefined} onClick={(event) => { if (props.busy) { event.preventDefault(); return; } setSelectedBlockId(''); }}>
+          <summary className="icon-button writer-menu-trigger" title="写作操作" aria-disabled={!canEdit || props.busy || undefined} onClick={(event) => { if (!canEdit || props.busy) { event.preventDefault(); return; } setSelectedBlockId(''); }}>
             <Menu aria-hidden="true" />
             <span className="sr-only">打开写作操作</span>
           </summary>
@@ -788,14 +794,14 @@ export function Writer(props: WriterProps) {
               <button
                 type="button"
                 className="writer-menu-action"
-                disabled={props.busy}
+                disabled={!canEdit || props.busy}
                 aria-pressed={props.mode === 'author'}
                 onClick={() => props.onModeChange('author')}
               ><BookOpenText aria-hidden="true" />作者模式 · 写作接龙</button>
               <button
                 type="button"
                 className="writer-menu-action"
-                disabled={props.busy}
+                disabled={!canEdit || props.busy}
                 aria-pressed={props.mode === 'character'}
                 onClick={() => props.onModeChange('character')}
               ><UsersRound aria-hidden="true" />角色模式 · 第一视角</button>
@@ -806,7 +812,7 @@ export function Writer(props: WriterProps) {
                 <select
                   id="character-select"
                   value={props.selectedCharacterId}
-                  disabled={props.busy}
+                  disabled={!canEdit || props.busy}
                   onChange={(event) => props.onCharacterChange(event.target.value)}
                   required
                   aria-invalid={characterModeNeedsSelection ? 'true' : undefined}
@@ -828,7 +834,7 @@ export function Writer(props: WriterProps) {
                 id="author-note-input"
                 rows={4}
                 value={props.authorNote}
-                disabled={props.busy}
+                disabled={!canEdit || props.busy}
                 onChange={(event) => props.onAuthorNoteChange(event.target.value)}
                 placeholder="例如：跳过路程，直接写抵达后的重逢……"
                 spellCheck
@@ -841,6 +847,7 @@ export function Writer(props: WriterProps) {
           <button
             type="button"
             className="instruction-resize-handle"
+            disabled={!canEdit}
             data-resizing={isResizingInstruction || undefined}
             aria-label="调整输入框高度：电脑上下拖动，手机长按后拖动"
             title="上下拖动调整高度；手机请先长按"
@@ -892,6 +899,7 @@ export function Writer(props: WriterProps) {
             id="writing-instruction"
             rows={1}
             value={props.instruction}
+            disabled={!canEdit}
             style={instructionInputHeight === null ? undefined : { height: instructionInputHeight }}
             onPointerDown={leaveCandidatePreview}
             onFocus={leaveCandidatePreview}
@@ -907,7 +915,7 @@ export function Writer(props: WriterProps) {
         <button
             type="submit"
             className="primary-action icon-button writer-send-button"
-            disabled={props.busy || characterModeNeedsSelection || requiresInputResponse}
+            disabled={!canEdit || props.busy || characterModeNeedsSelection || requiresInputResponse}
             aria-busy={props.busy || undefined}
             aria-label={props.busy ? '正在续写' : '发送并续写'}
             title={props.busy ? '正在续写…' : '发送并续写'}

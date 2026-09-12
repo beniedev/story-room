@@ -369,7 +369,7 @@ describe('writing UI contract', () => {
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${tools}`;
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    expect(source).toContain('normalizeBook(await api.loadBook(bookId))');
+    expect(app).toMatch(/normalizeBook\(await \(options\.persistedOnly && api\.runtime === 'device'\s*\? api\.loadPersistedBook\(bookId\)\s*: api\.loadBook\(bookId\)\)\)/);
     expect(source).toContain('const candidate = normalizeBook(book);');
     expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries)');
     expect(source).toContain('source.ordinal >= targetOrdinal');
@@ -378,7 +378,7 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('前一节：梗概 + 全文');
     expect(source).not.toContain('清空前文参考');
     expect(source).not.toContain('value={mode}');
-    expect(source).toContain('disabled={busy || (!hasContent && !selected)}');
+    expect(source).toContain('disabled={!canEdit || busy || (!hasContent && !selected)}');
     expect(source).toContain('这是第一节，暂无前文可选');
     expect(source).toContain('await commitBookChange(');
     expect(source).toContain('parseSectionMemoryDraft(result.draft)');

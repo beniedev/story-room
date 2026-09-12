@@ -2,6 +2,8 @@
 
 This is a pre-release local-first novel-writing harness.
 
+For feature explanations, code entry points, and maintenance checks, read [the Agent guide](docs/AGENT_GUIDE.md). The [user guide](docs/USER_GUIDE.md) follows the current Chinese interface. These guides supplement the rules below; verify behavior against the current code and tests.
+
 - Keep the manuscript as continuous prose. Do not add chat bubbles, avatar turns, group chat, or message timelines.
 - A Book is the isolation boundary. Never inject characters, world rules, canon, summaries, or manuscript text from another Book.
 - Author and character modes share one persistence, context-plan, provider, and apply pipeline. Character mode only narrows authority and viewpoint.
