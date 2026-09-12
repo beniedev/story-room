@@ -1,206 +1,253 @@
-# 使用手册
+English | [简体中文](USER_GUIDE.zh-CN.md)
 
-欢迎来到 Story Room（故事书屋）！它把正文、角色、世界观和写作提示放在同一本书里，让你可以安静地写连续小说，也可以在需要时请 AI 接着写几段。下面的按钮名称以当前中文界面为准；功能仍处于 Alpha 阶段，重要作品请保留一份 JSON 备份。
+# User Guide
 
-## 先跑起来
+Welcome to Story Room. It keeps the manuscript, characters, worldbuilding, and writing prompts in one Book, so you can quietly write a continuous novel and ask AI to continue for a few paragraphs when you need help. The operation names in this guide are English names for the current Chinese interface; see the **Interface labels** table at the end for the corresponding Chinese labels. The feature is still in Alpha, so keep a JSON backup of important work.
 
-在项目目录执行：
+## Get started
 
-```bash
+From the project directory, run:
+
+~~~bash
 npm ci
 npm run dev
-```
+~~~
 
-打开终端显示的本地地址（地址和启动方式见 [`README.md`](../README.md) 的快速开始）。第一次使用可以打开示例书，也可以直接点“新建书目”。内置的 Fake Provider 会生成确定性的示例文字，适合先熟悉书架、正文和候选版本的流程。
+Open the local address shown in the terminal. The quick-start instructions and startup details are in [README.md](../README.md). For a first run, open the example Book or choose **New Book**. The built-in Fake Provider produces deterministic example text, which is useful for learning the shelf, manuscript, and candidate-version workflow.
 
-Story Room 有两种运行方式：
+Story Room has two runtime modes:
 
-| 运行方式 | 书稿保存在哪里 | 生成能力 |
+| Runtime mode | Where Books are stored | Generation |
 | --- | --- | --- |
-| 本机 local-host | 可读的 Book 文件，默认在 `.data/` | Fake Provider，或你配置的 OpenAI-compatible Provider |
-| 浏览器 hosted/device | 当前浏览器和网站 origin 的未加密 `localStorage` | Fake 生成；Provider 设置只提供连接测试 |
+| Local-host | Readable Book files, by default in <code>.data/</code> | Fake Provider, or an OpenAI-compatible Provider you configure |
+| Browser hosted/device | Unencrypted <code>localStorage</code> for the current browser and website origin | Fake generation; Provider settings are for connection testing only |
 
-浏览器里的书属于当前浏览器、协议、主机和端口。清除网站数据会删除这些书；换浏览器或换地址前，请先导出 JSON。应用没有云端书稿存储和自动同步。
+Books in the browser belong to the current browser, origin, host, and port. Clearing website data deletes those Books. Export JSON before changing browsers or addresses. The application has no cloud Book storage or automatic synchronization.
 
-## 从书架开始
+## Start from the shelf
 
-### 新建、切换和导入书目
+### Create, switch, and import Books
 
-1. 点“新建书目”，填写“书名”，选择“确认新建”。新书会成为当前书目。
-2. 用“切换书目”在现有书之间切换。
-3. 点“导入 JSON 备份”，选择以前导出的 JSON 文件。导入会建立一个恢复副本，并显示类似“已导入《…》的恢复副本，原书目未覆盖”的提示；原书不会被覆盖。
-4. 点“导出当前书目”，可以选择 EPUB 电子书、Markdown 文档、TXT 纯文字或 JSON 完整备份。EPUB、Markdown、TXT 适合阅读或继续编辑；JSON 会保留角色卡、设定、加载范围、正文结构、候选版本和梗概历史。
+1. Choose **New Book**, enter a **Book title**, and choose **Confirm creation**. The new Book becomes current.
+2. Use **Switch book** to move between existing Books.
+3. Choose **Import JSON backup** and select a previously exported JSON file. Import creates a recovery copy and shows a message equivalent to “A recovery copy of … was imported; the original Book was not overwritten.” The original Book is left untouched.
+4. Choose **Export current Book** to export an EPUB ebook, Markdown document, TXT plain text, or JSON full backup. EPUB, Markdown, and TXT are useful for reading or continued editing. JSON preserves character cards, settings, load scopes, manuscript structure, candidate versions, and outline history.
 
-书架里的“管理当前书目”菜单可以“修改书名”或“删除书目”，删除前会有确认提示。书库可以为空；删除最后一本后，可以用“新建书目”或“导入 JSON 备份”重新开始。删除章节或小节也要先点“选择章节或小节”，再点“删除所选内容”；这类删除请先导出备份。
+The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. To delete a chapter or section, first choose **Select chapter or section**, then **Delete selected content**; export a backup before this kind of deletion.
 
-### 章节和小节
+### Chapters and sections
 
-一本书由章节和小节组成：
+A Book consists of chapters and sections:
 
-1. 在书架工具栏点“新建章节”，填写“章节名称”。
-2. 在章节行点“新建小节”，填写小节名称。
-3. 点章节或小节标题进入正文。每个小节显示字数和估算 token 数，便于了解规模。
-4. 章节菜单可以“修改章节名称”；小节工具栏可以“修改小节名称”。
+1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
+2. Choose **New section** on a chapter row and enter a section name.
+3. Choose a chapter or section title to open the manuscript. Each section shows a word count and an estimated token count so you can gauge its size.
+4. The chapter menu can **Rename chapter**, and the section toolbar can **Rename section**.
 
-正文按连续小说排版保存。用户输入和 AI 输出在内部以块记录，界面仍把它们呈现为一篇可以继续阅读的正文，不是聊天气泡或群聊时间线。
+The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
 
-## 先把书的资料放好
+## Organize the Book's material first
 
-在书架点“本书设定”，可以管理只属于当前 Book 的资料。一本书的角色、世界观、剧情和正文不会自动混入另一本书。
+Choose **Book settings** on the shelf to manage material belonging only to the current Book. A Book's characters, worldbuilding, plot, and manuscript are never mixed into another Book automatically.
 
-### 剧情大纲和写作指导
+### Plot outline and writing guidance
 
-“全局指引”下有“写作风格指导”和“剧情大纲”：
+Under **Global guidance** you will find **Writing style guidance** and **Plot outline**:
 
-- “写作风格指导”可以写语气、叙述方式、语言习惯等。
-- “剧情大纲”可以写较长期的情节方向。
+- **Writing style guidance** can describe tone, narration, language habits, and similar preferences.
+- **Plot outline** can describe longer-term story direction.
 
-编辑后点“保存并加载”，再在确认框点“确认保存并加载”。确认前的修改只是页面草稿；保存后，资料会按当前书的加载范围进入后续生成。剧情大纲会作为未来方向参与正常续写和“再生成一版”。
+After editing, choose **Save and load**, then confirm with **Confirm save and load**. Before confirmation, edits are only page drafts. After saving, the material enters later generation according to the current Book's load scope. The plot outline also participates in ordinary continuation and **Regenerate version** as future direction.
 
-### 角色卡和世界观设定
+### Character cards and worldbuilding
 
-在“角色卡”或“世界观设定”下点“新建角色卡”或“新建世界观设定”。角色卡可以填写“角色名”“角色要点”“角色设定”；世界观设定可以填写“设定名称”和“设定内容”。
+Under **Character cards** or **Worldbuilding settings**, choose **New character card** or **New worldbuilding entry**. A character card can contain a character name, character points, and character settings. A worldbuilding entry can contain a setting name and setting content.
 
-每份资料旁边都有加载范围入口：
+Each material item has a load-scope control:
 
-1. 点“加载角色卡”或“加载世界观设定”。
-2. 在“加载角色卡”或“加载世界观设定”页面勾选需要使用它的章节小节，也可以点“全选”。
-3. 点确认图标，在确认框中完成“确认载入”。
+1. Choose **Load character card** or **Load worldbuilding setting**.
+2. On the load page, select the chapters and sections that should use it. You can also choose **Select all**.
+3. Choose the confirmation icon and complete **Confirm load** in the confirmation dialog.
 
-没有勾选的小节不会加载这份资料。加载范围本身也是 Book 数据的一部分，会随 JSON 完整备份保存。浏览器只读页仍可以查看已保存的加载范围，但不能修改。
+Sections you did not select will not load the material. The load scope is part of the Book data and is saved in a JSON full backup. A browser read-only page can view saved load scopes but cannot change them.
 
-## 在正文页写作
+## Write in the manuscript
 
-打开一个小节后，会进入正文编辑页。顶部可以使用：
+Open a section to enter the manuscript editor. The top bar includes:
 
-- “本书设定”：返回查看或编辑当前书的资料。
-- “选择前文”：选择本小节生成时要参考的前文梗概。
-- “修改小节名称”：修改当前小节标题。
-- “设置”：调整显示、流式输出和模型连接。
+- **Book settings**: return to the current Book's material.
+- **Select previous text**: choose earlier summaries to use for this section's generation.
+- **Rename section**: change the current section title.
+- **Settings**: adjust display, streaming output, and model connections.
 
-### 作者模式和角色模式
+### Author mode and character mode
 
-底部的“写作操作”菜单有两种模式：
+The **Writing actions** menu at the bottom has two modes:
 
-- “作者模式 · 写作接龙”：由你决定叙事方向，AI 从当前正文继续写。
-- “角色模式 · 第一视角”：先选择“扮演角色”，再用该角色的第一人称行动、台词或选择来推进场景。AI 负责世界和其他角色，角色模式会收窄本轮生成的视角与权限。
+- **Author mode — Continue writing**: you decide the narrative direction, and AI continues from the current manuscript.
+- **Character mode — First person**: first choose a **Character to play**, then move the scene forward through that character's first-person action, dialogue, or choice. AI handles the world and other characters; character mode narrows the viewpoint and authority for that generation.
 
-角色模式必须先选本书角色；没有选角色时，页面会提示“角色模式需要先选择本书角色，选择后才能发送”。两种模式共用同一套保存、上下文、Provider 和应用结果流程。
+Character mode requires a character from the current Book. With no character selected, the page explains that you must choose one before sending. Both modes share the same save, context, Provider, and apply-result pipeline.
 
-在“写作操作”里还可以编辑“小节注释”。它适合写“跳过路程，直接写抵达后的重逢……”一类对当前小节的指导，不会直接进入正文；修改后会保留，并在作者模式和扮演模式中生效。
+**Writing actions** also lets you edit the **Section note**. It is useful for directions such as “Skip the journey and write the reunion after arrival.” It does not enter the manuscript directly. Changes are retained and take effect in both author mode and character mode.
 
-### 编辑正文块
+### Edit manuscript blocks
 
-点正文中的一块即可选中：
+Choose a block in the manuscript to select it:
 
-- 用户输入可以“编辑”或“删除”。
-- AI 输出可以“编辑”“删除”或“再生成一版”。
-- 编辑页会显示“编辑用户输入”或“编辑 AI 输出”，完成后点“完成”；改动会走和普通正文一样的自动保存流程。
-- 如果选中的 AI 输出有多个候选，删除时可以选择保留某一版，也可以删除整段及全部候选。
+- User input can be edited or deleted.
+- AI output can be edited, deleted, or regenerated as a new version.
+- The edit page shows **Edit user input** or **Edit AI output**. Choose **Done** when finished; the change uses the same automatic save flow as ordinary manuscript edits.
+- If the selected AI output has multiple candidates, deletion lets you keep one version or delete the entire block and all candidates.
 
-正文仍按连续段落阅读。块只是帮助你定位输入、回答和候选版本，不会把小说变成聊天记录。
+The manuscript remains continuous prose. Blocks help you locate input, answers, and candidate versions; they do not turn the novel into a chat transcript.
 
-## 生成、再生成和候选版本
+## Generate, regenerate, and manage candidate versions
 
-在底部输入框写下想让 AI 接着处理的文字，点“发送并续写”。作者模式的提示是“写下一段正文，让 AI 从这里接着写……”；角色模式会提示输入行动、台词或选择。
+Enter what you want AI to process next in the input box at the bottom, then choose **Send and continue writing**. Author mode asks AI to write the next paragraph from that point. Character mode asks for an action, dialogue, or choice.
 
-如果当前小节最后已经有一块用户输入，下面会出现“生成回答”。点它会为那一块生成回答，不会把同一段用户输入再复制一次。
+If the current section already ends with a user-input block, **Generate answer** appears below it. Choosing it generates an answer for that block without copying the same user input again.
 
-对已存在的 AI 输出使用“再生成一版”时，新的候选会根据该回答之前、当前已采用的正文来生成；目标回答本身、它的旧候选和后面的正文不会被偷偷塞进这次请求。生成成功后，新版本会自动成为当前版本，并显示“已生成新的回答，并已切换到当前版本”。
+When you use **Regenerate version** on an existing AI output, the new candidate is generated from the manuscript before that answer and the version currently adopted there. The target answer, its old candidates, and later manuscript text are not silently included in the request. After a successful generation, the new version automatically becomes current and a message explains that a new answer was generated and selected.
 
-有多个版本时，候选栏会显示“浏览 AI 回答候选”、版本计数和“上一版”“下一版”。左右箭头会立即切换当前采用的版本并自动保存，它们不会再次调用 AI。当前采用的版本会用于后续生成、普通导出和梗概新鲜度判断。
+When multiple versions exist, the candidate bar shows **Browse AI answer candidates**, a version count, **Previous version**, and **Next version**. The left and right arrows immediately switch the adopted version and save it automatically; they do not call AI again. The adopted version is used for later generation, ordinary exports, and outline-freshness checks.
 
-候选会和 Book 一起保存，刷新后仍可查看。之后，如果你输入了新的用户内容并且新的回答成功保存，前一个回答只保留当时采用的版本；如果生成失败、取消，或只是继续生成而没有新的用户输入，已有候选会保留。切换正文中间的候选不会删除后面的段落，切换后请顺手检查衔接。
+Candidates are saved with the Book and remain available after refresh. Later, if you enter new user content and the new answer saves successfully, the previous answer keeps only the version that was adopted at that time. If generation fails or is canceled, or if you only continue generation without new user input, existing candidates remain. Switching a candidate in the middle of the manuscript does not delete paragraphs that follow it, so check the transition after switching.
 
-## 流式输出和取消
+## Streaming output and cancellation
 
-打开“设置”，在“生成”下勾选“流式输出”。它默认关闭，并保存在当前浏览器的显示偏好里。
+Open **Settings**, then under **Generation** enable **Streaming output**. It is off by default and is saved in the current browser's display preferences.
 
-- 开启后，正文生成会逐步显示临时文字。
-- 临时文字出现时会提示“正在逐步生成，尚未写入正文”。
-- 点“取消生成”后，生成草稿不会写入 Book；页面会暂时保留文字供你选择和复制。
-- 生成失败也不会把不完整的文字写入正文。开始另一轮生成或重新载入页面后，这个临时预览会被替换或清除。
-- 梗概生成需要完整的结构化结果，不走正文的流式显示。
+- With streaming enabled, manuscript generation gradually shows temporary text.
+- A notice says that the text is being generated incrementally and has not been written to the manuscript.
+- After choosing **Cancel generation**, the draft is not written to the Book. The page temporarily keeps the text so you can choose whether to copy it.
+- A failed generation also does not write incomplete text to the manuscript. Starting another generation or reloading the page replaces or clears this temporary preview.
+- Outline generation requires a complete structured result and does not use the manuscript's streaming display.
 
-取消只能阻止 Story Room 应用迟到的结果落入正文；已经发送到你所配置服务的请求，是否被该服务记录或继续处理由服务端决定。
+Cancellation only stops Story Room from applying a late result to the manuscript. A request already sent to your configured service may still be recorded or processed by that service.
 
-## 选择前文和保存梗概
+## Select previous text and save summaries
 
-“选择前文”只列出当前小节之前的章节小节。它把“选择要加载什么”和“确认写入设置”分成两步，避免你只是展开查看就改变生成上下文：
+**Select previous text** lists only chapters and sections before the current section. It separates choosing what to load from confirming a change to the generation context, so merely expanding an entry does not alter that context:
 
-1. 勾选需要参考的前文。点击小节标题可以展开或收起它的梗概。
-2. 如果还没有梗概，可以在“填写这一节的梗概…”里手写；也可以点“生成该节梗概”。AI 生成的文字先放在编辑框草稿里，确认保存前不会写入 Book。
-3. 检查选择后，点“保存并加载梗概”，再在确认框中确认。没有选择时，确认会取消当前小节的前文引用，但前文原文和已有梗概仍保留。
-4. 关闭“前文选择”而不确认，待确认的勾选和梗概修改不会生效。
+1. Select the earlier material to reference. Choose a section title to expand or collapse its summary.
+2. If a summary does not exist, type one in **Enter this section's summary…**, or choose **Generate section summary**. AI-generated text first stays in the edit box as a draft and is not written to the Book until you confirm saving.
+3. After checking the selection, choose **Save and load summary**, then confirm in the dialog. With no selection, confirmation clears the current section's previous-text references, while the original earlier text and existing summaries remain.
+4. Closing **Previous text selection** without confirming leaves the pending selections and summary edits unapplied.
 
-已保存的梗概会作为选中前文的摘要引用参与后续生成，而不是自动加载整段前文原文。梗概在内部以结构化 Section Memory 保存，并有当前版本和上一份快照；正文修改后，旧梗概可能变成过期状态，需要重新检查或生成。
+Saved summaries are included as summary references for selected earlier sections; Story Room does not automatically load the full earlier manuscript. Internally, each summary is stored as structured <code>Section Memory</code> with a current version and a previous snapshot. Editing the manuscript can make an older summary stale, in which case you should review or regenerate it.
 
-正文页顶部的“本轮上下文概览”可以查看本次请求的大致 Provider、模型、字数/token 预算，以及哪些资料被纳入和原因。它是帮助你检查选择的摘要，不显示原始 Provider 消息，也不显示隐藏的模型推理。
+The **Context overview** at the top of the manuscript page shows the approximate Provider, model, word/token budget, and which materials were included and why. It is a summary for checking your selection. It does not show raw Provider messages or hidden model reasoning.
 
-## 设置 Provider
+## Configure a Provider
 
-点“设置”进入“模型连接”。先选择“新连接方案”，填写：
+Choose **Settings** and open **Model connections**. First choose **New connection profile**, then fill in:
 
-- “方案名称”
-- “API Key”
-- “URL”
-- “模型 ID”
-- “最大上下文”和“最大输出”
+- **Profile name**
+- **API Key**
+- **URL**
+- **Model ID**
+- **Max context** and **Max output**
 
-### Fake Provider 和 OpenAI-compatible Provider
+### Fake Provider and OpenAI-compatible Provider
 
-- Fake Provider 是内置、确定性的示例生成，适合离线熟悉界面。
-- 本机 local-host 可以使用 Fake Provider 或你信任的 OpenAI-compatible Provider。实际生成会把当前上下文计划选中的材料发送到该端点。
-- 浏览器 hosted/device 的生成仍是 Fake。页面里的 Provider 设置可用于测试连接，但不会把它变成真实生成服务。
+- Fake Provider is a built-in, deterministic example generator for learning the interface offline.
+- Local-host can use Fake Provider or an OpenAI-compatible Provider you trust. Actual generation sends the materials selected by the current context plan to that endpoint.
+- Browser hosted/device generation remains Fake. Provider settings on the page can test a connection, but do not turn it into a real generation service.
 
-点“测试”只检查 `/models` 是否可达，以及返回模型列表时是否包含填写的模型 ID；测试成功不代表 `/chat/completions` 一定接受 Story Room 的生成参数。
+Choosing **Test** only checks whether <code>/models</code> is reachable and, when a model list is returned, whether it includes the entered Model ID. A successful test does not prove that <code>/chat/completions</code> accepts Story Room's generation parameters.
 
-API Key 的保存位置取决于运行方式：本机模式会把 key 明文放在主机上的 Provider 配置文件中，与 Book 分开；浏览器模式的测试 key 只在当前页面运行期间使用，不由应用持久化。只有在你信任当前页面和目标 URL 时，才输入真实 key。不要把 key 写进书稿、JSON 备份、示例或 issue。
+API Key storage depends on the runtime mode: local-host stores the key in plaintext in the host's Provider configuration file, separate from Books; browser-mode test keys are used only while the current page is running and are not persisted by the application. Enter a real key only when you trust the current page and target URL. Never put a key in a manuscript, JSON backup, example, or issue.
 
-## 显示和阅读
+## Display and reading
 
-“设置”里的显示项会保存在当前浏览器：
+Display settings in **Settings** are saved in the current browser:
 
-- “皮肤”：蓝雪、粉漫、灰度、紫雅。
-- “全局字体”：无衬线或霞鹜文楷。
-- “字号大小”：用加减按钮调整；移动宽度下正文会保持适合阅读的最小字号。
+- **Skin**: Blue snow, Pink manga, Grayscale, or Elegant purple.
+- **Global font**: Sans-serif or LXGW WenKai.
+- **Font size**: adjust with plus and minus buttons. At narrow mobile widths, the manuscript keeps a readable minimum font size.
 
-打开小节即可按连续正文阅读。需要交给其他阅读器时，在书架点“导出当前书目”选择 EPUB；需要继续改稿时可选 Markdown；只想留下最兼容的文字可选 TXT。需要保留完整编辑状态时，请选 JSON 完整备份。
+Open a section to read it as continuous prose. To share it with another reader, choose **Export current Book** on the shelf and select EPUB. To continue editing, choose Markdown. To keep the most compatible plain text, choose TXT. To preserve the complete editing state, choose JSON full backup.
 
-## 自动保存、冲突和恢复
+## Automatic saving, conflicts, and recovery
 
-正文、块编辑、候选切换、书籍资料、加载范围和梗概确认都会走同一套 Book 保存管线；正常修改会自动保存完整 Book。
+Manuscript edits, block edits, candidate switches, Book material, load scopes, and summary confirmations all use the same Book save pipeline. Ordinary changes automatically save the complete Book.
 
-在本机模式，如果另一个页面先保存了同一本书，页面会提示“这本书已在其他页面更新；当前本地内容仍保留，可导出 JSON 备份或重新载入当前书目”。此时：
+In local-host mode, if another page saves the same Book first, the page explains that the Book was updated elsewhere and that the current local content is still available for export or reload. In that situation:
 
-1. 若当前改动要保留，先点“导出当前书目”选择 JSON 完整备份。
-2. 确认备份后，点“重新载入当前书目”，读取最新已保存版本。
-3. Story Room 不会自动合并两边的正文；请根据备份手动决定采用哪一部分。
+1. If you want to keep the current edits, first choose **Export current Book** and select JSON full backup.
+2. After confirming the backup, choose **Reload current Book** to read the newest saved version.
+3. Story Room does not merge the two manuscripts automatically. Use the backup to decide manually which parts to keep.
 
-本机保存有事务日志和快照，用于处理进程中断；这不等于磁盘备份，也不能覆盖两个独立主机进程同时操作同一数据目录的情况。重要作品仍应另存 JSON 或其他外部备份。
+Local-host saving has transaction logs and snapshots for process interruption. They are not disk backups and cannot coordinate two independent host processes operating on the same data directory. Keep important work in a JSON backup or another external backup as well.
 
-### 浏览器多标签页
+### Multiple browser tabs
 
-hosted/device 会让同一浏览器、同一 origin 的一个标签页担任编辑页。其他标签页会显示“当前页面为只读”，但可以查看已保存书目、查看上下文设置、导出已保存内容和调整显示偏好；不会读取编辑页的恢复草稿，也不能修改正文或资料。
+In hosted/device mode, one tab in the same browser and origin serves as the editor. Other tabs show that the current page is read-only, but can view saved Books, inspect context settings, export saved content, and adjust display preferences. They do not read the editor's recovery draft and cannot edit the manuscript or Book material.
 
-在支持 Web Locks 且页面位于 HTTPS 或可信本地环境时，标签页会自动尝试取得编辑权限。要把编辑交给另一页：
+When Web Locks is supported and the page is on HTTPS or a trusted local environment, a tab automatically tries to obtain editing rights. To hand editing to another tab:
 
-1. 先关闭原来的编辑页。
-2. 在只读页点“尝试成为编辑页”。
-3. 新编辑页会重新读取已保存书库和 Book，然后才检查恢复草稿。
+1. Close the original editor tab.
+2. In the read-only tab, choose **Try to become editor**.
+3. The new editor reloads the saved library and Book, then checks for a recovery draft.
 
-如果另一个编辑页仍在使用，页面会提示“另一个编辑页仍在使用书库，请关闭后再试”。如果浏览器不支持安全编辑、页面不是安全上下文或锁设置失败，书目仍可阅读和导出，但设备编辑会保持关闭。页面没有后台轮询或强制接管。
+If another editor is still active, the page explains that the other editor is still using the library and must be closed first. If the browser lacks secure editing support, the page is not a secure context, or lock setup fails, the library can still be read and exported, but device editing stays off. There is no background polling or forced takeover.
 
-其他页面保存后，读者页会显示“内容已更新，可重新载入”，可以点“重新载入书库”或顶部的“重新载入当前书目”。如果书目已经被删除，页面会先保留当前已读内容，重新载入后才显示现存书目。
+After another page saves, the reader page says that content has been updated and can be reloaded. Choose **Reload library** or **Reload current Book**. If the Book was deleted, the page keeps the content currently being read until you reload, then shows the Books that still exist.
 
-## 当前 Alpha 的边界
+## Current Alpha boundaries
 
-- 目前没有云端存储、账号同步、多用户协作、RAG、embeddings 或桌面封装。
-- 浏览器 `localStorage` 未加密，同源脚本可以读取；清除网站数据会删除 device 书目。
-- 设备运行方式没有本机文件事务恢复；请把 JSON 备份放在你选择的安全位置。
-- 应用不会武断限制正文、API 请求、Provider 响应、梗概项目或候选数量；保存仍会传输并校验完整 Book，大书会需要更多内存和 I/O，Provider 自身的上下文和输出限制仍然有效。
-- 上下文 token 估算用于提示，不会代替 Provider 的实际限制，也不会因为估算值略超就自动阻止发送。
-- 连接测试只验证 `/models` 的连通和模型列表匹配，不是完整生成兼容性验证。
-- 不同 origin、浏览器 profile、设备和独立 local-host 进程之间不会由 Web Locks 或浏览器事件协调。
+- There is no cloud storage, account synchronization, multi-user collaboration, RAG, embeddings, or desktop wrapper.
+- Browser <code>localStorage</code> is unencrypted and can be read by same-origin scripts. Clearing website data deletes device Books.
+- Browser hosted/device mode has no local transaction recovery. Keep JSON backups in a secure location you choose.
+- The application does not impose arbitrary limits on manuscript size, API request size, Provider responses, outline items, or candidate counts. Saving still transmits and validates the complete Book. Large Books need more memory and I/O, and the Provider's own context and output limits still apply.
+- Context-token estimates are hints. They do not replace the Provider's actual limits, and Story Room does not automatically block sending just because an estimate is slightly over.
+- Connection testing verifies <code>/models</code> connectivity and model-list matching only; it is not full generation compatibility testing.
+- Web Locks and browser events do not coordinate different origins, browser profiles, devices, or independent local-host processes.
 
-更多数据边界和问题报告方式见 [`SECURITY.md`](../SECURITY.md)、[`PRIVACY.md`](../PRIVACY.md) 和 [`THREAT_MODEL.md`](THREAT_MODEL.md)。如果需要让 AI agent 解释功能或维护仓库，可以从 [`AGENT_GUIDE.md`](AGENT_GUIDE.md) 开始。
+For more data boundaries and issue-reporting guidance, see [SECURITY.md](../SECURITY.md), [PRIVACY.md](../PRIVACY.md), and [THREAT_MODEL.md](THREAT_MODEL.md). If you want an AI agent to explain features or maintain the repository, start with [AGENT_GUIDE.md](AGENT_GUIDE.md).
+
+## Interface labels
+
+The guide uses English operation names for readability. The running interface currently shows these Chinese labels:
+
+| Operation or field in this guide | Current interface label |
+| --- | --- |
+| New Book | 新建书目 |
+| Book title | 书名 |
+| Confirm creation | 确认新建 |
+| Switch book | 切换书目 |
+| Import JSON backup | 导入 JSON 备份 |
+| Export current Book | 导出当前书目 |
+| EPUB ebook / Markdown document / TXT plain text / JSON full backup | EPUB 电子书 / Markdown 文档 / TXT 纯文字 / JSON 完整备份 |
+| Manage current Book | 管理当前书目 |
+| Rename Book / Delete Book | 修改书名 / 删除书目 |
+| Select chapter or section / Delete selected content | 选择章节或小节 / 删除所选内容 |
+| New chapter / Chapter name | 新建章节 / 章节名称 |
+| New section / Section name | 新建小节 / 小节名称 |
+| Rename chapter / Rename section | 修改章节名称 / 修改小节名称 |
+| Book settings / Select previous text / Settings | 本书设定 / 选择前文 / 设置 |
+| Global guidance | 全局指引 |
+| Writing style guidance / Plot outline | 写作风格指导 / 剧情大纲 |
+| Save and load / Confirm save and load | 保存并加载 / 确认保存并加载 |
+| Character cards / Worldbuilding settings | 角色卡 / 世界观设定 |
+| New character card / New worldbuilding entry | 新建角色卡 / 新建世界观设定 |
+| Character name / Character points / Character settings | 角色名 / 角色要点 / 角色设定 |
+| Setting name / Setting content | 设定名称 / 设定内容 |
+| Load character card / Load worldbuilding setting / Select all / Confirm load | 加载角色卡 / 加载世界观设定 / 全选 / 确认载入 |
+| Writing actions | 写作操作 |
+| Author mode — Continue writing / Character mode — First person | 作者模式 · 写作接龙 / 角色模式 · 第一视角 |
+| Character to play / Section note | 扮演角色 / 小节注释 |
+| Edit / Delete / Regenerate version / Done | 编辑 / 删除 / 再生成一版 / 完成 |
+| Edit user input / Edit AI output | 编辑用户输入 / 编辑 AI 输出 |
+| Send and continue writing / Generate answer | 发送并续写 / 生成回答 |
+| Browse AI answer candidates / Previous version / Next version | 浏览 AI 回答候选 / 上一版 / 下一版 |
+| Generation / Streaming output / Cancel generation | 生成 / 流式输出 / 取消生成 |
+| Previous text selection | 前文选择 |
+| Enter this section's summary… / Generate section summary | 填写这一节的梗概… / 生成该节梗概 |
+| Save and load summary / Context overview | 保存并加载梗概 / 本轮上下文概览 |
+| Model connections / New connection profile | 模型连接 / 新连接方案 |
+| Profile name / API Key / URL / Model ID | 方案名称 / API Key / URL / 模型 ID |
+| Max context / Max output / Test | 最大上下文 / 最大输出 / 测试 |
+| Skin / Global font / Font size | 皮肤 / 全局字体 / 字号大小 |
+| Try to become editor / Reload library / Reload current Book | 尝试成为编辑页 / 重新载入书库 / 重新载入当前书目 |
