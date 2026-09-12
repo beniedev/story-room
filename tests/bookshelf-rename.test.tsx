@@ -91,7 +91,6 @@ describe('bookshelf directory title interactions', () => {
       const details = container.querySelector<HTMLDetailsElement>('.chapter-card details')!;
       const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
       const sectionTitle = container.querySelector<HTMLButtonElement>('.section-inline-title .inline-title-display')!;
-      expect(container.querySelector('.directory-title-hint')?.textContent).toBe('双击或双点名称改名');
 
       await act(async () => chapterTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
       await act(async () => sectionTitle.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
@@ -137,8 +136,10 @@ describe('bookshelf directory title interactions', () => {
     const { container, root } = await renderBookshelf({ onOpenSection });
     try {
       const selectionToggle = container.querySelector<HTMLButtonElement>('button[aria-label="整理目录"]')!;
+      const deleteButton = () => container.querySelector<HTMLButtonElement>('[aria-label="删除所选章节或小节"]');
+      expect(deleteButton()).toBeNull();
       await act(async () => selectionToggle.click());
-      expect(container.querySelector('.directory-title-hint')?.textContent).toContain('拖动把手调整顺序');
+      expect(deleteButton()?.disabled).toBe(true);
       expect(container.querySelector('.chapter-inline-title')).toBeNull();
       expect(container.querySelector('.section-inline-title')).toBeNull();
 
@@ -147,6 +148,12 @@ describe('bookshelf directory title interactions', () => {
       expect(onOpenSection).not.toHaveBeenCalled();
       expect(sectionOpen.getAttribute('role')).toBe('checkbox');
       expect(sectionOpen.getAttribute('aria-checked')).toBe('true');
+      expect(deleteButton()?.disabled).toBe(false);
+      await act(async () => sectionOpen.click());
+      expect(deleteButton()?.disabled).toBe(true);
+      await act(async () => selectionToggle.click());
+      expect(deleteButton()).toBeNull();
+      expect(selectionToggle.getAttribute('aria-pressed')).toBe('false');
     } finally {
       await act(async () => root.unmount());
     }
@@ -156,7 +163,6 @@ describe('bookshelf directory title interactions', () => {
     const onOpenSection = vi.fn();
     const { container, root } = await renderBookshelf({ canEdit: false, onOpenSection });
     try {
-      expect(container.querySelector('.directory-title-hint')).toBeNull();
       const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
       const sectionTitle = container.querySelector<HTMLButtonElement>('.section-inline-title .inline-title-display')!;
       expect(chapterTitle.disabled).toBe(true);

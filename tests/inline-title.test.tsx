@@ -233,12 +233,12 @@ describe('InlineTitle', () => {
     try {
       await dispatchKey(displayButton(fixture.container), 'F2');
       expect(editorInput(fixture.container)).not.toBeNull();
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-cancel')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Escape');
       expect(document.activeElement).toBe(displayButton(fixture.container));
 
       await dispatchKey(displayButton(fixture.container), 'Enter');
       expect(editorInput(fixture.container)).not.toBeNull();
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-cancel')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Escape');
 
       await dispatchKey(displayButton(fixture.container), ' ');
       expect(editorInput(fixture.container)).not.toBeNull();
@@ -275,6 +275,15 @@ describe('InlineTitle', () => {
       });
       expect(fixture.calls).toEqual(['中文标题', '失焦保存']);
       expect(document.activeElement).toBe(outside);
+
+      await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
+      const composingInput = editorInput(fixture.container);
+      await act(async () => composingInput.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+      await setInputValue(composingInput, '候选完成');
+      await act(async () => outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+      expect(fixture.calls).toEqual(['中文标题', '失焦保存']);
+      await act(async () => composingInput.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })));
+      expect(fixture.calls).toEqual(['中文标题', '失焦保存', '候选完成']);
       outside.remove();
     } finally {
       await fixture.unmount();
@@ -287,28 +296,28 @@ describe('InlineTitle', () => {
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
       const input = editorInput(fixture.container);
       await setInputValue(input, '   ');
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       expect(editorInput(fixture.container)).not.toBeNull();
       expect(fixture.calls).toHaveLength(0);
       expect(fixture.container.querySelector('[role="alert"]')?.textContent).toContain('不能为空');
 
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-cancel')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Escape');
       expect(displayButton(fixture.container).textContent).toBe('旧标题');
 
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       expect(fixture.calls).toHaveLength(0);
       expect(displayButton(fixture.container).textContent).toBe('旧标题');
 
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
       await setInputValue(editorInput(fixture.container), ' 旧标题 ');
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       expect(fixture.calls).toHaveLength(0);
       expect(displayButton(fixture.container).textContent).toBe('旧标题');
 
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
       await setInputValue(editorInput(fixture.container), '  新标题  ');
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       expect(fixture.calls).toEqual(['新标题']);
       expect(displayButton(fixture.container).textContent).toBe('新标题');
     } finally {
@@ -319,7 +328,7 @@ describe('InlineTitle', () => {
     try {
       await dispatchMouse(displayButton(emptyFixture.container), 'dblclick', 2);
       await setInputValue(editorInput(emptyFixture.container), '   ');
-      await act(async () => emptyFixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(emptyFixture.container), 'Enter');
       expect(editorInput(emptyFixture.container)).not.toBeNull();
       expect(emptyFixture.calls).toHaveLength(0);
     } finally {
@@ -327,28 +336,30 @@ describe('InlineTitle', () => {
     }
   });
 
-  it('does not submit twice when an internal button causes blur', async () => {
+  it('finishes from an outside tap without buttons or consuming the outside action', async () => {
     const fixture = await mount();
+    const outside = document.createElement('div');
+    const outsideClick = vi.fn();
+    outside.addEventListener('click', outsideClick);
+    document.body.appendChild(outside);
     try {
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
-      const input = editorInput(fixture.container);
-      await setInputValue(input, '内部按钮保存');
-      const save = fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!;
-      await act(async () => save.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })));
-      await act(async () => input.dispatchEvent(new FocusEvent('blur', { bubbles: true })));
-      await act(async () => save.click());
-      expect(fixture.calls).toEqual(['内部按钮保存']);
+      expect(fixture.container.querySelector('.inline-title button')).toBeNull();
+      await setInputValue(editorInput(fixture.container), '点外面保存');
+      await act(async () => {
+        outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        outside.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(fixture.calls).toEqual(['点外面保存']);
+      expect(outsideClick).toHaveBeenCalledOnce();
+      expect(fixture.container.querySelector('.inline-title-input')).toBeNull();
 
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
-      const cancelInput = editorInput(fixture.container);
-      await setInputValue(cancelInput, '取消掉');
-      const cancel = fixture.container.querySelector<HTMLButtonElement>('.inline-title-cancel')!;
-      await act(async () => cancel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })));
-      await act(async () => cancelInput.dispatchEvent(new FocusEvent('blur', { bubbles: true })));
-      await act(async () => cancel.click());
-      expect(fixture.calls).toEqual(['内部按钮保存']);
-      expect(displayButton(fixture.container).textContent).toBe('内部按钮保存');
+      await act(async () => outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+      expect(fixture.calls).toEqual(['点外面保存']);
+      expect(fixture.container.querySelector('.inline-title-input')).toBeNull();
     } finally {
+      outside.remove();
       await fixture.unmount();
     }
   });
@@ -383,7 +394,7 @@ describe('InlineTitle', () => {
       await act(async () => input.dispatchEvent(new FocusEvent('blur', { bubbles: true })));
       expect(fixture.calls).toEqual(['待定标题']);
       expect(fixture.container.querySelector('.inline-title')?.getAttribute('aria-busy')).toBe('true');
-      expect(fixture.container.querySelector('.inline-title-save')?.textContent).toBe('保存中…');
+      expect(fixture.container.querySelector('.inline-title-status')?.textContent).toBe('保存中…');
       resolveSave?.();
       await act(async () => undefined);
       expect(fixture.container.querySelector('.inline-title-input')).toBeNull();
@@ -397,7 +408,7 @@ describe('InlineTitle', () => {
       await act(async () => undefined);
       expect(editorInput(fixture.container).value).toBe('重试标题');
       expect(fixture.container.querySelector('[role="alert"]')?.textContent).toContain('synthetic failure');
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       await act(async () => undefined);
       expect(fixture.calls).toEqual(['待定标题', '重试标题', '重试标题']);
       expect(fixture.container.querySelector('.inline-title-input')).toBeNull();
@@ -423,7 +434,7 @@ describe('InlineTitle', () => {
     try {
       await dispatchMouse(displayButton(fixture.container), 'dblclick', 2);
       await setInputValue(editorInput(fixture.container), '乐观失败标题');
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       expect(fixture.calls).toEqual(['乐观失败标题']);
       expect(editorInput(fixture.container).value).toBe('乐观失败标题');
 
@@ -431,7 +442,7 @@ describe('InlineTitle', () => {
       await act(async () => undefined);
       expect(fixture.container.querySelector('[role="alert"]')?.textContent).toBe('保存失败，请重试。');
 
-      await act(async () => fixture.container.querySelector<HTMLButtonElement>('.inline-title-save')!.click());
+      await dispatchKey(editorInput(fixture.container), 'Enter');
       await act(async () => undefined);
       expect(fixture.calls).toEqual(['乐观失败标题', '乐观失败标题']);
       expect(fixture.container.querySelector('.inline-title-input')).toBeNull();

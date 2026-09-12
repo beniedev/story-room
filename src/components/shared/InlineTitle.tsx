@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -30,8 +31,6 @@ type TapPoint = {
   y: number;
   endedAt: number;
 };
-
-type InternalAction = 'save' | 'cancel';
 
 const TAP_MAX_DURATION = 420;
 const DOUBLE_TAP_MAX_INTERVAL = 360;
@@ -74,7 +73,7 @@ export function InlineTitle({
   const disabledRef = useRef(disabled);
   const savingRef = useRef(saving);
   const composingRef = useRef(false);
-  const internalActionRef = useRef<InternalAction | null>(null);
+  const commitAfterCompositionRef = useRef(false);
   const pointerGestureRef = useRef<PointerGesture | null>(null);
   const lastTapRef = useRef<TapPoint | null>(null);
   const failedDraftRef = useRef<string | null>(null);
@@ -143,7 +142,7 @@ export function InlineTitle({
     setEditing(false);
     setDraft(valueRef.current);
     setError('');
-    internalActionRef.current = null;
+    commitAfterCompositionRef.current = false;
   }, []);
 
   const submitDraft = useCallback(async (restoreFocus = false) => {
@@ -190,6 +189,18 @@ export function InlineTitle({
       setError(message ? `保存失败：${message}` : '保存失败，请重试。');
     }
   }, []);
+
+  useEffect(() => {
+    if (!editing) return;
+    const finishOutside = (event: globalThis.PointerEvent) => {
+      if (!(event.target instanceof Node) || editorRef.current?.contains(event.target)) return;
+      // Touching a non-focusable surface does not blur inputs in every browser.
+      if (document.activeElement === inputRef.current) inputRef.current?.blur();
+      else if (!composingRef.current) void submitDraft();
+    };
+    document.addEventListener('pointerdown', finishOutside, true);
+    return () => document.removeEventListener('pointerdown', finishOutside, true);
+  }, [editing, submitDraft]);
 
   const handleDisplayClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -287,12 +298,6 @@ export function InlineTitle({
     lastTapRef.current = null;
   }, []);
 
-  const markInternalAction = useCallback((action: InternalAction, event: SyntheticEvent) => {
-    event.stopPropagation();
-    event.preventDefault();
-    internalActionRef.current = action;
-  }, []);
-
   const handleInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     event.stopPropagation();
     draftRef.current = event.target.value;
@@ -317,9 +322,12 @@ export function InlineTitle({
 
   const handleInputBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
     event.stopPropagation();
-    if (internalActionRef.current) return;
     const relatedTarget = event.relatedTarget;
     if (relatedTarget && editorRef.current?.contains(relatedTarget)) return;
+    if (composingRef.current) {
+      commitAfterCompositionRef.current = true;
+      return;
+    }
     void submitDraft();
   }, [submitDraft]);
 
@@ -331,7 +339,13 @@ export function InlineTitle({
   const handleCompositionEnd = useCallback((event: React.CompositionEvent<HTMLInputElement>) => {
     event.stopPropagation();
     composingRef.current = false;
-  }, []);
+    if (commitAfterCompositionRef.current) {
+      commitAfterCompositionRef.current = false;
+      draftRef.current = event.currentTarget.value;
+      setDraft(event.currentTarget.value);
+      void submitDraft();
+    }
+  }, [submitDraft]);
 
   const handleEditorClick = useCallback((event: React.MouseEvent<HTMLSpanElement>) => {
     event.stopPropagation();
@@ -401,39 +415,7 @@ export function InlineTitle({
         onFocus={stopPropagation}
         onPointerDown={stopPropagation}
       />
-      <span className="inline-title-actions">
-        <button
-          type="button"
-          className="inline-title-save"
-          disabled={saving || disabled}
-          aria-label={saving ? `正在保存${label}` : `保存${label}`}
-          onPointerDown={(event) => markInternalAction('save', event)}
-          onMouseDown={(event) => markInternalAction('save', event)}
-          onClick={(event) => {
-            event.stopPropagation();
-            event.preventDefault();
-            internalActionRef.current = null;
-            void submitDraft();
-          }}
-        >
-          {saving ? '保存中…' : '保存'}
-        </button>
-        <button
-          type="button"
-          className="inline-title-cancel"
-          disabled={saving || disabled}
-          aria-label={`取消${label}`}
-          onPointerDown={(event) => markInternalAction('cancel', event)}
-          onMouseDown={(event) => markInternalAction('cancel', event)}
-          onClick={(event) => {
-            event.stopPropagation();
-            event.preventDefault();
-            cancelEditing(true);
-          }}
-        >
-          取消
-        </button>
-      </span>
+      {saving && <span className="inline-title-status" role="status">保存中…</span>}
       {error && <span className="inline-title-error" role="alert">{error}</span>}
     </span>
   );

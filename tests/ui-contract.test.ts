@@ -382,7 +382,6 @@ describe('writing UI contract', () => {
     expect(source).toContain('这是第一节，暂无前文可选');
     expect(source).toContain('await commitBookChange(');
     expect(source).toContain('parseSectionMemoryDraft(result.draft)');
-    expect(source).toContain('勾选只作待确认选择');
     expect(source).not.toContain('assertGenerationBudget(');
     expect(source).not.toContain('contextDialog');
     expect(styles).toContain('.context-summary-generate');
@@ -558,7 +557,6 @@ describe('writing UI contract', () => {
     const source = `${app}\n${shelf}\n${writer}\n${memory}\n${tools}`;
     expect(source).toContain("openNameDialog({ kind: 'new-book'");
     expect(shelf).toContain('className="inline-new-section"');
-    expect(shelf).toContain('在下方新建小节');
     expect(source).toContain("openCurrentBookNameDialog({ kind: 'rename-book'");
     expect(shelf).toContain('<InlineTitle');
     expect(shelf).toContain('onRenameSection');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deleteSourceSelection, toggleSourceSelection } from '../src/sourceSelection';
+import { deleteSourceSelection, moveSourceItem, toggleSourceSelection } from '../src/sourceSelection';
 import type { Book } from '../src/types';
 
 const book: Book = {
@@ -22,6 +22,14 @@ const book: Book = {
 };
 
 describe('source selection', () => {
+  it('keeps unchanged moves inert and rejects stale source IDs or destinations', () => {
+    expect(moveSourceItem(book, 'character', 'character-a', 'character-b')).toBe(book);
+    expect(moveSourceItem(book, 'world', 'world-b', null)).toBe(book);
+    expect(moveSourceItem(book, 'world', 'world-a', 'world-a')).toBe(book);
+    expect(() => moveSourceItem(book, 'world', 'missing', null)).toThrow('已改变');
+    expect(() => moveSourceItem(book, 'character', 'character-a', 'missing')).toThrow('已改变');
+    expect(moveSourceItem(book, 'world', 'world-b', 'world-a').worldRules).toEqual([book.worldRules[1], book.worldRules[0]]);
+  });
   it('toggles independent rows for multi-selection', () => {
     const first = toggleSourceSelection(new Set(), 'character-a');
     const second = toggleSourceSelection(first, 'character-b');

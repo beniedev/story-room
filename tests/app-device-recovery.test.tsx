@@ -119,7 +119,6 @@ afterEach(async () => {
 
 describe('device storage recovery', () => {
   it('shows a visible conflict and never resurrects a Book deleted in another page', async () => {
-    const expected = createExampleBooks()[0]!;
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -130,7 +129,10 @@ describe('device storage recovery', () => {
       await act(async () => {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       });
-      const current = await deviceLibrary.loadBook(expected.id);
+      // Initial selection follows the stored index, not fixture construction order.
+      const [selected] = await deviceLibrary.listPersistedBooks();
+      if (!selected) throw new Error('fixture book missing');
+      const current = await deviceLibrary.loadBook(selected.id);
       localStorage.removeItem(bookKey(current.id));
       await act(async () => {
         window.dispatchEvent(new StorageEvent('storage', {
@@ -159,9 +161,8 @@ describe('device storage recovery', () => {
   });
 
   it('recovers and autosaves a draft whose base matches the current Book', async () => {
-    const expected = createExampleBooks()[0]!;
     const stored = await withDeviceWriter(async () => {
-      const current = (await deviceLibrary.listBooks()).find((entry) => entry.id === expected.id);
+      const [current] = await deviceLibrary.listBooks();
       if (!current) throw new Error('fixture book missing');
       return deviceLibrary.loadBook(current.id);
     });

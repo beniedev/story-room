@@ -226,16 +226,6 @@ export function ContextToolsDrawer({
     notifyPendingDrafts();
   };
 
-  const invalidateGenerationForKey = (key: string) => {
-    let hasActiveOperation = false;
-    for (const operation of generationOperationsRef.current.values()) {
-      if (operation.key !== key || operation.settled) continue;
-      operation.invalidated = true;
-      hasActiveOperation = true;
-    }
-    if (hasActiveOperation) onCancelGeneration();
-  };
-
   useEffect(() => {
     const drawer = drawerRef.current;
     if (!drawer) return undefined;
@@ -530,19 +520,6 @@ export function ContextToolsDrawer({
     }
     summaryConfirmDialog.current?.close();
   };
-  const discardCurrentDraft = () => {
-    if (!canEdit || !sessionState.hasChanges) return;
-    const key = activeSessionKeyRef.current;
-    invalidateGenerationForKey(key);
-    clearSessionDraft(key);
-    setSummaryBusyId('');
-    summaryGenerationRequest.current += 1;
-    summaryActionAccepted.current = true;
-    if (summaryConfirmDialog.current?.open) summaryConfirmDialog.current.close();
-    setPendingSummarySectionId('');
-    setPendingSummaryAction('');
-    setSummaryFeedback(idleDialogOperation);
-  };
   const saveSummariesAndLoad = async (items: typeof referenceSections) => {
     const key = activeSessionKeyRef.current;
     const session = sessionForKey(key);
@@ -694,10 +671,8 @@ export function ContextToolsDrawer({
         </header>
 
         <section className="context-reference-section" aria-label="加载前文梗概">
-          <p className="helper-copy">勾选只作待确认选择；确认保存后才加载梗概，不加载前文原文。关闭后未确认的修改不生效。</p>
           {!canEdit && <p className="helper-copy">当前页面为只读，可查看已保存的前文设置；关闭其他编辑页后可修改。</p>}
           {legacyFullCount > 0 && <p className="helper-copy">当前设置仍含 {legacyFullCount} 节全文引用；确认后将按勾选结果改为梗概引用。</p>}
-          {sessionState.hasChanges && <p className="helper-copy">当前有未确认修改；可选择“放弃本次修改”恢复本次打开前的状态。</p>}
           {displayedReferenceSections.length === 0 ? <p className="helper-copy">这是第一节，暂无前文可选。</p> : (
             <div className="source-scope-drawer context-reference-scope" data-open>
               <div className="source-load-tab">
@@ -736,16 +711,6 @@ export function ContextToolsDrawer({
                   <Check aria-hidden="true" />
                 </button>
               </div>
-              <div className="dialog-actions">
-                <button
-                  type="button"
-                  className="quiet-action"
-                  onClick={discardCurrentDraft}
-                  disabled={!canEdit || !sessionState.hasChanges}
-                >
-                  放弃本次修改
-                </button>
-              </div>
               <div className="source-scope-content">
                 <div className="source-scope-chapters" aria-label="可加载的前文">
                   {referenceChapters.map((chapterItem) => (
@@ -757,6 +722,13 @@ export function ContextToolsDrawer({
                         const isPrevious = previousSectionIds.has(item.section.id);
                         const panelId = `context-summary-${item.section.id}`;
                         const value = summaryValue(item);
+                        const pendingMemory = memoryDrafts[item.section.id];
+                        const hasUnsavedLoadChange = sessionState.hasChanges && (
+                          selected !== currentReferences.has(item.section.id)
+                          || Boolean(pendingMemory && JSON.stringify(pendingMemory)
+                            !== JSON.stringify(draftFromSectionMemory(item.section.memory) ?? emptyMemoryDraft()))
+                        );
+                        const unsavedHintId = `context-load-unsaved-${item.section.id}`;
                         const summaryBusy = summaryBusyId === item.section.id;
                         const hasContent = Boolean(item.section.content.trim());
                         return (
@@ -766,6 +738,7 @@ export function ContextToolsDrawer({
                                 <input
                                   type="checkbox"
                                   checked={selected}
+                                  aria-describedby={hasUnsavedLoadChange ? unsavedHintId : undefined}
                                   onChange={() => toggleSelection(item.section.id)}
                                   disabled={!canEdit || busy || (!hasContent && !selected)}
                                 />
@@ -782,6 +755,9 @@ export function ContextToolsDrawer({
                                 <span>{item.section.title}
                                   {!isPrevious && <small> · 位于当前小节或之后，暂不加载</small>}
                                   {!value.trim() && <small> · 尚无梗概</small>}
+                                  {hasUnsavedLoadChange && (
+                                    <small className="context-load-unsaved" id={unsavedHintId}>此加载修改尚未保存</small>
+                                  )}
                                 </span>
                                 <ChevronRight aria-hidden="true" />
                               </button>

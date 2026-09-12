@@ -75,14 +75,14 @@
 | --- | --- | --- |
 | [`src/App.tsx`](../src/App.tsx) | 运行时启动、书目选择、编辑页/只读页状态、自动保存、冲突、生成和组件回调 | 是否已经有同一动作的回调和保存管线；不要在组件里另写持久化 |
 | [`src/types.ts`](../src/types.ts) | `Book`、`Chapter`、`Section`、块、候选、`SectionContextReference`、`SectionMemory` 的数据契约 | 新字段是否需要规范化、导入校验、导出和两种运行时同时支持 |
-| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 只读门和确认对话框 |
+| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、角色卡/世界观列表（共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)）、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 只读门、确认对话框、`Bookshelf.onBookChange` 保存回调，以及资料多选模式下的单项列表拖动 |
 | [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、只读页禁用状态和候选语义 |
 | [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 单击标题不导航，其他区域立即打开或展开；保留输入法、取消、保存失败和只读保护 |
 | [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) 与 [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | 前文选择、会话草稿、梗概生成及确认 | 关闭保留未确认草稿；按书目和小节隔离；确认才写入，暂时不可用的既有引用可显式保留或取消 |
-| [`src/directoryOperations.ts`](../src/directoryOperations.ts) 与 [`src/components/DirectoryMoveDialog.tsx`](../src/components/DirectoryMoveDialog.tsx) | 稳定 ID 的目录移动、逆向位置和前文资格变化；点击式移动入口 | 不删除重建，不用整书快照撤销；位置保存成功才更新目录，失败保留旧顺序 |
+| [`src/directoryOperations.ts`](../src/directoryOperations.ts) | 整理模式下的目录拖动排序、稳定 ID、逆向位置和前文资格变化 | 拖动只在目录多选模式进行；不删除重建，不用整书快照撤销；成功保存后才采用新顺序 |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “本轮上下文概览”，展示纳入资料、原因和估算 | 只展示摘要，不泄露原始模型服务消息或隐藏推理 |
 | [`src/components/ProviderSettings.tsx`](../src/components/ProviderSettings.tsx) 与 `App.tsx` 的设置区域 | 模型服务表单、模型限制、测试、密钥提示和流式开关；`ProviderProfile` 连接方案见 `src/providerProfiles.ts` | 本地服务模式与浏览器模式的密钥生命周期及 `/models` 测试含义 |
-| [`src/contextPlan.ts`](../src/contextPlan.ts)、`src/contextReferences.ts`、`src/sourceSelection.ts` | 资料选择、来源签名、摘要/全文引用、预算估算和提示包 | 只使用当前书目；不要把预览当成原始提示回显 |
+| [`src/contextPlan.ts`](../src/contextPlan.ts)、`src/contextReferences.ts`、`src/sourceSelection.ts` | 资料选择、来源签名、摘要/全文引用、预算估算、提示包，以及通过 `moveSourceItem` 进行单项资料排序 | 只使用当前书目；不要把预览当成原始提示回显 |
 | [`src/generationRequests.ts`](../src/generationRequests.ts) | 续写、回答和块再生成的目标范围 | 再生成排除目标及后续内容；`respond-to-input` 不重复用户输入 |
 | [`src/answerCandidates.ts`](../src/answerCandidates.ts) | 候选读取、采用、添加、删除和保存前后的保留语义 | `content` 是当前采用候选的投影；箭头切换不是生成 |
 | [`src/sectionMemory.ts`](../src/sectionMemory.ts) | `SectionMemory`（小节梗概）的结构、内容指纹、新鲜度、确认、上一快照和回滚 | `model-draft` 未确认不可用于普通续写；正文变化会使小节梗概过期 |
@@ -132,9 +132,11 @@
 
 从 `sectionMemory.ts` 的草稿、新鲜度、来源和上一快照语义开始，再看 `ContextToolsDrawer.tsx` 与 App 的生成/确认回调。生成的 `model-draft` 先停在页面编辑草稿，只有用户确认“保存并加载梗概”后才成为可用的小节梗概和上下文引用。正文改动后应按内容指纹重新判断新鲜度，而不是无条件沿用旧梗概。
 
-抽屉草稿由 App 持有的会话 Map 按书目和目标小节隔离，不进入浏览器长期存储。关闭不清稿；明确放弃或确认成功才结束相应待确认修改。迟到生成结果需要同时核对会话身份和请求代次；删除目标后不能复活草稿。所有会话的待确认修改都应计入离页提醒。
+抽屉草稿由 App 持有的会话 Map 按书目和目标小节隔离，不进入浏览器长期存储。点击外部空白或关闭抽屉不会清稿，也不会应用修改；相关前文名称下的红字标明未保存状态，确认保存成功后消失。迟到生成结果需要同时核对会话身份和请求代次；删除目标后不能复活草稿。所有会话的待确认修改都应计入离页提醒。
 
-目录移动只改变作品顺序。`getDirectoryMoveImpact` 比较顺序导致的前文资格变化，不重新生成梗概，也不承诺过期梗概已经可用。`contextReferences.ts` 在保存前文选择时保留尚被用户选中的既有当前／未来引用，禁止用这一入口新增未来引用。移动撤销只记录逆向位置，应用到最新书目；不要回放整本旧书覆盖后续正文。
+目录拖动排序只改变作品顺序。六点把手只在目录多选模式显示，支持鼠标或触屏拖动。`getDirectoryMoveImpact` 比较顺序导致的前文资格变化，不重新生成梗概，也不承诺过期梗概已经可用。`contextReferences.ts` 在保存前文选择时保留尚被用户选中的既有当前／未来引用，禁止用这一入口新增未来引用。移动撤销只记录逆向位置，应用到最新书目；不要回放整本旧书覆盖后续正文。
+
+角色卡和世界观设定列表在多选模式下支持单项六点把手拖动排序。两个列表共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)；每次移动由 `src/sourceSelection.ts` 的 `moveSourceItem` 计算，再由 `Bookshelf.onBookChange` 接入原有书目保存链。把手支持鼠标或触屏拖动；聚焦后按上、下方向键可逐项移动，拖动进行中按 Esc 可取消。单项在各自列表内拖动后会自动保存新顺序；不支持整组选中内容拖动，也没有“撤销”。
 
 ### 改浏览器模式单编辑页
 

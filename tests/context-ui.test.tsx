@@ -245,8 +245,10 @@ describe('context drawers real interactions', () => {
     const row = disclosure?.closest('.context-reference-row');
     const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(checkbox?.checked).toBe(true);
+    expect(container.querySelector('.context-load-unsaved')).toBeNull();
     await act(async () => checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(checkbox?.checked).toBe(false);
+    expect(row?.querySelector('.context-load-unsaved')?.textContent).toBe('此加载修改尚未保存');
     expect(props.onSaveMemoriesAndLoad).not.toHaveBeenCalled();
     expect(container.querySelector('textarea')).toBeNull();
 
@@ -256,6 +258,7 @@ describe('context drawers real interactions', () => {
     expect(disclosure?.getAttribute('aria-expanded')).toBe('true');
     expect(checkbox?.checked).toBe(false);
     await act(async () => checkbox?.click());
+    expect(container.querySelector('.context-load-unsaved')).toBeNull();
     await act(async () => globalSave?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     const saveConfirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent?.includes('确认保存并加载'));
@@ -288,7 +291,7 @@ describe('context drawers real interactions', () => {
     await unmount(root);
   });
 
-  it('restores a session draft after closing and clears it only on explicit discard', async () => {
+  it('restores unsaved edits after closing and clears their hint after successful save', async () => {
     const book = makeBook();
     const sessionDrafts = new Map<string, ContextToolDraftSession>();
     const props = { ...makeToolProps(book), sessionDrafts };
@@ -311,13 +314,20 @@ describe('context drawers real interactions', () => {
     expect(reopenedDisclosure).toBeTruthy();
     expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')?.value)
       .toBe('会话内修改的梗概');
-    expect(container.textContent).toContain('放弃本次修改');
+    expect(container.textContent).not.toContain('放弃本次修改');
+    expect(container.querySelector('.context-load-unsaved')?.textContent).toBe('此加载修改尚未保存');
 
-    const discard = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('放弃本次修改'));
-    await act(async () => discard?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => confirm?.click());
     expect(sessionDrafts.has(key)).toBe(false);
-    expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')).toBeNull();
+    expect(container.querySelector('.context-load-unsaved')).toBeNull();
+    expect(props.onSaveMemoriesAndLoad).toHaveBeenCalledWith([{
+      sourceSectionId: 'source-ready',
+      draft: { ...memoryDraft, synopsis: '会话内修改的梗概' },
+      provenance: 'manual',
+    }]);
     await unmount(root);
   });
 
@@ -375,7 +385,7 @@ describe('context drawers real interactions', () => {
     await unmount(root);
   });
 
-  it('does not recreate a discarded session when its generation resolves late', async () => {
+  it('does not recreate a removed target session when its generation resolves late', async () => {
     const book = makeBook();
     const sessionDrafts = new Map<string, ContextToolDraftSession>();
     let resolveGeneration!: (draft: SectionMemoryDraft) => void;
@@ -392,12 +402,10 @@ describe('context drawers real interactions', () => {
     const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent?.includes('确认生成'));
     await act(async () => confirm?.click());
-    const close = container.querySelector<HTMLButtonElement>('.confirm-dialog [aria-label="关闭确认"]');
-    await act(async () => close?.click());
-    const discard = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('放弃本次修改'));
-    await act(async () => discard?.click());
     const key = contextToolDraftKey(book.id, 'target-ui');
+    // App removes the target's draft and unmounts its drawer when the target is deleted.
+    sessionDrafts.delete(key);
+    await unmount(root);
     expect(sessionDrafts.has(key)).toBe(false);
 
     await act(async () => {
@@ -406,7 +414,6 @@ describe('context drawers real interactions', () => {
     });
     expect(sessionDrafts.has(key)).toBe(false);
     expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-no-memory')).toBeNull();
-    await unmount(root);
   });
 
   it('drops source ids that no longer exist and keeps read-only expansion out of pending drafts', async () => {
@@ -465,6 +472,7 @@ describe('context drawers real interactions', () => {
       await Promise.resolve();
     });
     expect(container.textContent).toContain('梗概保存并加载失败');
+    expect(container.querySelector('.context-load-unsaved')?.textContent).toBe('此加载修改尚未保存');
     expect(sessionDrafts.get(contextToolDraftKey(book.id, 'target-ui'))?.hasChanges).toBe(true);
 
     await act(async () => root.render(<ContextToolsDrawer {...props} open={false} />));
@@ -473,6 +481,7 @@ describe('context drawers real interactions', () => {
     expect(reopened).toBeTruthy();
     expect(container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready')?.value)
       .toBe('保存失败后仍保留');
+    expect(container.querySelector('.context-load-unsaved')).not.toBeNull();
     await unmount(root);
   });
 

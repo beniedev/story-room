@@ -2897,6 +2897,7 @@ function SettingsDrawer({
           <input
             id="streaming-output-toggle"
             type="checkbox"
+            role="switch"
             checked={streamingOutput}
             onChange={(event) => onStreamingOutputChange(event.target.checked)}
           />

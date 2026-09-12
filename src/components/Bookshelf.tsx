@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import {
   ArrowLeft,
   BookMarked,
@@ -15,7 +15,6 @@ import {
   Layers3,
   ListChecks,
   ListTree,
-  Move,
   Pencil,
   Plus,
   RotateCcw,
@@ -26,13 +25,13 @@ import {
 } from 'lucide-react';
 import { toggleChapterSelection, toggleSectionSelection, type DirectorySelection } from '../directorySelection';
 import { getDirectoryMoveImpact, moveDirectoryItem, type DirectoryMove, type DirectoryReferenceImpact } from '../directoryOperations';
-import { toggleSourceSelection, type SourceSelectionKind } from '../sourceSelection';
+import { moveSourceItem, toggleSourceSelection, type SourceSelectionKind } from '../sourceSelection';
 import { countWords, estimateTokens } from '../textMetrics';
 import { compactTokenCount } from './shared/text';
 import { TextArea } from './shared/TextArea';
 import { InlineTitle } from './shared/InlineTitle';
-import { DirectoryActionMenu } from './DirectoryActionMenu';
-import { DirectoryMoveDialog } from './DirectoryMoveDialog';
+import { DirectoryActions } from './DirectoryActions';
+import { SourceList } from './SourceList';
 import {
   DialogOperationStatus,
   idleDialogOperation,
@@ -518,24 +517,6 @@ type DirectoryDragState = {
   move: DirectoryMove | null;
 };
 
-type DirectoryLongPressState = {
-  kind: DirectoryMove['kind'];
-  id: string;
-  pointerId: number;
-  startX: number;
-  startY: number;
-  selector: string;
-  target: HTMLElement;
-  timer: number;
-  triggered: boolean;
-};
-
-type DirectorySuppressedClick = {
-  kind: DirectoryMove['kind'];
-  id: string;
-  until: number;
-};
-
 function DirectorySelectionIndicator({ state }: { state: DirectorySelectionState }) {
   return (
     <span className="directory-selection-checkbox" data-state={state} aria-hidden="true">
@@ -680,12 +661,12 @@ export function Bookshelf(props: BookshelfProps) {
     () => new Set(props.book.chapters.map((chapter) => chapter.id)),
   );
   const [newSectionDraft, setNewSectionDraft] = useState<InlineSectionDraft | null>(null);
-  const [moveDialog, setMoveDialog] = useState<DirectoryMove | null>(null);
   const [moveOperation, setMoveOperation] = useState<DirectoryMoveOperation | null>(null);
   const [dragState, setDragState] = useState<DirectoryDragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DirectoryMove | null>(null);
   const [sourceSelectionMode, setSourceSelectionMode] = useState<SourceSelectionKind | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const [sourceMoveBusy, setSourceMoveBusy] = useState(false);
   const [openSettingsSections, setOpenSettingsSections] = useState<Set<SettingsSection>>(
     () => new Set(['guidance']),
   );
@@ -713,10 +694,9 @@ export function Bookshelf(props: BookshelfProps) {
   const dragAutoScrollFrameRef = useRef<number | null>(null);
   const dragPointerXRef = useRef<number | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
-  const longPressRef = useRef<DirectoryLongPressState | null>(null);
-  const suppressedClickRef = useRef<DirectorySuppressedClick | null>(null);
   const canWrite = canEdit
     && !props.directoryBusy
+    && !sourceMoveBusy
     && moveOperation?.phase !== 'pending'
     && newSectionDraft?.operation.phase !== 'pending';
 
@@ -783,17 +763,6 @@ export function Bookshelf(props: BookshelfProps) {
     }
   };
 
-  const clearDirectoryLongPress = () => {
-    const state = longPressRef.current;
-    if (state) window.clearTimeout(state.timer);
-    longPressRef.current = null;
-  };
-
-  const clearDirectoryInteractionState = () => {
-    clearDirectoryLongPress();
-    suppressedClickRef.current = null;
-  };
-
   useEffect(() => () => {
     if (dragAutoScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(dragAutoScrollFrameRef.current);
@@ -801,7 +770,6 @@ export function Bookshelf(props: BookshelfProps) {
     }
     dragPointerYRef.current = null;
     dragPointerXRef.current = null;
-    clearDirectoryInteractionState();
   }, []);
 
   useDismissSuccessfulDialog(nameOperation.phase === 'success', () => nameDialogRef.current?.close());
@@ -839,13 +807,11 @@ export function Bookshelf(props: BookshelfProps) {
     knownChapterIdsRef.current = chapterIds;
     setOpenChapterIds(new Set(chapterIds));
     setNewSectionDraft(null);
-    setMoveDialog(null);
     setMoveOperation(null);
     setDragState(null);
     setDragPreview(null);
     dragSessionRef.current = null;
     stopDirectoryAutoScroll();
-    clearDirectoryInteractionState();
     setSourceSelectionMode(null);
     setSelectedSourceIds(new Set());
   }, [props.book.id]);
@@ -1072,119 +1038,6 @@ export function Bookshelf(props: BookshelfProps) {
     });
   };
 
-  const requestInlineRename = (kind: DirectoryMove['kind'], id: string) => {
-    if (!canWrite) return;
-    const rows = [...document.querySelectorAll<HTMLElement>(kind === 'chapter' ? '.chapter-card' : '.section-row')];
-    const row = rows.find((item) => (
-      kind === 'chapter'
-        ? item.dataset.directoryChapterId === id
-        : item.dataset.directorySectionId === id
-    ));
-    const display = row?.querySelector<HTMLElement>('.inline-title-display');
-    if (!display) return;
-    display.focus();
-    display.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-  };
-
-  const openDirectoryMenuFromContext = (event: ReactMouseEvent<HTMLElement>, selector: string) => {
-    if (!canWrite || selectionMode) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const menu = event.currentTarget.querySelector<HTMLDetailsElement>(selector);
-    menu?.setAttribute('open', '');
-    menu?.querySelector<HTMLElement>('.directory-object-menu-trigger')?.focus();
-  };
-
-  const openDirectoryMenuAt = (target: HTMLElement, selector: string) => {
-    if (!canWrite || selectionMode) return false;
-    const menu = target.querySelector<HTMLDetailsElement>(selector);
-    if (!menu) return false;
-    menu.setAttribute('open', '');
-    menu.querySelector<HTMLElement>('.directory-object-menu-trigger')?.focus();
-    return true;
-  };
-
-  const beginDirectoryLongPress = (
-    kind: DirectoryMove['kind'],
-    id: string,
-    selector: string,
-    event: ReactPointerEvent<HTMLElement>,
-  ) => {
-    suppressedClickRef.current = null;
-    if (!canWrite || selectionMode || props.directoryBusy
-      || (event.pointerType !== 'touch' && event.pointerType !== 'pen')
-      || event.isPrimary === false) return;
-    if (event.target instanceof Element && event.target.closest('.directory-object-menu')) return;
-
-    clearDirectoryLongPress();
-    event.stopPropagation();
-    const target = event.currentTarget;
-    const pointerId = event.pointerId;
-    const timer = window.setTimeout(() => {
-      const state = longPressRef.current;
-      if (!state || state.pointerId !== pointerId || state.target !== target) return;
-      if (openDirectoryMenuAt(target, selector)) {
-        state.triggered = true;
-        suppressedClickRef.current = { kind, id, until: Date.now() + 1000 };
-      }
-    }, 500);
-    longPressRef.current = {
-      kind,
-      id,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      selector,
-      target,
-      timer,
-      triggered: false,
-    };
-  };
-
-  const updateDirectoryLongPress = (event: ReactPointerEvent<HTMLElement>) => {
-    const state = longPressRef.current;
-    if (!state || state.pointerId !== event.pointerId || state.triggered) return;
-    if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) > 12) {
-      clearDirectoryLongPress();
-    }
-  };
-
-  const finishDirectoryLongPress = (event: ReactPointerEvent<HTMLElement>) => {
-    const state = longPressRef.current;
-    if (!state || state.pointerId !== event.pointerId) return;
-    const triggered = state.triggered;
-    clearDirectoryLongPress();
-    if (triggered) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-
-  const cancelDirectoryLongPress = (event: ReactPointerEvent<HTMLElement>) => {
-    const state = longPressRef.current;
-    if (!state || state.pointerId !== event.pointerId) return;
-    clearDirectoryLongPress();
-    suppressedClickRef.current = null;
-  };
-
-  const suppressDirectoryLongPressClick = (
-    kind: DirectoryMove['kind'],
-    id: string,
-    event: ReactMouseEvent<HTMLElement>,
-  ) => {
-    const suppression = suppressedClickRef.current;
-    if (!suppression) return;
-    if (suppression.until < Date.now()) {
-      suppressedClickRef.current = null;
-      return;
-    }
-    if (suppression.kind !== kind || suppression.id !== id) return;
-    if (event.target instanceof Element && event.target.closest('.directory-object-menu')) return;
-    suppressedClickRef.current = null;
-    event.preventDefault();
-    event.stopPropagation();
-  };
-
   const beginInlineSection = (chapterId: string, afterSectionId: string | null) => {
     if (!canWrite || selectionMode) return;
     openChapter(chapterId);
@@ -1260,19 +1113,6 @@ export function Bookshelf(props: BookshelfProps) {
         impact,
       });
     }
-  };
-
-  const openDirectoryMove = (move: DirectoryMove) => {
-    if (!canWrite || selectionMode) return;
-    setMoveDialog(move);
-  };
-
-  const submitDirectoryMoveDialog = () => {
-    if (!moveDialog || !canWrite) return;
-    const move = moveDialog;
-    setMoveDialog(null);
-    setDragPreview(null);
-    void startDirectoryMove(move);
   };
 
   const retryDirectoryOperation = () => {
@@ -1370,6 +1210,20 @@ export function Bookshelf(props: BookshelfProps) {
     if (!canWrite) return;
     setSourceSelectionMode((current) => current === kind ? null : kind);
     setSelectedSourceIds(new Set());
+  };
+
+  const moveSource = async (kind: SourceSelectionKind, id: string, beforeId: string | null) => {
+    if (!canWrite) throw new Error('当前无法保存排序，请稍后重试。');
+    const bookId = props.book.id;
+    setSourceMoveBusy(true);
+    try {
+      await props.onBookChange((current) => {
+        if (current.id !== bookId) throw new Error('当前书籍已切换，请重新排序。');
+        return moveSourceItem(current, kind, id, beforeId);
+      });
+    } finally {
+      setSourceMoveBusy(false);
+    }
   };
 
   const openBookSettingsPage = (next: BookSettingsView) => {
@@ -1530,25 +1384,9 @@ export function Bookshelf(props: BookshelfProps) {
                 aria-label="打开本书设定"
                 title="本书设定"
               ><BookMarked aria-hidden="true" /></button>
-              {selectionMode
-                ? <p className="directory-title-hint">拖动把手调整顺序；完成整理后可用“移动到…”</p>
-                : canWrite && <p className="directory-title-hint">双击或双点名称改名</p>}
               <div className="directory-actions">
                 <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-chapter', value: '' })} disabled={!canWrite} aria-label="新建章节" title="新建章节"><FolderPlus aria-hidden="true" /></button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-pressed={selectionMode}
-                  disabled={!canWrite}
-                  onClick={() => {
-                    setSelectionMode((current) => !current);
-                    setSelection({ chapterIds: new Set(), sectionIds: new Set() });
-                    if (!selectionMode) setNewSectionDraft(null);
-                  }}
-                  aria-label={selectionMode ? '完成整理目录' : '整理目录'}
-                  title={selectionMode ? '完成整理目录' : '整理目录'}
-                >{selectionMode ? <X aria-hidden="true" /> : <ListChecks aria-hidden="true" />}</button>
-                <button
+                {selectionMode && <button
                   type="button"
                   className="icon-button danger-icon"
                   aria-haspopup="dialog"
@@ -1562,7 +1400,20 @@ export function Bookshelf(props: BookshelfProps) {
                   })}
                   aria-label="删除所选章节或小节"
                   title={selection.chapterIds.size || selection.sectionIds.size ? '删除所选内容' : '请先选择章节或小节'}
-                ><Trash2 aria-hidden="true" /></button>
+                ><Trash2 aria-hidden="true" /></button>}
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-pressed={selectionMode}
+                  disabled={!canWrite}
+                  onClick={() => {
+                    setSelectionMode((current) => !current);
+                    setSelection({ chapterIds: new Set(), sectionIds: new Set() });
+                    if (!selectionMode) setNewSectionDraft(null);
+                  }}
+                  aria-label={selectionMode ? '完成整理目录' : '整理目录'}
+                  title={selectionMode ? '完成整理目录' : '整理目录'}
+                >{selectionMode ? <X aria-hidden="true" /> : <ListChecks aria-hidden="true" />}</button>
               </div>
             </div>
             {moveOperation && (
@@ -1626,12 +1477,6 @@ export function Bookshelf(props: BookshelfProps) {
                     data-selected={selection.chapterIds.has(chapter.id) || undefined}
                     data-dragging={dragState?.kind === 'chapter' && dragState.id === chapter.id || undefined}
                     data-drop-target={chapterMoveTarget || chapterMoveEndTarget || undefined}
-                    onContextMenu={(event) => openDirectoryMenuFromContext(event, '.chapter-object-menu')}
-                    onPointerDown={(event) => beginDirectoryLongPress('chapter', chapter.id, '.chapter-object-menu', event)}
-                    onPointerMove={updateDirectoryLongPress}
-                    onPointerUp={finishDirectoryLongPress}
-                    onPointerCancel={cancelDirectoryLongPress}
-                    onClickCapture={(event) => suppressDirectoryLongPressClick('chapter', chapter.id, event)}
                     key={chapter.id}
                   >
                     <details
@@ -1693,6 +1538,16 @@ export function Bookshelf(props: BookshelfProps) {
                           </strong>
                         </span>
                         <span>{chapter.sections.length} 节</span>
+                        {!selectionMode && <ChevronDown className="chapter-chevron" aria-hidden="true" />}
+                        {!selectionMode && canWrite && (
+                          <DirectoryActions
+                            className="chapter-object-actions"
+                            label={`操作章节：${chapter.title}`}
+                            items={[
+                              { key: 'new-section', label: '新建小节', ariaLabel: `在${chapter.title}中新建小节`, icon: <FilePlus2 aria-hidden="true" />, onSelect: () => beginInlineSection(chapter.id, chapter.sections[chapter.sections.length - 1]?.id ?? null) },
+                            ]}
+                          />
+                        )}
                       </summary>
                     {selectionMode && canWrite && (
                       <button
@@ -1707,19 +1562,6 @@ export function Bookshelf(props: BookshelfProps) {
                         onPointerCancel={(event) => finishDirectoryDrag(event, true)}
                         onLostPointerCapture={(event) => finishDirectoryDrag(event, true)}
                       ><GripVertical aria-hidden="true" /></button>
-                    )}
-                    {!selectionMode && canWrite && (
-                      <DirectoryActionMenu
-                        className="chapter-object-menu"
-                        label={`操作章节：${chapter.title}`}
-                        items={[
-                          { key: 'rename', label: '重命名', icon: <Pencil aria-hidden="true" />, onSelect: () => requestInlineRename('chapter', chapter.id) },
-                          { key: 'new-section', label: '新建小节', ariaLabel: `在${chapter.title}中新建小节`, icon: <FilePlus2 aria-hidden="true" />, onSelect: () => beginInlineSection(chapter.id, chapter.sections[chapter.sections.length - 1]?.id ?? null) },
-                          { key: 'move', label: '移动到…', icon: <Move aria-hidden="true" />, onSelect: () => openDirectoryMove({ kind: 'chapter', id: chapter.id, beforeId: props.book.chapters[chapterIndex + 1]?.id ?? null }) },
-                          { key: 'organize', label: '整理顺序', icon: <ListTree aria-hidden="true" />, onSelect: () => { setSelectionMode(true); setSelection({ chapterIds: new Set(), sectionIds: new Set() }); setNewSectionDraft(null); } },
-                          { key: 'delete', label: '删除', icon: <Trash2 aria-hidden="true" />, danger: true, onSelect: () => openDeleteDialog({ kind: 'selection', chapterIds: [chapter.id], sectionIds: chapter.sections.map((section) => section.id), chapterCount: 1, sectionCount: chapter.sections.length }) },
-                        ]}
-                      />
                     )}
                     <ol className="section-list">
                       {chapter.sections.map((section, sectionIndex) => {
@@ -1738,12 +1580,6 @@ export function Bookshelf(props: BookshelfProps) {
                               data-selected={selection.sectionIds.has(section.id) || undefined}
                               data-dragging={dragState?.kind === 'section' && dragState.id === section.id || undefined}
                               data-drop-target={sectionMoveBeforeTarget || sectionMoveEndTarget || undefined}
-                              onContextMenu={(event) => openDirectoryMenuFromContext(event, '.section-object-menu')}
-                              onPointerDown={(event) => beginDirectoryLongPress('section', section.id, '.section-object-menu', event)}
-                              onPointerMove={updateDirectoryLongPress}
-                              onPointerUp={finishDirectoryLongPress}
-                              onPointerCancel={cancelDirectoryLongPress}
-                              onClickCapture={(event) => suppressDirectoryLongPressClick('section', section.id, event)}
                             >
                               <button
                                 className="section-open"
@@ -1780,19 +1616,6 @@ export function Bookshelf(props: BookshelfProps) {
                                 </strong>
                                 <small><SectionMetrics content={section.content} /></small>
                               </span>
-                              {!selectionMode && canWrite && (
-                                <DirectoryActionMenu
-                                  className="section-object-menu"
-                                  label={`操作小节：${section.title}`}
-                                  items={[
-                                    { key: 'rename', label: '重命名', icon: <Pencil aria-hidden="true" />, onSelect: () => requestInlineRename('section', section.id) },
-                                    { key: 'new-section', label: '在下方新建小节', ariaLabel: `在${chapter.title}的${section.title}下方新建小节`, icon: <FilePlus2 aria-hidden="true" />, onSelect: () => beginInlineSection(chapter.id, section.id) },
-                                    { key: 'move', label: '移动到…', icon: <Move aria-hidden="true" />, onSelect: () => openDirectoryMove({ kind: 'section', id: section.id, targetChapterId: chapter.id, beforeId: chapter.sections[sectionIndex + 1]?.id ?? null }) },
-                                    { key: 'organize', label: '整理顺序', icon: <ListTree aria-hidden="true" />, onSelect: () => { setSelectionMode(true); setSelection({ chapterIds: new Set(), sectionIds: new Set() }); setNewSectionDraft(null); } },
-                                    { key: 'delete', label: '删除', icon: <Trash2 aria-hidden="true" />, danger: true, onSelect: () => openDeleteDialog({ kind: 'selection', chapterIds: [], sectionIds: [section.id], chapterCount: 0, sectionCount: 1 }) },
-                                  ]}
-                                />
-                              )}
                               {selectionMode && canWrite && (
                                 <button
                                   type="button"
@@ -1840,17 +1663,6 @@ export function Bookshelf(props: BookshelfProps) {
             </ol>
         </section>
       </section>}
-
-      {moveDialog && (
-        <DirectoryMoveDialog
-          book={props.book}
-          move={moveDialog}
-          busy={props.directoryBusy || moveOperation?.phase === 'pending'}
-          onChange={(next) => setMoveDialog(next)}
-          onCancel={() => setMoveDialog(null)}
-          onSubmit={submitDirectoryMoveDialog}
-        />
-      )}
 
       <dialog
         className="name-dialog"
@@ -1997,6 +1809,15 @@ export function Bookshelf(props: BookshelfProps) {
                 <div className="source-group-content">
                   <div className="source-group-actions">
                     <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-character', value: '' })} disabled={!canWrite} aria-label="新建角色卡" title="新建角色卡"><Plus aria-hidden="true" /></button>
+                    {sourceSelectionMode === 'character' && <button
+                      type="button"
+                      className="icon-button danger-icon"
+                      aria-haspopup="dialog"
+                      disabled={!canWrite || selectedSourceIds.size === 0}
+                      onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'character', ids: [...selectedSourceIds] })}
+                      aria-label="删除所选角色卡"
+                      title={selectedSourceIds.size ? '删除所选角色卡' : '请先选择角色卡'}
+                    ><Trash2 aria-hidden="true" /></button>}
                     <button
                       type="button"
                       className="icon-button"
@@ -2006,40 +1827,13 @@ export function Bookshelf(props: BookshelfProps) {
                       aria-label={sourceSelectionMode === 'character' ? '退出角色卡选择' : '选择角色卡'}
                       title={sourceSelectionMode === 'character' ? '退出选择' : '选择'}
                     >{sourceSelectionMode === 'character' ? <X aria-hidden="true" /> : <ListChecks aria-hidden="true" />}</button>
-                    <button
-                      type="button"
-                      className="icon-button danger-icon"
-                      aria-haspopup="dialog"
-                      disabled={!canWrite || sourceSelectionMode !== 'character' || selectedSourceIds.size === 0}
-                      onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'character', ids: [...selectedSourceIds] })}
-                      aria-label="删除所选角色卡"
-                      title={sourceSelectionMode === 'character' && selectedSourceIds.size ? '删除所选角色卡' : '请先选择角色卡'}
-                    ><Trash2 aria-hidden="true" /></button>
                   </div>
-                  <div className="source-list">
-                    {props.book.characters.map((character) => (
-                      <button
-                        type="button"
-                        className={`source-open-row${sourceSelectionMode === 'character' ? ' source-selection-row' : ''}`}
-                        data-selected={selectedSourceIds.has(character.id) || undefined}
-                        aria-pressed={sourceSelectionMode === 'character' ? selectedSourceIds.has(character.id) : undefined}
-                        onClick={() => sourceSelectionMode === 'character'
-                          ? setSelectedSourceIds((current) => toggleSourceSelection(current, character.id))
-                          : openBookSettingsPage({ kind: 'character', id: character.id })}
-                        aria-label={sourceSelectionMode === 'character'
-                          ? `${selectedSourceIds.has(character.id) ? '取消选择' : '选择'}角色卡：${character.name}`
-                          : `打开角色卡：${character.name}`}
-                        key={character.id}
-                      >
-                        {sourceSelectionMode === 'character' && (
-                          <DirectorySelectionIndicator state={selectedSourceIds.has(character.id) ? 'checked' : 'unchecked'} />
-                        )}
-                        <span className="source-card-name"><strong>{character.name}</strong><small>{character.role}</small></span>
-                        {sourceSelectionMode !== 'character' && <ChevronRight className="icon-directional" aria-hidden="true" />}
-                      </button>
-                    ))}
-                    {props.book.characters.length === 0 && <p className="empty-source">还没有角色卡。</p>}
-                  </div>
+                  <SourceList key={`${props.book.id}:characters`} label="角色卡"
+                    items={props.book.characters.map((item) => ({ id: item.id, title: item.name, detail: item.role }))}
+                    selecting={sourceSelectionMode === 'character'} selectedIds={selectedSourceIds} disabled={!canWrite}
+                    onSelect={(id) => setSelectedSourceIds((current) => toggleSourceSelection(current, id))}
+                    onOpen={(id) => openBookSettingsPage({ kind: 'character', id })}
+                    onMove={(id, beforeId) => moveSource('character', id, beforeId)} />
                 </div>
               </details>
 
@@ -2052,6 +1846,15 @@ export function Bookshelf(props: BookshelfProps) {
                 <div className="source-group-content">
                   <div className="source-group-actions">
                     <button type="button" className="icon-button" aria-haspopup="dialog" onClick={() => openNameDialog({ kind: 'new-world', value: '' })} disabled={!canWrite} aria-label="新建世界观设定" title="新建世界观设定"><Plus aria-hidden="true" /></button>
+                    {sourceSelectionMode === 'world' && <button
+                      type="button"
+                      className="icon-button danger-icon"
+                      aria-haspopup="dialog"
+                      disabled={!canWrite || selectedSourceIds.size === 0}
+                      onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'world', ids: [...selectedSourceIds] })}
+                      aria-label="删除所选世界观设定"
+                      title={selectedSourceIds.size ? '删除所选世界观设定' : '请先选择世界观设定'}
+                    ><Trash2 aria-hidden="true" /></button>}
                     <button
                       type="button"
                       className="icon-button"
@@ -2061,40 +1864,13 @@ export function Bookshelf(props: BookshelfProps) {
                       aria-label={sourceSelectionMode === 'world' ? '退出世界观设定选择' : '选择世界观设定'}
                       title={sourceSelectionMode === 'world' ? '退出选择' : '选择'}
                     >{sourceSelectionMode === 'world' ? <X aria-hidden="true" /> : <ListChecks aria-hidden="true" />}</button>
-                    <button
-                      type="button"
-                      className="icon-button danger-icon"
-                      aria-haspopup="dialog"
-                      disabled={!canWrite || sourceSelectionMode !== 'world' || selectedSourceIds.size === 0}
-                      onClick={() => openDeleteDialog({ kind: 'source-selection', sourceKind: 'world', ids: [...selectedSourceIds] })}
-                      aria-label="删除所选世界观设定"
-                      title={sourceSelectionMode === 'world' && selectedSourceIds.size ? '删除所选世界观设定' : '请先选择世界观设定'}
-                    ><Trash2 aria-hidden="true" /></button>
                   </div>
-                  <div className="source-list">
-                    {props.book.worldRules.map((rule) => (
-                      <button
-                        type="button"
-                        className={`source-open-row${sourceSelectionMode === 'world' ? ' source-selection-row' : ''}`}
-                        data-selected={selectedSourceIds.has(rule.id) || undefined}
-                        aria-pressed={sourceSelectionMode === 'world' ? selectedSourceIds.has(rule.id) : undefined}
-                        onClick={() => sourceSelectionMode === 'world'
-                          ? setSelectedSourceIds((current) => toggleSourceSelection(current, rule.id))
-                          : openBookSettingsPage({ kind: 'world', id: rule.id })}
-                        aria-label={sourceSelectionMode === 'world'
-                          ? `${selectedSourceIds.has(rule.id) ? '取消选择' : '选择'}世界观设定：${rule.title}`
-                          : `打开世界观设定：${rule.title}`}
-                        key={rule.id}
-                      >
-                        {sourceSelectionMode === 'world' && (
-                          <DirectorySelectionIndicator state={selectedSourceIds.has(rule.id) ? 'checked' : 'unchecked'} />
-                        )}
-                        <span className="source-card-name"><strong>{rule.title}</strong><small>世界观</small></span>
-                        {sourceSelectionMode !== 'world' && <ChevronRight className="icon-directional" aria-hidden="true" />}
-                      </button>
-                    ))}
-                    {props.book.worldRules.length === 0 && <p className="empty-source">还没有世界观设定。</p>}
-                  </div>
+                  <SourceList key={`${props.book.id}:world`} label="世界观设定"
+                    items={props.book.worldRules.map((item) => ({ id: item.id, title: item.title, detail: '世界观' }))}
+                    selecting={sourceSelectionMode === 'world'} selectedIds={selectedSourceIds} disabled={!canWrite}
+                    onSelect={(id) => setSelectedSourceIds((current) => toggleSourceSelection(current, id))}
+                    onOpen={(id) => openBookSettingsPage({ kind: 'world', id })}
+                    onMove={(id, beforeId) => moveSource('world', id, beforeId)} />
                 </div>
               </details>
 

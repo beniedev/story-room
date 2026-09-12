@@ -33,26 +33,26 @@ Books in the browser belong to the current browser, origin, host, and port. Clea
 3. Choose **Import JSON backup** and select a previously exported JSON file. Import creates a recovery copy and shows a message equivalent to “A recovery copy of … was imported; the original Book was not overwritten.” The original Book is left untouched.
 4. Choose **Export current Book** to export an EPUB ebook, Markdown document, TXT plain text, or JSON full backup. EPUB, Markdown, and TXT are useful for reading or continued editing. JSON preserves character cards, settings, load scopes, manuscript structure, candidate versions, and outline history.
 
-The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. Delete individual chapters and sections from their menus. For batch deletion, choose **Organize directory**, select entries, then choose **Delete selected content**. Export a backup before this kind of deletion.
+The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. To delete chapters or sections, choose **Organize directory** at the top, select them, then choose **Delete selected content**. Export a backup before this kind of deletion.
 
 ### Chapters and sections
 
 A Book consists of chapters and sections:
 
 1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
-2. Choose **New section** from the chapter row's **More** menu and enter a section name.
+2. Choose the **New section** button at the end of a chapter row and enter a section name.
 3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
 4. Double-click or double-tap a chapter or section title to rename it in place; a single pointer click on the title stays in the directory. With the title focused, Enter, Space, or F2 also starts editing.
 
-Press Enter, choose Save, or click outside the editor to submit. Escape or Cancel restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. Read-only pages allow reading but cannot rename titles.
+Renaming shows only an input field: click outside to save changes, or leave editing if the name is unchanged. Enter also saves; Escape restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. Read-only pages allow reading but cannot rename titles. The small arrow on each chapter changes direction when it expands or collapses.
 
 The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
 
 ### Organize the directory
 
-The **More** (…) menu beside each chapter and section groups renaming, creation, moving, and deletion. You can also right-click or hold the row to open it. **New section below** opens a temporary input row: a section is created only after you confirm; cancelling leaves the directory as it was.
+In the normal directory, chapter rows have a **New section** button; section rows have an open arrow only. Rename a title by double-clicking or double-tapping it, or focus it and press Enter, Space, or F2. Choose **Organize directory** at the top to select entries, then choose the **×** in the same position to finish. The delete button appears only in selection mode and becomes available after selecting a chapter or section.
 
-Choose **Organize directory** at the top to select entries for batch deletion or use their drag handles to reorder chapters and sections or move sections between chapters. The rest of the page remains scrollable. If dragging is inconvenient, choose **Move to…** from an entry's menu and select a destination chapter and position. Empty chapters can also receive sections.
+Choose **Organize directory** at the top to select entries for batch deletion. In this mode, six-dot drag handles support mouse or touch dragging to reorder chapters or sections within their current chapter, or move sections between chapters. Empty chapters can also receive sections.
 
 After a successful save, **Undo** restores the most recent move. It restores only the position, keeping later prose edits and title changes. Failed saves leave the old order in place and let you retry.
 
@@ -74,6 +74,10 @@ After editing, choose **Save and load**, then confirm with **Confirm save and lo
 ### Character cards and worldbuilding
 
 Under **Character cards** or **Worldbuilding settings**, choose **New character card** or **New worldbuilding entry**. A character card can contain a character name, character points, and character settings. A worldbuilding entry can contain a setting name and setting content.
+
+Choose **Select** in either list to select multiple items, then choose the **×** in the same position to finish. The delete button appears only in selection mode and becomes available after selecting an item. Deletion requires confirmation.
+
+In selection mode, each character card or worldbuilding entry also has a six-dot drag handle. Drag one item within its own list to reorder it; the new order saves automatically. Each handle supports mouse or touch dragging; focus it and press Arrow Up or Arrow Down to move one item at a time, and press Escape to cancel an in-progress drag. Group dragging and **Undo** are not supported.
 
 Each material item has a load-scope control:
 
@@ -148,7 +152,7 @@ Cancellation only stops Story Room from applying a late result to the manuscript
 1. Select the earlier material to reference. Choose a section title to expand or collapse its summary.
 2. If a summary does not exist, type one in **Enter this section's summary…**, or choose **Generate section summary**. AI-generated text first stays in the edit box as a draft and is not written to the Book until you confirm saving.
 3. After checking the selection, choose **Save and load summary**, then confirm in the dialog. With no selection, confirmation clears the current section's previous-text references, while the original earlier text and existing summaries remain.
-4. Closing **Previous text selection** leaves pending selections and summary edits unapplied but keeps them in this page session. Reopen it, or return after switching sections, to continue editing. Choose **Discard these changes** to discard that pending draft.
+4. A red unsaved-changes note appears below each previous-section name with pending edits and disappears after a successful save. Click outside the drawer or use its close button to leave. Pending selections and summary edits remain unapplied but stay in this page session; reopen the drawer, or return after switching sections, to continue editing.
 
 This draft has not been saved to the Book, does not change the context or its token estimate, and does not survive a page reload. Pending changes are included in the page's unsaved-work reminder when you leave. References made unavailable by a move are listed separately; keep them selected or explicitly deselect them. Confirmation does not silently remove them.
 
@@ -240,8 +244,7 @@ The guide uses English operation names for readability. The running interface cu
 | Manage current Book | 管理当前书目 |
 | Rename Book / Delete Book | 修改书名 / 删除书目 |
 | Organize directory / Finish organizing / Delete selected content | 整理目录 / 完成整理目录 / 删除所选内容 |
-| More / Move to… / New section below / Undo | … / 移动到… / 在下方新建小节 / 撤销 |
-| Discard these changes | 放弃本次修改 |
+| Drag to reorder / Undo | 拖动排序 / 撤销 |
 | New chapter / Chapter name | 新建章节 / 章节名称 |
 | New section / Section name | 新建小节 / 小节名称 |
 | Book settings / Select previous text / Settings | 本书设定 / 选择前文 / 设置 |
