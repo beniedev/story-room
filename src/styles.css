@@ -2079,6 +2079,12 @@ h4 {
   color: var(--accent-strong);
 }
 
+.chapter-card > details > summary:has(.inline-title-display:focus-visible),
+.section-row:has(.inline-title-display:focus-visible) .section-open {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .section-row:hover .section-title-cell,
 .section-row:has(.inline-title-display:focus-visible) .section-title-cell,
 .section-row[data-selected="true"] .section-title-cell,
