@@ -857,18 +857,22 @@ h4 {
 }
 
 .writer-section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
   width: min(100%, var(--workspace-max));
   margin: 0 auto;
   padding: 0.35rem 0.8rem 0.5rem;
-  overflow: hidden;
   color: var(--muted);
   font-size: 0.82rem;
   text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .writer-section-title strong {
+  min-width: 0;
+  max-width: 100%;
   color: var(--text);
 }
 
@@ -1927,6 +1931,14 @@ h4 {
   margin-block-end: 1rem;
 }
 
+.directory-title-hint {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
 .book-settings-button {
   width: 44px;
   min-height: 44px;
@@ -1947,7 +1959,7 @@ h4 {
 }
 
 .chapter-card summary > span:nth-child(2),
-.section-list button > span:nth-child(2) {
+.section-title-cell {
   display: grid;
   gap: 0.18rem;
   min-width: 0;
@@ -2119,27 +2131,85 @@ h4 {
 }
 
 .section-row {
-  display: block;
+  position: relative;
+  display: grid;
+  grid-template-columns: 3.25rem minmax(0, 1fr) 2.75rem;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 44px;
 }
 
 .section-list .section-open {
+  grid-area: 1 / 1 / 2 / -1;
+  z-index: 0;
+  align-self: stretch;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   width: 100%;
+  min-height: 44px;
   padding: 0.7rem 0.8rem;
   text-align: start;
 }
 
 .section-list .section-open > svg {
+  grid-column: 3;
+  justify-self: end;
   color: var(--muted);
 }
 
-.section-list strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.chapter-title-cell,
+.section-title-cell {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.section-title-cell {
+  grid-column: 2;
+  grid-row: 1;
+  z-index: 1;
+  align-self: center;
+  justify-self: start;
+  width: fit-content;
+  pointer-events: none;
+}
+
+.chapter-title-cell strong,
+.section-title-cell strong {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  pointer-events: auto;
+}
+
+.chapter-title-cell .chapter-inline-title,
+.section-title-cell .section-inline-title {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: start;
+  white-space: normal;
+}
+
+.chapter-title-cell .inline-title-display,
+.section-title-cell .inline-title-display {
+  width: 100%;
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.section-title-cell small {
+  pointer-events: none;
+}
+
+.selection-mode .section-title-cell strong {
+  pointer-events: none;
 }
 
 .empty-section {
@@ -3728,4 +3798,50 @@ h4 {
   summary {
     border: 1px solid ButtonText;
   }
+}
+
+.inline-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.inline-title-display {
+  background: transparent;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.15rem 0.25rem;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  touch-action: manipulation;
+}
+
+.inline-title-input {
+  min-width: 8rem;
+  max-width: 100%;
+  flex: 1 1 12rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.inline-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.inline-title-save,
+.inline-title-cancel {
+  min-height: 2rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.inline-title-error {
+  flex-basis: 100%;
+  color: var(--danger, #a33);
+  font-size: 0.8rem;
 }

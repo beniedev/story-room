@@ -30,7 +30,7 @@
 
 ### 行为事实
 
-遇到文档、实现和用户描述不一致时，先看当前运行代码、类型、路由和测试，尤其是用户所问功能直接调用到的模块。再用 [`docs/decisions/`](decisions/) 和 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) 理解已作出的设计决定与信任边界；[`README.zh-CN.md`](../README.zh-CN.md) 与 [`USER_GUIDE.zh-CN.md`](USER_GUIDE.zh-CN.md) 主要提供用户措辞和操作顺序，仍需回到代码验证。`src/fixtures.ts` 和测试里的合成样例只能证明样例行为，不能当作用户真实数据或模型服务能力证明。
+遇到文档、实现和用户描述不一致时，先看当前运行代码、类型、路由和测试，尤其是用户所问功能直接调用到的模块。再用 [`docs/decisions/`](decisions/) 和 [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) 理解已作出的设计决定与信任边界；[`README.md`](../README.md) 与 [`USER_GUIDE.zh-CN.md`](USER_GUIDE.zh-CN.md) 主要提供用户措辞和操作顺序，仍需回到代码验证。`src/fixtures.ts` 和测试里的合成样例只能证明样例行为，不能当作用户真实数据或模型服务能力证明。
 
 “计划中”“未来 API”“兼容旧数据”都要以代码和对应文档的实际状态为准。发现文档过期时，先确认功能是否真的已接入调用链，再更新最接近的现有入口；不要为了让描述好看而承诺未实现的功能。
 
@@ -77,6 +77,7 @@
 | [`src/types.ts`](../src/types.ts) | `Book`、`Chapter`、`Section`、块、候选、`SectionContextReference`、`SectionMemory` 的数据契约 | 新字段是否需要规范化、导入校验、导出和两种运行时同时支持 |
 | [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 只读门和确认对话框 |
 | [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、只读页禁用状态和候选语义 |
+| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 单击标题不导航，其他区域立即打开或展开；保留输入法、取消、保存失败和只读保护 |
 | [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) | “前文选择”、梗概草稿、生成梗概和“保存并加载梗概”确认 | 关闭不生效、确认才写入书目、只选当前小节之前的小节 |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “本轮上下文概览”，展示纳入资料、原因和估算 | 只展示摘要，不泄露原始模型服务消息或隐藏推理 |
 | [`src/components/ProviderSettings.tsx`](../src/components/ProviderSettings.tsx) 与 `App.tsx` 的设置区域 | 模型服务表单、模型限制、测试、密钥提示和流式开关；`ProviderProfile` 连接方案见 `src/providerProfiles.ts` | 本地服务模式与浏览器模式的密钥生命周期及 `/models` 测试含义 |

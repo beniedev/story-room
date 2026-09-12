@@ -411,8 +411,9 @@ describe('browser IDs without crypto.randomUUID', () => {
     });
     try {
       await act(async () => root.render(<App />));
-      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="修改章节名称：Editing chapter"]')!.click());
-      const title = container.querySelector<HTMLInputElement>('#name-dialog-input')!;
+      const chapterTitle = container.querySelector<HTMLButtonElement>('.chapter-inline-title .inline-title-display')!;
+      await act(async () => chapterTitle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      const title = container.querySelector<HTMLInputElement>('.chapter-inline-title .inline-title-input')!;
       words.mockClear(); tokens.mockClear();
       await type(title, '标题xiu', true);
       await type(title, '标题修改');
@@ -420,7 +421,7 @@ describe('browser IDs without crypto.randomUUID', () => {
       expect(words).not.toHaveBeenCalled();
       expect(tokens).not.toHaveBeenCalled();
       expect(saves).toHaveLength(0);
-      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="取消修改章节名称"]')!.click());
+      await act(async () => title.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
       await act(async () => container.querySelector<HTMLButtonElement>('.section-open')!.click());
       await act(async () => container.querySelector<HTMLButtonElement>('.manuscript-block-select')!.click());
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="编辑所选片段"]')!.click());

@@ -32,6 +32,7 @@ import { getAnswerCandidates } from '../answerCandidates';
 import { blocksAsContent, sectionBlocks } from './shared/sectionContent';
 import { compactTokenCount } from './shared/text';
 import { TextArea } from './shared/TextArea';
+import { InlineTitle } from './shared/InlineTitle';
 import type { Book, ContextPlan, GenerationMode, SectionBlock } from '../types';
 
 interface WriterProps {
@@ -72,6 +73,7 @@ interface WriterProps {
   onSelectCandidate?: (blockId: string, candidateId: string) => void;
   onDeleteAdoptedCandidate?: (blockId: string, candidateId: string, replacementId: string) => Promise<void>;
   onSectionTitleChange: (value: string) => Promise<void>;
+  onChapterTitleChange?: (value: string) => Promise<void>;
   onGenerate: () => void;
 }
 
@@ -191,15 +193,10 @@ export function Writer(props: WriterProps) {
   const characterModeNeedsSelection = props.mode === 'character' && !selectedCharacter;
   const blocks = useMemo(() => props.section ? sectionBlocks(props.section) : [],
     [props.section?.id, props.section?.blocks, props.section?.content]);
-  const [sectionTitle, setSectionTitle] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
   const [editingBlockId, setEditingBlockId] = useState('');
   const [candidateDeleteId, setCandidateDeleteId] = useState('');
   const [deleteOperation, setDeleteOperation] = useState<DialogOperationState>(idleDialogOperation);
-  const [titleOperation, setTitleOperation] = useState<DialogOperationState>(idleDialogOperation);
-  const titleDialog = useRef<HTMLDialogElement>(null);
-  const titleInputRef = useRef<HTMLInputElement>(null);
-  const titleTrigger = useRef<HTMLElement | null>(null);
   const actionMenu = useRef<HTMLDetailsElement>(null);
   const deleteBlockDialog = useRef<HTMLDialogElement>(null);
   const blockActionTrigger = useRef<HTMLElement | null>(null);
@@ -301,7 +298,6 @@ export function Writer(props: WriterProps) {
   };
 
   useDismissSuccessfulDialog(deleteOperation.phase === 'success', () => deleteBlockDialog.current?.close());
-  useDismissSuccessfulDialog(titleOperation.phase === 'success', () => titleDialog.current?.close());
 
   const contextTokens = props.contextPlan?.estimatedTokens ?? 0;
   const availableInput = props.contextPlan?.budget.availableInput ?? 0;
@@ -422,31 +418,6 @@ export function Writer(props: WriterProps) {
     setIsResizingInstruction(false);
   };
 
-  const openTitleDialog = () => {
-    if (!canEdit) return;
-    if (document.activeElement instanceof HTMLElement) {
-      titleTrigger.current = document.activeElement;
-    }
-    setSectionTitle(props.section?.title ?? '');
-    setTitleOperation(idleDialogOperation);
-    titleDialog.current?.showModal();
-    const focusTitleInput = () => {
-      titleInputRef.current?.focus();
-      titleInputRef.current?.select();
-    };
-    focusTitleInput();
-    window.requestAnimationFrame(focusTitleInput);
-  };
-
-  const restoreTitleTriggerFocus = () => {
-    const trigger = titleTrigger.current;
-    const focusTrigger = () => {
-      if (trigger?.isConnected) trigger.focus();
-    };
-    focusTrigger();
-    window.requestAnimationFrame(focusTrigger);
-  };
-
   const closeActionMenu = (restoreFocus = false) => {
     if (!actionMenu.current) return;
     actionMenu.current.open = false;
@@ -489,11 +460,6 @@ export function Writer(props: WriterProps) {
   const closeDeleteBlockDialog = () => {
     if (deleteOperation.phase === 'pending') return;
     deleteBlockDialog.current?.close();
-  };
-
-  const closeTitleDialog = () => {
-    if (titleOperation.phase === 'pending') return;
-    titleDialog.current?.close();
   };
 
   const restoreBlockActionFocus = () => {
@@ -673,14 +639,6 @@ export function Writer(props: WriterProps) {
             <button
               type="button"
               className="icon-button"
-              onClick={openTitleDialog}
-              disabled={!canEdit || !props.section || props.busy}
-              aria-label="修改小节名称"
-              title="修改小节名称"
-            ><Pencil aria-hidden="true" /></button>
-            <button
-              type="button"
-              className="icon-button"
               onClick={props.onOpenSettings}
               disabled={props.busy}
               aria-label="打开设置"
@@ -689,10 +647,27 @@ export function Writer(props: WriterProps) {
           </div>
         </div>
 
-        <p className="writer-section-title" title={`${props.chapterTitle} · ${props.section?.title ?? ''}`}>
-          <strong>{props.chapterTitle}</strong>
-          {props.section && <span> · {props.section.title}</span>}
-        </p>
+        <div className="writer-section-title">
+          <strong>
+            {props.onChapterTitleChange ? <InlineTitle
+              key={`${props.book.id}:${props.section?.id}:chapter`}
+              value={props.chapterTitle}
+              label="章节名称"
+              disabled={!canEdit || !props.section || props.busy}
+              onSave={props.onChapterTitleChange}
+            /> : props.chapterTitle}
+          </strong>
+          {props.section && <>
+            <span aria-hidden="true"> · </span>
+            <InlineTitle
+              key={`${props.book.id}:${props.section.id}:section`}
+              value={props.section.title}
+              label="小节名称"
+              disabled={!canEdit || props.busy}
+              onSave={props.onSectionTitleChange}
+            />
+          </>}
+        </div>
       <div className="writer-status-row">
         <p className="writer-status" role="status" aria-live="polite" aria-atomic="true">{props.status}</p>
         {props.generationState === 'generating' && (
@@ -1016,56 +991,6 @@ export function Writer(props: WriterProps) {
         </div>
       </dialog>
 
-      <dialog
-        className="name-dialog"
-        ref={titleDialog}
-        onClose={() => {
-          setTitleOperation(idleDialogOperation);
-          restoreTitleTriggerFocus();
-        }}
-        onCancel={(event) => { event.preventDefault(); closeTitleDialog(); }}
-        aria-labelledby="section-title-dialog-heading"
-        aria-busy={titleOperation.phase === 'pending' || undefined}
-      >
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          const cleanTitle = sectionTitle.trim();
-          if (!cleanTitle || titleOperation.phase === 'pending') return;
-          setTitleOperation({ phase: 'pending', title: '正在保存修改…' });
-          void props.onSectionTitleChange(cleanTitle)
-            .then(() => setTitleOperation({ phase: 'success', title: '保存成功' }))
-            .catch((error) => setTitleOperation({
-              phase: 'error',
-              title: '保存失败',
-              detail: error instanceof Error ? error.message : '请稍后重试。',
-            }));
-        }}>
-          <header className="dialog-heading">
-            <h2 id="section-title-dialog-heading">修改小节名称</h2>
-            <button type="button" className="icon-button" disabled={titleOperation.phase === 'pending'} onClick={closeTitleDialog} aria-label="取消修改小节名称" title="取消"><X aria-hidden="true" /></button>
-          </header>
-          {titleOperation.phase === 'idle' ? (
-            <div className="name-dialog-body">
-              <label htmlFor="section-title-input">小节名称</label>
-              <input id="section-title-input" ref={titleInputRef} required autoComplete="off" value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} />
-              <div className="dialog-actions">
-                <button type="button" className="quiet-action" onClick={closeTitleDialog}>取消</button>
-                <button type="submit" className="primary-action button-with-icon"><Check aria-hidden="true" />保存</button>
-              </div>
-            </div>
-          ) : (
-            <div className="name-dialog-body dialog-operation-body">
-              <DialogOperationStatus
-                state={titleOperation}
-                onReturn={() => {
-                  setTitleOperation(idleDialogOperation);
-                  window.requestAnimationFrame(() => titleInputRef.current?.focus());
-                }}
-              />
-            </div>
-          )}
-        </form>
-      </dialog>
     </div>
   );
 }

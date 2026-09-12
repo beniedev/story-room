@@ -72,7 +72,7 @@ describe('writing UI contract', () => {
     expect(writer).toContain('className="writer-action-menu"');
     expect(writer).toContain('className="writer-menu-modes"');
     expect(writer).toContain('打开写作操作');
-    expect(writer).toContain('修改小节名称');
+    expect(writer).toContain('label="小节名称"');
     expect(writer).not.toContain('aria-label="导出当前书目"');
     expect(app).toContain('aria-label="导出当前书目"');
     expect(writer).toMatch(/className="primary-action icon-button writer-send-button"[\s\S]{0,520}<Send aria-hidden="true" \/>/);
@@ -559,9 +559,11 @@ describe('writing UI contract', () => {
     expect(source).toContain("openNameDialog({ kind: 'new-book'");
     expect(source).toContain("openNameDialog({ kind: 'new-section'");
     expect(source).toContain("openCurrentBookNameDialog({ kind: 'rename-book'");
-    expect(source).toContain("openNameDialog({ kind: 'rename-chapter'");
+    expect(shelf).toContain('<InlineTitle');
+    expect(shelf).toContain('onRenameSection');
     expect(source).not.toContain("openNameDialog({ kind: 'rename-section'");
-    expect(source).toContain('id="section-title-dialog-heading"');
+    expect(writer).not.toContain('id="section-title-dialog-heading"');
+    expect(writer).toContain('onSave={props.onSectionTitleChange}');
     expect(source).toContain('if (id !== sectionId) {');
     expect(source).not.toContain("setDraftInstruction('')");
     expect(source).toContain('toggleChapterSelection');
@@ -593,8 +595,6 @@ describe('writing UI contract', () => {
     expect(source).toContain('className="book-settings-drawer"');
     expect(source).toContain('className="name-dialog"');
     expect(source).toContain('className="confirm-dialog"');
-    expect(source).toContain('const titleInputRef = useRef<HTMLInputElement>(null);');
-    expect(source).toContain('titleInputRef.current?.select();');
     expect(source).toContain('const focusNameInput = () => {');
     expect(source).toContain('const focusTarget = () => {');
     expect(source).toContain('className="source-group-drawer"');
@@ -628,7 +628,6 @@ describe('writing UI contract', () => {
     expect(shelf).toContain("setConfirmOperation({ phase: 'pending', title: `正在保存${sourceLabel}加载范围…` })");
     expect(shelf).toContain('await onConfirm(selectionPatch())');
     expect(writer).toContain('props.onDeleteSectionBlock(selectedBlock.id)');
-    expect(writer).toContain("setTitleOperation({ phase: 'pending', title: '正在保存修改…' })");
     expect(tools).toContain("title: '正在保存并加载梗概…'");
     expect(tools).toContain("title: '梗概保存并加载失败'");
     expect(feedback).toContain("role={state.phase === 'error' ? 'alert' : 'status'}");

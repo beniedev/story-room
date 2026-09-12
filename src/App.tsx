@@ -2203,6 +2203,10 @@ function App() {
               if (!sectionChapter || !section) throw new Error('找不到当前小节。');
               await renameSection(sectionChapter.id, section.id, title);
             }}
+            onChapterTitleChange={async (title) => {
+              if (!sectionChapter) return;
+              await renameChapter(sectionChapter.id, title);
+            }}
             onGenerate={() => void generateContinuation()}
           />
         )}
@@ -2242,6 +2246,7 @@ function App() {
             onAddChapter={async (title) => { await addChapter(title); }}
             onAddSection={async (chapterId, title) => { await addSection(chapterId, title); }}
             onRenameChapter={async (chapterId, title) => { await renameChapter(chapterId, title); }}
+            onRenameSection={async (chapterId, sectionId, title) => { await renameSection(chapterId, sectionId, title); }}
             onDeleteSelection={deleteSelection}
             onDeleteSources={deleteSources}
           />

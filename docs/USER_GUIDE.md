@@ -13,7 +13,7 @@ npm ci
 npm run dev
 ~~~
 
-Open the local address shown in the terminal. The quick-start instructions and startup details are in [README.md](../README.md). For a first run, open the example Book or choose **New Book**. The built-in Fake Provider produces deterministic example text, which is useful for learning the shelf, manuscript, and candidate-version workflow.
+Open the local address shown in the terminal. The quick-start instructions and startup details are in [README.en.md](../README.en.md). For a first run, open the example Book or choose **New Book**. The built-in Fake Provider produces deterministic example text, which is useful for learning the shelf, manuscript, and candidate-version workflow.
 
 Story Room has two runtime modes:
 
@@ -41,8 +41,10 @@ A Book consists of chapters and sections:
 
 1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
 2. Choose **New section** on a chapter row and enter a section name.
-3. Choose a chapter or section title to open the manuscript. Each section shows a word count and an estimated token count so you can gauge its size.
-4. The chapter menu can **Rename chapter**, and the section toolbar can **Rename section**.
+3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
+4. Double-click or double-tap a chapter or section title to rename it in place; a single pointer click on the title stays in the directory. With the title focused, Enter, Space, or F2 also starts editing.
+
+Press Enter, choose Save, or click outside the editor to submit. Escape or Cancel restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. Read-only pages allow reading but cannot rename titles.
 
 The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
 
@@ -77,8 +79,9 @@ Open a section to enter the manuscript editor. The top bar includes:
 
 - **Book settings**: return to the current Book's material.
 - **Select previous text**: choose earlier summaries to use for this section's generation.
-- **Rename section**: change the current section title.
 - **Settings**: adjust display, streaming output, and model connections.
+
+The chapter and section titles below the toolbar support the same double-click, double-tap, and keyboard editing as the directory, with the same save behavior.
 
 ### Author mode and character mode
 
@@ -225,7 +228,6 @@ The guide uses English operation names for readability. The running interface cu
 | Select chapter or section / Delete selected content | 选择章节或小节 / 删除所选内容 |
 | New chapter / Chapter name | 新建章节 / 章节名称 |
 | New section / Section name | 新建小节 / 小节名称 |
-| Rename chapter / Rename section | 修改章节名称 / 修改小节名称 |
 | Book settings / Select previous text / Settings | 本书设定 / 选择前文 / 设置 |
 | Global guidance | 全局指引 |
 | Writing style guidance / Plot outline | 写作风格指导 / 剧情大纲 |

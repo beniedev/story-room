@@ -176,6 +176,43 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+describe('writer title editing', () => {
+  it('routes inline chapter and section edits to their save callbacks and respects read-only mode', async () => {
+    const book = makeBook('book-inline-titles');
+    const onChapterTitleChange = vi.fn(async () => undefined);
+    const onSectionTitleChange = vi.fn(async () => undefined);
+    const props = { ...writerProps(book), onChapterTitleChange, onSectionTitleChange };
+    const { container, root } = await render(<Writer {...props} />);
+    try {
+      expect(container.querySelector('.writer-tool-actions [aria-label="修改小节名称"]')).toBeNull();
+      for (const [original, next, callback] of [
+        ['第一章', 'Chapter revised', onChapterTitleChange],
+        ['第一节', 'Section revised', onSectionTitleChange],
+      ] as const) {
+        const title = [...container.querySelectorAll<HTMLButtonElement>('.writer-section-title button')]
+          .find((button) => button.textContent === original)!;
+        await act(async () => title.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+        const input = container.querySelector<HTMLInputElement>('.writer-section-title input')!;
+        expect(input.value).toBe(original);
+        await setControlValue(input, next);
+        await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+        expect(callback).toHaveBeenCalledExactlyOnceWith(next);
+        expect(container.querySelector('.writer-section-title input')).toBeNull();
+      }
+      await rerender(root, <Writer {...props} canEdit={false} />);
+      for (const title of container.querySelectorAll<HTMLButtonElement>('.writer-section-title button')) {
+        expect(title.disabled).toBe(true);
+        await act(async () => title.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      }
+      expect(container.querySelector('.writer-section-title input')).toBeNull();
+      expect(onChapterTitleChange).toHaveBeenCalledTimes(1);
+      expect(onSectionTitleChange).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
+
 describe('writer scroll interactions', () => {
   it('aligns the newly submitted user block to the top after generation completes', async () => {
     const initialBlocks: SectionBlock[] = [
@@ -378,6 +415,7 @@ describe('source selection visuals', () => {
       onAddChapter: vi.fn(async () => undefined),
       onAddSection: vi.fn(async () => undefined),
       onRenameChapter: vi.fn(async () => undefined),
+      onRenameSection: vi.fn(async () => undefined),
       onDeleteSelection: vi.fn(async () => undefined),
       onDeleteSources: vi.fn(async () => undefined),
     };
@@ -458,6 +496,7 @@ describe('source selection visuals', () => {
         onAddChapter: vi.fn(async () => undefined),
         onAddSection: vi.fn(async () => undefined),
         onRenameChapter: vi.fn(async () => undefined),
+        onRenameSection: vi.fn(async () => undefined),
         onDeleteSelection: vi.fn(async () => undefined),
         onDeleteSources: vi.fn(async () => undefined),
       };

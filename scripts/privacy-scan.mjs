@@ -35,7 +35,7 @@ for (const file of binaryAllowlist.keys()) {
 
 const syntheticNetworkRules = [
   { file: 'README.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
-  { file: 'README.zh-CN.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
+  { file: 'README.en.md', pattern: /(?:0\.0\.0\.0|127\.0\.0\.1|::1)/g },
   { file: 'SECURITY.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'docs/decisions/0001-local-host-web-demo.md', pattern: /(?:127\.0\.0\.1|::1)/g },
   { file: 'server/main.ts', pattern: /(?:127\.0\.0\.0|127\.0\.0\.1|0\.0\.0\.0|::1)/g },
