@@ -1,10 +1,10 @@
 # Security policy
 
-Story Room is a pre-release, non-production demo. It is designed for a local host or a single browser device, not for public hosting or multi-user data.
+Story Room is an early Alpha for local-first writing. The user installation runs a local host service; it is not a hardened public internet or multi-user service. The separate hosted/device build is retained for internal screenshots and regression checks, stores Books in one browser, and is not the user installation path.
 
 ## Report a vulnerability
 
-Please use the repository's GitHub **Security → Advisories → New draft security advisory** page for a private report. Do not include API Keys, access tokens, cookies, private story text, exported Books, or other live data in an issue or patch. Use the synthetic fixtures and placeholder endpoints from the repository when a reproduction needs data.
+If private vulnerability reporting is enabled, use the repository's GitHub **Security → Report a vulnerability** entry to submit a private report. If that option is unavailable, ask the maintainers for a private reporting channel without disclosing vulnerability details in a public issue. Creating a draft security advisory directly is a maintainer action. Do not include API Keys, access tokens, cookies, private story text, exported Books, or other live data in an issue or patch. Use the synthetic fixtures and placeholder endpoints from the repository when a reproduction needs data.
 
 ## Security boundaries
 

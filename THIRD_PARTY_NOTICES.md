@@ -21,8 +21,11 @@ The versions below are the locally confirmed package versions in `package-lock.j
 | Asset | Format | SHA-256 |
 | --- | --- | --- |
 | `assets/fonts/LXGWWenKaiLite-Regular.ttf.br` | Brotli-compressed TrueType font | `b3eb68cfb287957f43c8752dcac219a144b41306d71b2b46cdf3dbc2f89e126a` |
+| `docs/images/preview.png` | PNG screenshot composition | `46ee26cda200f96a405820abc189924a8c20e467f9158c7caee174089ca9c1c0` |
 
 The scanner decompresses the bundled font to inspect its `name` table. The generated `public/fonts/LXGWWenKaiLite-Regular.ttf` is derived from the allowlisted Brotli source during preparation and remains ignored by Git.
+
+The preview combines three screenshots captured from Story Room using project-created fictional story content, without private manuscripts or Provider credentials. HTML and CSS were used only to arrange the screenshots and labels before rendering the PNG; the interface itself was not redrawn. Both mobile views use a 393 × 852 browser viewport at a device scale factor of 2. This project image is distributed under the project's MIT license. Its fixed hash and PNG metadata are checked by the privacy scanner.
 
 ## Bundled font
 

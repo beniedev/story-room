@@ -2,7 +2,7 @@
 
 This is a pre-release local-first novel-writing harness.
 
-For feature explanations, code entry points, and maintenance checks, read the [Agent guide](docs/AGENT_GUIDE.md) or its [Simplified Chinese edition](docs/AGENT_GUIDE.zh-CN.md). The user guide is also available in [English](docs/USER_GUIDE.md) and [Simplified Chinese](docs/USER_GUIDE.zh-CN.md); the interface currently uses Chinese. These guides supplement the rules below; verify behavior against the current code and tests.
+When a user gives this repository link to install or use the app, follow the local-host installation workflow in the Agent guide; do not offer the internal browser demo as a user edition. For installation, usage, code entry points, and maintenance checks, read the [Agent guide](docs/AGENT_GUIDE.md) or its [Simplified Chinese edition](docs/AGENT_GUIDE.zh-CN.md). The user guide is also available in [English](docs/USER_GUIDE.md) and [Simplified Chinese](docs/USER_GUIDE.zh-CN.md); the interface currently uses Chinese. These guides supplement the rules below; verify behavior against the current code and tests.
 
 - Keep the manuscript as continuous prose. Do not add chat bubbles, avatar turns, group chat, or message timelines.
 - A Book is the isolation boundary. Never inject characters, world rules, canon, summaries, or manuscript text from another Book.

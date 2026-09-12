@@ -4,25 +4,27 @@ English | [简体中文](USER_GUIDE.zh-CN.md)
 
 Welcome to Story Room. It keeps the manuscript, characters, worldbuilding, and writing prompts in one Book, so you can quietly write a continuous novel and ask AI to continue for a few paragraphs when you need help. The operation names in this guide are English names for the current Chinese interface; see the **Interface labels** table at the end for the corresponding Chinese labels. The feature is still in Alpha, so keep a JSON backup of important work.
 
-## Get started
+## Installation and access
 
-From the project directory, run:
+Give https://github.com/beniedev/story-room to an agent that can work on your computer. The [installation guide](AGENT_GUIDE.md) lets it check the environment, install the app, and open it without asking you to choose an edition. Once installed, enter a trusted service's URL, model ID, and API key under **设置 → 模型连接** (Settings → Model connections), select the connection, and start writing. Enter the key locally, not in the conversation.
 
-~~~bash
+<details>
+<summary>Install manually, stop, and start again</summary>
+
+Use Node.js **22.x (at least 22.18.0) or 24.x**, with npm. Get the code with Git and run:
+
+```bash
+git clone https://github.com/beniedev/story-room.git
+cd story-room
 npm ci
 npm run dev
-~~~
+```
 
-Open the local address shown in the terminal. The quick-start instructions and startup details are in [README.en.md](../README.en.md). For a first run, open the example Book or choose **New Book**. The built-in Fake Provider produces deterministic example text, which is useful for learning the shelf, manuscript, and candidate-version workflow.
+You can also download a ZIP, extract it, and start with `npm ci` in the project directory. These commands work in PowerShell and common macOS/Linux shells. Keep the terminal running and open **http://127.0.0.1:4310**. Stop with `Ctrl+C`; next time, run `npm run dev` in the same directory without reinstalling dependencies.
 
-Story Room has two runtime modes:
+</details>
 
-| Runtime mode | Where Books are stored | Generation |
-| --- | --- | --- |
-| Local-host | Readable Book files, by default in <code>.data/</code> | Fake Provider, or an OpenAI-compatible Provider you configure |
-| Browser hosted/device | Unencrypted <code>localStorage</code> for the current browser and website origin | Fake generation; Provider settings are for connection testing only |
-
-Books in the browser belong to the current browser, origin, host, and port. Clearing website data deletes those Books. Export JSON before changing browsers or addresses. The application has no cloud Book storage or automatic synchronization.
+**设置 → 保存位置** (Settings → Storage location) shows the library directory, defaulting to `.data/` on the host computer. Books stay there when another device accesses the host over a trusted network. Ask your agent to follow [Local runtime details](AGENT_GUIDE.md#local-runtime-and-api-details) for network access or a different library path, preserving existing data and configuration; files are not migrated automatically.
 
 ## Start from the shelf
 
@@ -170,15 +172,13 @@ Choose **Settings** and open **Model connections**. First choose **New connectio
 - **Model ID**
 - **Max context** and **Max output**
 
-### Fake Provider and OpenAI-compatible Provider
+### OpenAI-compatible Providers
 
-- Fake Provider is a built-in, deterministic example generator for learning the interface offline.
-- Local-host can use Fake Provider or an OpenAI-compatible Provider you trust. Actual generation sends the materials selected by the current context plan to that endpoint.
-- Browser hosted/device generation remains Fake. Provider settings on the page can test a connection, but do not turn it into a real generation service.
+- Choose an OpenAI-compatible Provider you trust. Actual generation sends the materials selected by the current context plan to that endpoint.
 
 Choosing **Test** only checks whether <code>/models</code> is reachable and, when a model list is returned, whether it includes the entered Model ID. A successful test does not prove that <code>/chat/completions</code> accepts Story Room's generation parameters.
 
-API Key storage depends on the runtime mode: local-host stores the key in plaintext in the host's Provider configuration file, separate from Books; browser-mode test keys are used only while the current page is running and are not persisted by the application. Enter a real key only when you trust the current page and target URL. Never put a key in a manuscript, JSON backup, example, or issue.
+Keys are stored in a separate plaintext configuration file on the local host, outside the Book. Enter real keys only for a trusted service. Do not put keys in manuscripts, JSON backups, or issue reports.
 
 ## Display and reading
 
@@ -196,31 +196,18 @@ Manuscript edits, block edits, candidate switches, Book material, load scopes, a
 
 In local-host mode, if another page saves the same Book first, the page explains that the Book was updated elsewhere and that the current local content is still available for export or reload. In that situation:
 
-1. If you want to keep the current edits, first choose **Export current Book** and select JSON full backup.
+1. First preserve unsent or unconfirmed editor text separately; it may not be in the book backup. To keep current Book edits, choose **Export current Book** and select JSON full backup.
 2. After confirming the backup, choose **Reload current Book** to read the newest saved version.
 3. Story Room does not merge the two manuscripts automatically. Use the backup to decide manually which parts to keep.
 
 Local-host saving has transaction logs and snapshots for process interruption. They are not disk backups and cannot coordinate two independent host processes operating on the same data directory. Keep important work in a JSON backup or another external backup as well.
 
-### Multiple browser tabs
-
-Every tab can edit, including different Books on the same device. Library writes are automatically serialized; there is no editor ownership or takeover step. If two pages edit the same Book, the stale save is rejected and its local text stays available for export or reload. A clean page automatically displays the latest saved version.
-
-If another tab deletes the section being read, this page returns to that Book's directory. Open title inputs, manuscript edits, unsent input, and context drafts are protected before any replacement; the page keeps its current content and reports an update conflict. Preserve those edits before reloading. Unsubmitted input remains in its editor or draft and is not necessarily part of the Book or its JSON backup.
-
-Books persist on the device. Unsaved recovery drafts are isolated in each tab's session storage and survive a reload of that tab. Closing the tab ends its session; confirm that the Book was saved before closing, and export JSON if saving fails. A legacy shared draft is transferred into the first page that opens that Book. Other pages cannot overwrite or clear this page's draft.
-
-Coordination covers one browser storage area and origin. Refresh older tabs after upgrading. Different devices, browser profiles, and independent local hosts do not synchronize automatically.
-
 ## Current Alpha boundaries
 
 - There is no cloud storage, account synchronization, multi-user collaboration, RAG, embeddings, or desktop wrapper.
-- Browser <code>localStorage</code> is unencrypted and can be read by same-origin scripts. Clearing website data deletes device Books.
-- Browser hosted/device mode has no local transaction recovery. Keep JSON backups in a secure location you choose.
 - The application does not impose arbitrary limits on manuscript size, API request size, Provider responses, outline items, or candidate counts. Saving still transmits and validates the complete Book. Large Books need more memory and I/O, and the Provider's own context and output limits still apply.
 - Context-token estimates are hints. They do not replace the Provider's actual limits, and Story Room does not automatically block sending just because an estimate is slightly over.
 - Connection testing verifies <code>/models</code> connectivity and model-list matching only; it is not full generation compatibility testing.
-- Web Locks and browser events do not coordinate different origins, browser profiles, devices, or independent local-host processes.
 
 For more data boundaries and issue-reporting guidance, see [SECURITY.md](../SECURITY.md), [PRIVACY.md](../PRIVACY.md), and [THREAT_MODEL.md](THREAT_MODEL.md). If you want an AI agent to explain features or maintain the repository, start with [AGENT_GUIDE.md](AGENT_GUIDE.md).
 
