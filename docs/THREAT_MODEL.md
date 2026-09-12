@@ -1,15 +1,17 @@
 # Threat model
 
-This document describes the trust boundaries of the pre-release local-first demo. It is a review aid, not a production security claim.
+This document describes the trust boundaries of Story Room's early Alpha. User installation runs the local-host service; the hosted/device build is for internal screenshots and regression checks. This is a review aid, not a production security claim.
 
 ## Mental model and assets
 
-The local Node host writes a readable Book directory. The hosted/device build keeps the current Book in the browser. The main assets are:
+The local Node host writes a readable Book directory. The internal hosted/device build keeps its Book library in browser `localStorage` and per-tab recovery drafts in `sessionStorage`. The main assets are:
 
 - manuscript text, interaction blocks, branches, source settings, Section Memory snapshots, and complete exports;
 - local-host Provider configuration and its API Key;
 - a temporary Provider test key entered in the hosted/device page;
 - Provider request and response contents.
+
+Provider requests can include selected manuscript and source material, confirmed and eligible earlier-section Memory summaries, and Book/chapter/section titles and positions. Legacy `Book.summaries` and `Book.canonFacts` are stored data rather than current planner sources; they must not be confused with selected Section Memory references. See [Privacy](../PRIVACY.md) for the data sent to configured endpoints.
 
 ## Trust boundaries
 
@@ -32,6 +34,7 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 - Provider URLs reject embedded credentials, validate every resolved address before each request, accept user-configured HTTP/HTTPS endpoints on public and private networks, reject metadata/link-local targets, and use manual redirect handling.
 - Local-host Provider Keys are kept in a plaintext config file; POSIX writes use mode `0600`.
 - The hosted/device Provider test sends a temporary key directly to the entered endpoint and does not persist it.
+- Device writes acquire Web Locks when available and also use an IndexedDB transaction when IndexedDB is available. IndexedDB can coordinate writes without Web Locks; it does not contain manuscripts or make `localStorage` changes transactional. Per-tab recovery drafts may survive a same-tab refresh; they are not reliable backups after that tab session ends.
 
 ## Residual risks
 
@@ -46,4 +49,4 @@ The local Node host writes a readable Book directory. The hosted/device build ke
 
 ## Out of scope
 
-This demo does not attempt to secure a compromised browser or operating system, prove Provider confidentiality, offer cloud synchronization, provide production LAN authentication, or guarantee that a third-party endpoint will not retain prompts and responses.
+This Alpha does not attempt to secure a compromised browser or operating system, prove Provider confidentiality, offer cloud synchronization, provide production LAN authentication, or guarantee that a third-party endpoint will not retain prompts and responses.

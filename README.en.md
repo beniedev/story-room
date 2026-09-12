@@ -42,7 +42,7 @@ The [User guide](docs/USER_GUIDE.md) covers controls, author and character modes
 
 Books are readable local files on the computer running the app. **设置 → 保存位置** (Settings → Storage location) shows the library directory. When another device accesses that host over a trusted network, the books still live on the host computer. The app has no cloud manuscript storage or automatic sync.
 
-Generation sends **the material included in the current context** to your configured Provider. Local-first describes manuscript storage; it does not mean real AI requests stay on your device. Keys are stored in a separate local plaintext configuration file, outside book backups.
+Generation sends **the material included in the current context** to your configured Provider, including confirmed summaries of selected earlier sections. Requests also contain location information such as Book, chapter, and section titles. Local-first describes manuscript storage; it does not mean real AI requests stay on your device. Keys are stored in a separate local plaintext configuration file, outside book backups.
 
 Submitted manuscript edits save automatically. **Unsent or unconfirmed editor text may not be in the book or its JSON backup.** Check the save status and keep unsubmitted text separately before leaving.
 
@@ -55,7 +55,7 @@ Multiple tabs can edit. If the same book encounters a save conflict, the page re
 
 The local host defaults to this computer only, with no login or access password. For use from other devices, ask your agent to configure access within a trusted network. Any device that can reach the service can use it; do not expose it directly to the public internet.
 
-Save and deletion recovery belong to one service process. They do not guarantee protection against power loss or disk corruption, or coordinate independent services sharing a library. There is no account sync, multi-user collaboration, or desktop installer. CI tests and builds on Windows, macOS, and Ubuntu with Node 22/24; it does not mean every browser or Provider has been tested in use.
+The app can recover some interrupted saves and deletions, but cannot guarantee protection against power loss or disk corruption. Do not run two copies against the same library directory. There is no account sync, multi-user collaboration, or desktop installer. CI tests and builds on Windows, macOS, and Ubuntu with Node 22/24; it does not mean every browser or Provider has been tested in use.
 
 Bug reports with small fictional stories are welcome. Do not attach private manuscripts, backups, or keys. Follow [Security](SECURITY.md) for security reports. [Privacy](PRIVACY.md) and the [Threat model](docs/THREAT_MODEL.md) explain data and trust boundaries.
 

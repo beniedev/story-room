@@ -6,7 +6,7 @@ Welcome to Story Room. It keeps the manuscript, characters, worldbuilding, and w
 
 ## Installation and access
 
-Give https://github.com/beniedev/story-room to an agent that can work on your computer. The [installation guide](AGENT_GUIDE.md) lets it check the environment, install the app, and open it without asking you to choose an edition. Once installed, enter a trusted service's URL, model ID, and API key under **设置 → 模型连接** (Settings → Model connections), select the connection, and start writing. Enter the key locally, not in the conversation.
+Give https://github.com/beniedev/story-room to an agent that can work on your computer. The [installation guide](AGENT_GUIDE.md) lets it check the environment, install the app, and open it without asking you to choose an edition. Once installed, enter a trusted service's URL, model ID, and API key under **设置 → 模型连接** (Settings → Model connections), choose **保存连接方案** (Save connection profile), and confirm the active profile before writing. Enter the key locally, not in the conversation.
 
 <details>
 <summary>Install manually, stop, and start again</summary>
@@ -33,7 +33,7 @@ You can also download a ZIP, extract it, and start with `npm ci` in the project 
 1. Choose **New Book**, enter a **Book title**, and choose **Confirm creation**. The new Book becomes current.
 2. Use **Switch book** to move between existing Books.
 3. Choose **Import JSON backup** and select a previously exported JSON file. Import creates a recovery copy and shows a message equivalent to “A recovery copy of … was imported; the original Book was not overwritten.” The original Book is left untouched.
-4. Choose **Export current Book** to export an EPUB ebook, Markdown document, TXT plain text, or JSON full backup. EPUB, Markdown, and TXT are useful for reading or continued editing. JSON preserves character cards, settings, load scopes, manuscript structure, candidate versions, and outline history.
+4. Choose **Export current Book** to export an EPUB ebook, Markdown document, TXT plain text, or JSON full backup. EPUB, Markdown, and TXT are useful for reading or continued editing. JSON preserves character cards, settings, load scopes, manuscript structure, retained candidate versions, and the current and previous summary snapshots when present.
 
 The **Manage current Book** menu includes **Rename Book** and **Delete Book**, with a confirmation prompt before deletion. The library may be empty. After deleting the last Book, use **New Book** or **Import JSON backup** to start again. To delete chapters or sections, choose **Organize directory** at the top, select them, then choose **Delete selected content**. Export a backup before this kind of deletion.
 
@@ -44,11 +44,11 @@ A Book consists of chapters and sections:
 1. Choose **New chapter** in the shelf toolbar and enter a chapter name.
 2. Choose the **New section** button at the end of a chapter row and enter a section name.
 3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
-4. Click or tap a section title to open its manuscript, or a chapter title to expand or collapse it. Titles wait 300 ms so a quick double-click or double-tap can rename in place without navigating. Other row areas still act immediately. With a directory title focused, Enter or Space performs its primary action; F2 renames immediately.
+4. Click or tap a section title to open its manuscript, or a chapter title to expand or collapse it. Quickly double-click or double-tap a title to rename it in place. Other row areas still act immediately. With a directory title focused, Enter or Space performs its primary action; F2 renames immediately.
 
 Renaming shows only an input field: click outside to save changes, or leave editing if the name is unchanged. Enter also saves; Escape restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. The small arrow on each chapter changes direction when it expands or collapses.
 
-The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
+Your writing and AI continuations form one continuous manuscript for reading and editing.
 
 ### Organize the directory
 
@@ -104,9 +104,9 @@ The chapter and section titles below the toolbar support the same double-click, 
 The **Writing actions** menu at the bottom has two modes:
 
 - **Author mode — Continue writing**: you decide the narrative direction, and AI continues from the current manuscript.
-- **Character mode — First person**: first choose a **Character to play**, then move the scene forward through that character's first-person action, dialogue, or choice. AI handles the world and other characters; character mode narrows the viewpoint and authority for that generation.
+- **Character mode — First person**: first choose a **Character to play**, then move the scene forward through that character's first-person action, dialogue, or choice. You decide what that character does; AI describes the world and other characters' responses.
 
-Character mode requires a character from the current Book. With no character selected, the page explains that you must choose one before sending. Both modes share the same save, context, Provider, and apply-result pipeline.
+Character mode requires a character from the current Book. With no character selected, the page explains that you must choose one before sending.
 
 **Writing actions** also lets you edit the **Section note**. It is useful for directions such as “Skip the journey and write the reunion after arrival.” It does not enter the manuscript directly. Changes are retained and take effect in both author mode and character mode.
 
@@ -116,10 +116,10 @@ Choose a block in the manuscript to select it:
 
 - User input can be edited or deleted.
 - AI output can be edited, deleted, or regenerated as a new version.
-- The edit page shows **Edit user input** or **Edit AI output**. Choose **Done** when finished; the change uses the same automatic save flow as ordinary manuscript edits.
+- The edit page shows **Edit user input** or **Edit AI output**. Choose **Done** when finished; your changes save automatically.
 - If the selected AI output has multiple candidates, deletion lets you keep one version or delete the entire block and all candidates.
 
-The manuscript remains continuous prose. Blocks help you locate input, answers, and candidate versions; they do not turn the novel into a chat transcript.
+Each manuscript block contains an input or answer, helping you find the text and candidate versions you want to edit.
 
 Double-click prose to use the browser's word selection. Dragging text or holding to copy does not also select a manuscript block. The separate block-selection control is available when you want to select a block explicitly, including with a keyboard.
 
@@ -129,9 +129,9 @@ Enter what you want AI to process next in the input box at the bottom, then choo
 
 If the current section already ends with a user-input block, **Generate answer** appears below it. Choosing it generates an answer for that block without copying the same user input again.
 
-When you use **Regenerate version** on an existing AI output, the new candidate is generated from the manuscript before that answer and the version currently adopted there. The target answer, its old candidates, and later manuscript text are not silently included in the request. After a successful generation, the new version automatically becomes current and a message explains that a new answer was generated and selected.
+When you use **Regenerate version** on an existing AI output, the new candidate is generated from the currently adopted manuscript before that answer. The target answer, its old candidates, and later manuscript text are excluded from this request. After a successful generation, the new version automatically becomes current and a message explains that a new answer was generated and selected.
 
-When multiple versions exist, the candidate bar shows **Browse AI answer candidates**, a version count, **Previous version**, and **Next version**. The left and right arrows immediately switch the adopted version and save it automatically; they do not call AI again. The adopted version is used for later generation, ordinary exports, and outline-freshness checks.
+When multiple versions exist, the candidate bar shows **Browse AI answer candidates**, a version count, **Previous version**, and **Next version**. The left and right arrows immediately switch the adopted version and save it automatically; they do not call AI again. The adopted version is used for later generation, ordinary exports, and checks of whether a summary still matches the manuscript.
 
 Candidates are saved with the Book and remain available after refresh. Later, if you enter new user content and the new answer saves successfully, the previous answer keeps only the version that was adopted at that time. If generation fails or is canceled, or if you only continue generation without new user input, existing candidates remain. Switching a candidate in the middle of the manuscript does not delete paragraphs that follow it, so check the transition after switching.
 
@@ -143,7 +143,7 @@ Open **Settings**, then under **Generation** enable **Streaming output**. It is 
 - A notice says that the text is being generated incrementally and has not been written to the manuscript.
 - After choosing **Cancel generation**, the draft is not written to the Book. The page temporarily keeps the text so you can choose whether to copy it.
 - A failed generation also does not write incomplete text to the manuscript. Starting another generation or reloading the page replaces or clears this temporary preview.
-- Outline generation requires a complete structured result and does not use the manuscript's streaming display.
+- A generated summary appears all at once when complete, ready for you to review and confirm.
 
 Cancellation only stops Story Room from applying a late result to the manuscript. A request already sent to your configured service may still be recorded or processed by that service.
 
@@ -156,11 +156,11 @@ Cancellation only stops Story Room from applying a late result to the manuscript
 3. After checking the selection, choose **Save and load summary**, then confirm in the dialog. With no selection, confirmation clears the current section's previous-text references, while the original earlier text and existing summaries remain.
 4. A red unsaved-changes note appears below each previous-section name with pending edits and disappears after a successful save. Click outside the drawer or use its close button to leave. Pending selections and summary edits remain unapplied but stay in this page session; reopen the drawer, or return after switching sections, to continue editing.
 
-This draft has not been saved to the Book, does not change the context or its token estimate, and does not survive a page reload. Pending changes are included in the page's unsaved-work reminder when you leave. References made unavailable by a move are listed separately; keep them selected or explicitly deselect them. Confirmation does not silently remove them.
+This draft has not been saved to the Book, does not change the selected material or its token estimate, and does not survive a page reload. Pending changes are included in the page's unsaved-work reminder when you leave. References made unavailable by a move are listed separately and are removed only when you deselect them and confirm.
 
-Saved summaries are included as summary references for selected earlier sections; Story Room does not automatically load the full earlier manuscript. Internally, each summary is stored as structured <code>Section Memory</code> with a current version and a previous snapshot. Editing the manuscript can make an older summary stale, in which case you should review or regenerate it.
+Confirmed summaries of selected earlier sections are sent to the active model service as references for generation; Story Room does not automatically load the full earlier manuscript. Summaries retain a current version and a previous snapshot. Editing the manuscript can make an older summary stale, in which case you should review or regenerate it.
 
-The **Context overview** at the top of the manuscript page shows the approximate Provider, model, word/token budget, and which materials were included and why. It is a summary for checking your selection. It does not show raw Provider messages or hidden model reasoning.
+The **Context overview** at the top of the manuscript page shows the model service and model, which materials are included and why, word counts, estimated token use, and the budget.
 
 ## Configure a Provider
 
@@ -172,11 +172,13 @@ Choose **Settings** and open **Model connections**. First choose **New connectio
 - **Model ID**
 - **Max context** and **Max output**
 
+Choose **保存连接方案** (Save connection profile). After the success message, the saved profile becomes active automatically. Its name and model ID appear beneath **Model connections** and at the top of the manuscript page. To switch to an existing profile, select it in **连接方案** (Connection profile); if you have unsaved changes, handle the prompt first.
+
 ### OpenAI-compatible Providers
 
-- Choose an OpenAI-compatible Provider you trust. Actual generation sends the materials selected by the current context plan to that endpoint.
+- Choose an OpenAI-compatible service you trust. Generation may send the selected manuscript, material, confirmed earlier-section summaries, and request information such as the Book, chapter, and section titles to that service.
 
-Choosing **Test** only checks whether <code>/models</code> is reachable and, when a model list is returned, whether it includes the entered Model ID. A successful test does not prove that <code>/chat/completions</code> accepts Story Room's generation parameters.
+Choosing **Test** checks connectivity and, when a model list is returned, whether it includes the entered Model ID. Testing does not save the profile, and a successful test does not prove that generation will work. Save the profile and try an actual generation to check that.
 
 Keys are stored in a separate plaintext configuration file on the local host, outside the Book. Enter real keys only for a trusted service. Do not put keys in manuscripts, JSON backups, or issue reports.
 
@@ -188,11 +190,11 @@ Display settings in **Settings** are saved in the current browser:
 - **Global font**: Sans-serif or LXGW WenKai.
 - **Font size**: adjust with plus and minus buttons. At narrow mobile widths, the manuscript keeps a readable minimum font size.
 
-Open a section to read it as continuous prose. To share it with another reader, choose **Export current Book** on the shelf and select EPUB. To continue editing, choose Markdown. To keep the most compatible plain text, choose TXT. To preserve the complete editing state, choose JSON full backup.
+Open a section to read it as continuous prose. To share it with another reader, choose **Export current Book** on the shelf and select EPUB. To continue editing, choose Markdown. To keep the most compatible plain text, choose TXT. A JSON full backup preserves the current Book's manuscript, material, load scopes, retained candidate versions, summaries, and other Book data. Unsent input, unconfirmed previous-text drafts, and other open editor contents may not be included; keep them separately.
 
 ## Automatic saving, conflicts, and recovery
 
-Manuscript edits, block edits, candidate switches, Book material, load scopes, and summary confirmations all use the same Book save pipeline. Ordinary changes automatically save the complete Book.
+Manuscript edits save automatically after you finish editing, as do version switches. Material, load scopes, and summaries save after confirmation. Check the save status before leaving.
 
 In local-host mode, if another page saves the same Book first, the page explains that the Book was updated elsewhere and that the current local content is still available for export or reload. In that situation:
 
@@ -200,14 +202,14 @@ In local-host mode, if another page saves the same Book first, the page explains
 2. After confirming the backup, choose **Reload current Book** to read the newest saved version.
 3. Story Room does not merge the two manuscripts automatically. Use the backup to decide manually which parts to keep.
 
-Local-host saving has transaction logs and snapshots for process interruption. They are not disk backups and cannot coordinate two independent host processes operating on the same data directory. Keep important work in a JSON backup or another external backup as well.
+The app keeps recovery material for interrupted saves, but power loss, disk damage, or a lost computer can still cause data loss. Do not run two copies of the app against the same library directory. Keep independent JSON or other backups of important work.
 
 ## Current Alpha boundaries
 
-- There is no cloud storage, account synchronization, multi-user collaboration, RAG, embeddings, or desktop wrapper.
-- The application does not impose arbitrary limits on manuscript size, API request size, Provider responses, outline items, or candidate counts. Saving still transmits and validates the complete Book. Large Books need more memory and I/O, and the Provider's own context and output limits still apply.
+- There is no cloud storage, account synchronization, multi-user collaboration, or desktop installer.
+- Larger Books can take longer to save and use more memory. AI services have their own context and output limits.
 - Context-token estimates are hints. They do not replace the Provider's actual limits, and Story Room does not automatically block sending just because an estimate is slightly over.
-- Connection testing verifies <code>/models</code> connectivity and model-list matching only; it is not full generation compatibility testing.
+- After a successful connection test, try an actual generation to check that the service works for your writing.
 
 For more data boundaries and issue-reporting guidance, see [SECURITY.md](../SECURITY.md), [PRIVACY.md](../PRIVACY.md), and [THREAT_MODEL.md](THREAT_MODEL.md). If you want an AI agent to explain features or maintain the repository, start with [AGENT_GUIDE.md](AGENT_GUIDE.md).
 
@@ -251,6 +253,7 @@ The guide uses English operation names for readability. The running interface cu
 | Enter this section's summary… / Generate section summary | 填写这一节的梗概… / 生成该节梗概 |
 | Save and load summary / Context overview | 保存并加载梗概 / 本轮上下文概览 |
 | Model connections / New connection profile | 模型连接 / 新连接方案 |
+| Connection profile / Save connection profile | 连接方案 / 保存连接方案 |
 | Profile name / API Key / URL / Model ID | 方案名称 / API Key / URL / 模型 ID |
 | Max context / Max output / Test | 最大上下文 / 最大输出 / 测试 |
 | Skin / Global font / Font size | 皮肤 / 全局字体 / 字号大小 |

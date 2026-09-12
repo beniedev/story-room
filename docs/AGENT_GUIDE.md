@@ -16,7 +16,7 @@ Check the operating system, shell, target directory, `node --version`, and `npm 
 
 For an existing installation, identify its startup method, working-tree changes, and library directory before reusing it. Do not read the contents of key configuration files or overwrite `.data/`, configuration, or uncommitted files. If a prerequisite is missing, explain the component and target version and act within the user's authorization; do not silently change the system's default runtime.
 
-### 2. Get the source and choose a mode
+### 2. Get the source and start the local service
 
 For a new checkout, these commands work in PowerShell and common POSIX shells; they contain no shell-specific environment assignments:
 
@@ -45,6 +45,8 @@ Do not use private manuscripts for installation tests. Installation verification
 ### 4. Connect the user's AI service
 
 In local-host mode, guide the user to **设置 → 模型连接** (Settings → Model connections) to enter a trusted service's URL, model ID, and key. Have the user enter the key in the interface, not the conversation; do not read or print key files. Before real generation, explain that selected writing material goes to that service, and proceed only when the user has authorized that call.
+
+Choose **保存连接方案** (Save connection profile) after entering the fields. The success callback selects the saved profile automatically; confirm the name and model beneath **Model connections** and at the top of the manuscript page. Select an existing profile through **连接方案** (Connection profile), handling any unsaved-change prompt first. Testing neither saves a profile nor replaces verification of real generation.
 
 **测试** (Test) checks `/models` connectivity and model matching when a list is returned. It does not prove that `/chat/completions` accepts the generation parameters. The initial built-in test connection is not a real model service; its output does not prove real AI is available. If service details are missing, finish installation and clearly identify the fields the user must enter locally. Do not substitute test mode for that delivery. Collect only sanitized error information, without credentials, manuscript text, raw requests, or configuration.
 
@@ -101,6 +103,8 @@ Author mode and character mode share the persistence, context-plan, Provider req
 ### Context is explicitly selected
 
 `contextPlan.ts` calculates the material that may be sent to the Provider and the reason each item is included. Previous-text references require user confirmation. A section summary must be usable and fresh Memory; a model-generated draft cannot enter ordinary continuation before confirmation. Context-token estimates are for preview and guidance. They are not the Provider's actual limits and must not become arbitrary application-level length limits.
+
+`packetFor` includes the current Book, chapter, and section titles and positions. Selected, eligible `Section.memory` is sent as a previous-section reference. Legacy `Book.summaries` and `Book.canonFacts` are not current planner sources; this does not mean all summaries remain on the device.
 
 ### Local-host and hosted/device
 

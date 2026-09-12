@@ -58,7 +58,7 @@ export const combinePromptSources = (items: PromptCompositionItem[]) => {
 const promptTone = (index: number) => `var(--prompt-tone-${index % 6 + 1})`;
 
 const promptCompositionGroup = (item: PromptCompositionItem): Omit<PromptCompositionGroup, 'estimatedTokens'> => {
-  if (item.layer === 'system') return { key: 'rules', title: '写作规则', reason: '守住写作边界' };
+  if (item.layer === 'system') return { key: 'rules', title: '写作规则', reason: '本轮写作的基本指引' };
   if (item.layer === 'summary' || item.title.startsWith('REFERENCE')) {
     return { key: 'references', title: '前文梗概/全文', reason: '带入已完成前文' };
   }
@@ -112,8 +112,8 @@ export function ContextCompositionDrawer({
   const compositionItems = plan
     ? [...groupedCompositionItems, ...(framingResidual > 0 ? [{
         key: 'message-framing',
-        title: '消息封装与目标提醒',
-        reason: '包含 JSON 包装与消息结构',
+        title: '请求格式开销',
+        reason: '发送请求所需的格式信息',
         estimatedTokens: framingResidual,
       }] : [])]
     : [];

@@ -201,8 +201,8 @@ describe('context drawers real interactions', () => {
     expect(container.textContent).toContain('本轮上下文概览');
     expect(container.textContent).toContain('内容占比');
     expect(container.textContent).toContain('总量约 100 tokens');
-    expect(container.textContent).toContain('消息封装与目标提醒');
-    expect(container.textContent).toContain('包含 JSON 包装与消息结构');
+    expect(container.textContent).toContain('请求格式开销');
+    expect(container.textContent).toContain('发送请求所需的格式信息');
     expect(container.textContent).toContain('约 40 tokens');
     expect(container.textContent).not.toContain('实际消息估算−');
 
