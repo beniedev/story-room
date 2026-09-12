@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBookExport } from '../src/bookExport';
 import { parseBookBackup } from '../src/bookImport';
 import { deviceLibrary } from '../src/deviceLibrary';
-import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
 import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
@@ -20,10 +19,8 @@ class MemoryStorage implements Storage {
 
 describe('JSON Book backup recovery', () => {
   let environment: ReturnType<typeof installFakeDeviceLocks>;
-  let writerLease: ReturnType<typeof createDeviceWriterLease>;
 
   afterEach(() => {
-    writerLease.dispose();
     environment.restore();
     vi.useRealTimers();
   });
@@ -34,8 +31,6 @@ describe('JSON Book backup recovery', () => {
       value: new MemoryStorage(),
     });
     environment = installFakeDeviceLocks();
-    writerLease = createDeviceWriterLease(() => undefined);
-    await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
   });
 
   it('round-trips the complete Book shape and rejects a broken body mirror', () => {
@@ -173,13 +168,13 @@ describe('JSON Book backup recovery', () => {
         const section = book.chapters[0]!.sections[1]!;
         section.contextReferences = [...section.contextReferences!, ...section.contextReferences!];
       }, 'contextReferences'],
-      ['future reference', (book) => {
+      ['self reference', (book) => {
         book.chapters[0]!.sections[0]!.contextReferences = [{
-          sectionId: book.chapters[0]!.sections[1]!.id,
+          sectionId: book.chapters[0]!.sections[0]!.id,
           mode: 'summary',
           reason: 'manual',
         }];
-      }, '严格早于'],
+      }, '不能指向自身'],
       ['missing cross reference', (book) => { book.branches[0]!.fromSectionId = 'missing-section'; }, 'Branch 来源必须'],
     ];
 

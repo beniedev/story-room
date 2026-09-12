@@ -12,8 +12,11 @@ import {
   type StoreRecoveryStage,
 } from '../server/store.ts';
 import { createLegacyFixtureBook } from '../src/fixtures.ts';
-import { createSectionMemory } from '../src/sectionMemory';
+import { createSectionMemory, normalizeBook } from '../src/sectionMemory';
 import type { Book, BookIndexEntry } from '../src/types.ts';
+import { createBookExport } from '../src/bookExport';
+import { parseBookBackup } from '../src/bookImport';
+import { moveDirectoryItem, reverseDirectoryMove } from '../src/directoryOperations';
 
 const temporaryRoots: string[] = [];
 
@@ -484,6 +487,31 @@ describe('story store', () => {
     })).rejects.toBeInstanceOf(StoreConflictError);
     expect((await store.loadBook(first.id)).title).toBe('Revision R1');
     expect((await store.loadBook(first.id)).chapters[0]?.sections[0]?.content).toBe('R1');
+  });
+
+  it('preserves references through move, disk reopen, JSON backup, import and undo', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const store = new StoryStore(root);
+    const fixture = makeIntegrityBook();
+    fixture.chapters[0].sections[1].content = 'Target block.';
+    const baseline = await store.saveBook(normalizeBook(fixture));
+    const chapter = baseline.chapters[0];
+    const source = chapter.sections[0];
+    const target = chapter.sections[1];
+    const move = { kind: 'section' as const, id: source.id, targetChapterId: chapter.id, beforeId: null };
+    const undo = reverseDirectoryMove(baseline, move);
+    const moved = await store.saveBook(moveDirectoryItem(baseline, move), { expectedUpdatedAt: baseline.updatedAt });
+    const reopened = await new StoryStore(root).loadBook(moved.id);
+    expect(reopened.chapters[0].sections[0].id).toBe(target.id);
+    expect(reopened.chapters[0].sections[0].contextReferences).toEqual(target.contextReferences);
+    const backup = createBookExport(reopened, 'json');
+    const restored = await store.importBook(parseBookBackup(backup.content as string));
+    expect(restored.id).not.toBe(baseline.id);
+    const restoredAgain = await new StoryStore(root).loadBook(restored.id);
+    const undone = await store.saveBook(moveDirectoryItem(restoredAgain, undo), { expectedUpdatedAt: restoredAgain.updatedAt });
+    expect(undone.chapters).toEqual(baseline.chapters);
+    expect((await store.loadBook(baseline.id)).chapters).toEqual(reopened.chapters);
   });
 
   it('imports a validated Book as a new copy without replacing the source', async () => {

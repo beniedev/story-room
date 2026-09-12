@@ -3,10 +3,13 @@ import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Bookshelf } from '../src/components/Bookshelf';
+import type { Writer } from '../src/components/Writer';
 import type { Book } from '../src/types';
 import App from '../src/App';
 
 let shelf: ComponentProps<typeof Bookshelf>;
+let writer: ComponentProps<typeof Writer>;
+vi.mock('../src/components/Writer', () => ({ Writer: (props: ComponentProps<typeof Writer>) => { writer = props; return null; } }));
 vi.mock('../src/components/Bookshelf', () => ({ Bookshelf: (props: ComponentProps<typeof Bookshelf>) => {
   shelf = props;
   return null;
@@ -47,13 +50,16 @@ beforeEach(async () => {
     if (url === '/api/providers') return json([]);
     if (url === '/api/storage-location') return json({ location: 'synthetic-library' });
     if (url === '/api/books/app-directory-book' && init?.method === 'PUT') {
-      const candidate = JSON.parse(String(init.body)).book as Book;
+      const payload = JSON.parse(String(init.body));
+      const candidate = payload.book as Book;
+      expect(payload.expectedUpdatedAt).toBe(persisted.updatedAt);
       saves.push(structuredClone(candidate));
       const response = await save(candidate);
       if (response.ok) persisted = structuredClone(candidate);
       return response;
     }
     if (url === '/api/books/app-directory-book') return json(persisted);
+    if (url === '/api/context-plan') return json({ layers: [], budget: {} });
     throw new Error(`Unexpected synthetic request: ${url}`);
   }));
   const container = document.createElement('div');
@@ -111,4 +117,38 @@ describe('directory persistence through App', () => {
     await act(async () => { await expect(shelf.onAddSection('one', '不能插入', 'missing')).rejects.toThrow('目标小节'); });
     expect(saves).toHaveLength(1);
   });
+  it.each(['success', 'failure'] as const)('preserves edits made during a title PUT on %s and saves them next', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      let resolve!: (response: Response) => void;
+      save = () => new Promise<Response>((r) => { resolve = r; });
+      await act(async () => shelf.onOpenSection('a'));
+      let renaming!: Promise<unknown>;
+      await act(async () => {
+        renaming = writer.onSectionTitleChange('New title');
+        void renaming.catch(() => undefined);
+      });
+      await flush();
+      expect(writer.busy).toBe(false);
+      await act(async () => writer.onAuthorNoteChange('Later note'));
+      await act(async () => writer.onSectionBlocksChange([{ id: 'later-block', kind: 'assistant', content: 'Later prose' }]));
+      const savedTitle = { ...saves[0], updatedAt: '2026-02-01T00:00:00.000Z' };
+      await act(async () => {
+        resolve(outcome === 'success' ? json(savedTitle) : json({ error: 'Synthetic failure' }, 500));
+        await renaming.catch(() => undefined);
+      });
+      // These are actual App state/Writer props, not a reimplementation of save logic.
+      expect(writer.authorNote).toBe('Later note');
+      expect(writer.section?.content).toBe('Later prose');
+      expect(writer.section?.title).toBe('New title');
+      if (outcome === 'success') persisted = structuredClone(savedTitle);
+      save = async (candidate) => json(candidate);
+      await act(async () => vi.advanceTimersByTimeAsync(750));
+      await flush();
+      expect(saves).toHaveLength(2);
+      expect(persisted.chapters[0].sections[0].content).toBe('Later prose');
+      expect(writer.status).toContain('已自动保存');
+    } finally { vi.useRealTimers(); }
+  });
+
 });

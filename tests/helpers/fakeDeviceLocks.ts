@@ -3,19 +3,11 @@ type LockCallback<T> = (lock: Lock | null) => T | PromiseLike<T>;
 export class FakeDeviceLockManager {
   readonly requests: Array<{ name: string; options: LockOptions }> = [];
   private readonly held = new Set<string>();
+  private readonly tails = new Map<string, Promise<unknown>>();
   private rejectNextRequest = false;
-  private abnormalNextGrant: 'resolve' | 'reject' | null = null;
 
   rejectNext() {
     this.rejectNextRequest = true;
-  }
-
-  resolveAfterNextGrant() {
-    this.abnormalNextGrant = 'resolve';
-  }
-
-  rejectAfterNextGrant() {
-    this.abnormalNextGrant = 'reject';
   }
 
   isHeld(name: string) {
@@ -31,23 +23,14 @@ export class FakeDeviceLockManager {
     if (options.ifAvailable && this.held.has(name)) {
       return Promise.resolve().then(() => callback(null));
     }
-    this.held.add(name);
-    const result = Promise.resolve().then(() => callback({ name } as Lock));
-    const abnormal = this.abnormalNextGrant;
-    this.abnormalNextGrant = null;
-    if (abnormal) {
-      void result.then(
-        () => this.held.delete(name),
-        () => this.held.delete(name),
-      );
-      return new Promise<T>((resolve, reject) => {
-        queueMicrotask(() => {
-          if (abnormal === 'resolve') resolve(undefined as T);
-          else reject(new Error('synthetic Web Locks lifecycle failure'));
-        });
-      });
-    }
-    return result.finally(() => this.held.delete(name));
+    const previous = this.tails.get(name) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(async () => {
+      this.held.add(name);
+      try { return await callback({ name } as Lock); }
+      finally { this.held.delete(name); }
+    });
+    this.tails.set(name, result.catch(() => undefined));
+    return result;
   }
 }
 

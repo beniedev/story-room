@@ -5,7 +5,6 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExampleBooks } from '../src/fixtures';
 import { deviceLibrary } from '../src/deviceLibrary';
-import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 vi.mock('../src/api', async () => {
@@ -46,19 +45,10 @@ const waitForStorage = async (milliseconds = 800) => {
 
 let lockEnvironment: ReturnType<typeof installFakeDeviceLocks>;
 
-const withDeviceWriter = async <T,>(work: () => Promise<T>): Promise<T> => {
-  const lease = createDeviceWriterLease(() => undefined);
-  await expect(lease.attempt()).resolves.toEqual({ role: 'writer' });
-  try {
-    return await work();
-  } finally {
-    lease.dispose();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  }
-};
+const withDeviceWriter = <T,>(work: () => Promise<T>) => work();
 
 const writeDraftEnvelope = (book: ReturnType<typeof createExampleBooks>[number], baseUpdatedAt: string | null) => {
-  localStorage.setItem(draftKey(book.id), JSON.stringify({
+  sessionStorage.setItem(draftKey(book.id), JSON.stringify({
     schemaVersion: 1,
     book,
     baseUpdatedAt,
@@ -101,6 +91,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  sessionStorage.clear();
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
     value: new MemoryStorage(),
@@ -145,13 +136,13 @@ describe('device storage recovery', () => {
       expect(container.querySelector('.status-line[role="status"]')?.textContent).toContain('其他页面更新');
       const reload = container.querySelector<HTMLButtonElement>('[aria-label="重新载入当前书目"]');
       expect(reload).not.toBeNull();
-      expect(localStorage.getItem(draftKey(current.id))).not.toBeNull();
+      expect(sessionStorage.getItem(draftKey(current.id))).not.toBeNull();
       vi.stubGlobal('confirm', vi.fn(() => true));
       await act(async () => {
         reload?.click();
         await Promise.resolve();
       });
-      expect(localStorage.getItem(draftKey(current.id))).not.toBeNull();
+      expect(sessionStorage.getItem(draftKey(current.id))).not.toBeNull();
       await expect(deviceLibrary.saveBook({ ...current, title: '不应复活' }, current.updatedAt))
         .rejects.toMatchObject({ code: 'BOOK_CONFLICT', statusCode: 409 });
       expect(localStorage.getItem(bookKey(current.id))).toBeNull();
@@ -182,7 +173,7 @@ describe('device storage recovery', () => {
       await waitForStorage();
 
       await expect(deviceLibrary.loadBook(stored.id)).resolves.toMatchObject({ title: '同基线本地草稿' });
-      expect(localStorage.getItem(draftKey(stored.id))).toBeNull();
+      expect(sessionStorage.getItem(draftKey(stored.id))).toBeNull();
       expect(container.querySelector('[role="status"]')?.textContent).not.toContain('其他页面更新');
     } finally {
       await act(async () => root.unmount());
@@ -222,7 +213,7 @@ describe('device storage recovery', () => {
       await waitForStorage();
 
       await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '另一页的新版本' });
-      const preservedDraft = JSON.parse(localStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
+      const preservedDraft = JSON.parse(sessionStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
         book?: { title?: string };
         baseUpdatedAt?: string | null;
       };
@@ -238,7 +229,7 @@ describe('device storage recovery', () => {
         reload?.click();
         await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       });
-      expect(localStorage.getItem(draftKey(baseline.id))).toBeNull();
+      expect(sessionStorage.getItem(draftKey(baseline.id))).toBeNull();
       await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '另一页的新版本' });
     } finally {
       await act(async () => root.unmount());
@@ -270,7 +261,7 @@ describe('device storage recovery', () => {
       await waitForStorage();
 
       await expect(deviceLibrary.loadBook(baseline.id)).resolves.toMatchObject({ title: '当前持久版本' });
-      const migrated = JSON.parse(localStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
+      const migrated = JSON.parse(sessionStorage.getItem(draftKey(baseline.id)) ?? 'null') as {
         schemaVersion?: number;
         book?: { title?: string };
         baseUpdatedAt?: string | null;
@@ -327,7 +318,7 @@ describe('device storage recovery', () => {
       await waitForStorage();
 
       await expect(deviceLibrary.loadBook(nextEntry.id)).resolves.toMatchObject({ title: '下一本的持久新版本' });
-      const preservedDraft = JSON.parse(localStorage.getItem(draftKey(nextEntry.id)) ?? 'null') as {
+      const preservedDraft = JSON.parse(sessionStorage.getItem(draftKey(nextEntry.id)) ?? 'null') as {
         book?: { title?: string };
         baseUpdatedAt?: string | null;
       };

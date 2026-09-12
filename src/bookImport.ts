@@ -297,11 +297,10 @@ function assertBookShape(value: unknown): asserts value is Book {
   for (const branch of branches) assertExistingSection(branch.fromSectionId, 'Branch 来源');
   for (const chapter of chapters) {
     for (const section of chapter.sections) {
-      const targetOrdinal = sectionOrdinals.get(section.id)!;
       for (const reference of section.contextReferences ?? []) {
         const sourceOrdinal = sectionOrdinals.get(reference.sectionId);
         if (sourceOrdinal === undefined) throw new Error('Section 前文参考必须指向当前 Book 内存在的 Section。');
-        if (sourceOrdinal >= targetOrdinal) throw new Error('Section 前文参考必须严格早于目标 Section。');
+        if (reference.sectionId === section.id) throw new Error('Section 前文参考不能指向自身。');
       }
       if (section.plan?.povCharacterId && !characterIds.has(section.plan.povCharacterId)) {
         throw new Error('Section 计划 POV 角色必须存在于当前 Book。');

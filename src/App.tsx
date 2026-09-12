@@ -63,12 +63,7 @@ import { Writer } from './components/Writer';
 import { Bookshelf } from './components/Bookshelf';
 import { ProviderSettings } from './components/ProviderSettings';
 import { makeId } from './components/shared/id';
-import {
-  assertDeviceWriterLease,
-  createDeviceWriterLease,
-  hasDeviceWriterLease,
-  type DeviceWriterState,
-} from './deviceWriterLease';
+import { withDeviceLibraryWrite } from './deviceWriterLease';
 import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
 import {
   DialogOperationStatus,
@@ -189,7 +184,7 @@ const isDraftEnvelope = (value: unknown, bookId: string): value is DeviceDraftEn
 const readDraftRecord = (bookId: string): DeviceDraftRecord | null => {
   if (api.runtime !== 'device') return null;
   try {
-    const value = localStorage.getItem(bookDraftKey(bookId));
+    const value = sessionStorage.getItem(bookDraftKey(bookId));
     if (!value) return null;
     const parsed = JSON.parse(value) as unknown;
     if (isDraftEnvelope(parsed, bookId)) {
@@ -212,39 +207,21 @@ const readDraftRecord = (bookId: string): DeviceDraftRecord | null => {
   }
 };
 
-const readCachedBook = (bookId: string, includeDraft = true) => {
-  if (api.runtime !== 'device') return null;
-  try {
-    const persistedValue = localStorage.getItem(bookCacheKey(bookId));
-    if (!includeDraft) {
-      if (!persistedValue) return null;
-      const parsed = JSON.parse(persistedValue) as unknown;
-      return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
-    }
-    const draft = readDraftRecord(bookId);
-    if (draft) return draft.book;
-    if (!persistedValue) return null;
-    const parsed = JSON.parse(persistedValue) as unknown;
-    return isCachedBook(parsed, bookId) ? normalizeBook(parsed) : null;
-  } catch {
-    return null;
-  }
-};
-
-const cacheBook = (book: Book) => {
-  if (api.runtime !== 'device') return false;
-  assertDeviceWriterLease();
-  try {
-    localStorage.setItem(bookCacheKey(book.id), JSON.stringify(normalizeBook(book)));
-    return true;
-  } catch {
-    return false;
-  }
+// Copy before removing a legacy shared draft, within the library write gate.
+const importLegacyDraft = async (bookId: string) => {
+  if (api.runtime !== 'device') return;
+  if (localStorage.getItem(bookDraftKey(bookId)) === null || sessionStorage.getItem(bookDraftKey(bookId))) return;
+  await withDeviceLibraryWrite(() => {
+    if (sessionStorage.getItem(bookDraftKey(bookId))) return;
+    const legacy = localStorage.getItem(bookDraftKey(bookId));
+    if (legacy === null) return;
+    sessionStorage.setItem(bookDraftKey(bookId), legacy);
+    localStorage.removeItem(bookDraftKey(bookId));
+  });
 };
 
 const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
   if (api.runtime !== 'device') return false;
-  assertDeviceWriterLease();
   try {
     const envelope: DeviceDraftEnvelope = {
       schemaVersion: 1,
@@ -252,7 +229,7 @@ const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
       baseUpdatedAt,
       draftEditedAt: new Date().toISOString(),
     };
-    localStorage.setItem(bookDraftKey(book.id), JSON.stringify(envelope));
+    sessionStorage.setItem(bookDraftKey(book.id), JSON.stringify(envelope));
     return true;
   } catch {
     return false;
@@ -261,20 +238,8 @@ const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
 
 const removeDraftBook = (bookId: string) => {
   if (api.runtime !== 'device') return;
-  assertDeviceWriterLease();
   try {
-    localStorage.removeItem(bookDraftKey(bookId));
-  } catch {
-    // Browser persistence is optional on the device runtime.
-  }
-};
-
-const removeCachedBook = (bookId: string) => {
-  if (api.runtime !== 'device') return;
-  assertDeviceWriterLease();
-  try {
-    localStorage.removeItem(bookCacheKey(bookId));
-    localStorage.removeItem(bookDraftKey(bookId));
+    sessionStorage.removeItem(bookDraftKey(bookId));
   } catch {
     // Browser persistence is optional on the device runtime.
   }
@@ -298,15 +263,6 @@ const clearHostBookCaches = () => {
       // A storage failure must not prevent the host app from starting.
     }
   }
-};
-
-const newerBook = (stored: Book, cached: Book | null) => {
-  if (!cached) return stored;
-  const storedTime = Date.parse(stored.updatedAt);
-  const cachedTime = Date.parse(cached.updatedAt);
-  return Number.isFinite(cachedTime) && (!Number.isFinite(storedTime) || cachedTime > storedTime)
-    ? cached
-    : stored;
 };
 
 type BookLoadResolution = {
@@ -333,20 +289,17 @@ const resolveBookForLoad = async (
       loadedDirty: false,
     };
   }
-  if (api.runtime === 'device') assertDeviceWriterLease();
-  const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;
-  const persistedCached = api.runtime === 'device' ? readCachedBook(bookId, false) : null;
+  if (api.runtime === 'device') await importLegacyDraft(bookId);
   const draft = api.runtime === 'device' ? readDraftRecord(bookId) : null;
   const recoverDraft = !options.ignoreDraft && draft !== null;
   const draftConflict = recoverDraft && (draft!.legacy || draft!.baseUpdatedAt !== stored.updatedAt);
-  const cachedForLoad = options.ignoreDraft ? persistedCached : cached;
-  const loaded = recoverDraft ? draft!.book : newerBook(stored, cachedForLoad);
+  const loaded = recoverDraft ? draft!.book : stored;
   return {
     stored,
     loaded,
     draft,
     draftConflict,
-    loadedDirty: recoverDraft || Boolean(cachedForLoad && loaded.updatedAt !== stored.updatedAt),
+    loadedDirty: recoverDraft,
   };
 };
 
@@ -387,13 +340,7 @@ function App() {
   const pendingContextDrafts = useRef(false);
   const [generationState, setGenerationState] = useState<'idle' | 'generating'>('idle');
   const [status, setStatus] = useState(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
-  const [deviceWriterState, setDeviceWriterState] = useState<DeviceWriterState>(
-    isDeviceRuntime ? { role: 'checking' } : { role: 'writer' },
-  );
   const [libraryReady, setLibraryReady] = useState(!isDeviceRuntime);
-  const [takeoverPending, setTakeoverPending] = useState(false);
-  const [readerRefreshAvailable, setReaderRefreshAvailable] = useState(false);
-  const [readerBookDeleted, setReaderBookDeleted] = useState(false);
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
@@ -429,19 +376,13 @@ function App() {
   const streamingPending = useRef<{ controller: AbortController; key: string; content: string } | null>(null);
   const streamingFrame = useRef<number | null>(null);
   const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
-  const deviceLeaseRef = useRef<ReturnType<typeof createDeviceWriterLease> | null>(null);
-  const deviceWriterRoleRef = useRef(deviceWriterState.role);
-  const bootstrapCompleteRef = useRef(false);
-  const takeoverRequestRef = useRef<string | null | undefined>(undefined);
   const libraryLoadGenerationRef = useRef(0);
   const bookLoadGenerationRef = useRef(0);
 
-  const canEdit = !isDeviceRuntime || deviceWriterState.role === 'writer' && libraryReady;
+  const canEdit = libraryReady;
 
   const assertDeviceWriteAccess = () => {
-    if (!isDeviceRuntime) return;
-    if (!canEdit) throw new Error('当前页面为只读，请先成为编辑页。');
-    assertDeviceWriterLease();
+    if (!libraryReady) throw new Error('书库仍在打开，请稍候。');
   };
 
   const cancelStreamingFrame = () => {
@@ -536,36 +477,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isDeviceRuntime) return undefined;
-    let active = true;
-    const lease = createDeviceWriterLease((next) => {
-      if (!active) return;
-      const previousRole = deviceWriterRoleRef.current;
-      deviceWriterRoleRef.current = next.role;
-      if (previousRole !== next.role) bookLoadGenerationRef.current += 1;
-      if (previousRole === 'writer' && next.role !== 'writer') {
-        bootstrapCompleteRef.current = false;
-        setLibraryReady(false);
-        generationAbort.current?.abort();
-      }
-      // A writer notification only grants the lock. Keep every editor
-      // control closed until the reconcile effect has read the latest data.
-      if (next.role === 'writer') setLibraryReady(false);
-      setDeviceWriterState(next);
-    });
-    deviceLeaseRef.current = lease;
-    void lease.attempt()
-      .catch(() => {
-        if (active) setDeviceWriterState({ role: 'reader', reason: 'error' });
-      });
-    return () => {
-      active = false;
-      if (deviceLeaseRef.current === lease) deviceLeaseRef.current = null;
-      lease.dispose();
-    };
-  }, [isDeviceRuntime]);
-
-  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('story-theme', theme);
   }, [theme]);
@@ -616,18 +527,13 @@ function App() {
       const isAnyBookUpdate = event.key === null || event.key?.startsWith(bookCachePrefix) === true;
       const isCurrentBookUpdate = Boolean(currentBookId && event.key === bookCacheKey(currentBookId));
       if (!isLibraryUpdate && !isAnyBookUpdate) return;
-      if (deviceWriterState.role !== 'writer') {
-        setReaderRefreshAvailable(true);
-        if (isCurrentBookUpdate && !event.newValue) {
-          setReaderBookDeleted(true);
-          setStatus('当前书目已被其他页面删除；重新载入后可继续阅读现存书目。');
-        } else {
-          setStatus('内容已更新，可重新载入。');
-        }
-        return;
+      if (isLibraryUpdate && api.runtime === 'device') {
+        void api.listPersistedBooks().then(setLibrary)
+          .catch((error) => setStatus(error instanceof Error ? error.message : '无法刷新书库。'));
       }
       if (!currentBookId || !isCurrentBookUpdate) return;
-      if (!event.newValue) {
+      const storedValue = localStorage.getItem(bookCacheKey(currentBookId));
+      if (!storedValue) {
         saveConflictRef.current = true;
         setSaveConflict(true);
         setDirty(true);
@@ -635,19 +541,27 @@ function App() {
         return;
       }
       try {
-        const incoming = JSON.parse(event.newValue) as unknown;
+        const incoming = JSON.parse(storedValue) as unknown;
         if (!isCachedBook(incoming, book.id) || incoming.updatedAt === persistedUpdatedAt.current) return;
-        saveConflictRef.current = true;
-        setSaveConflict(true);
-        setDirty(true);
-        setStatus(bookConflictMessage);
+        if (persistedRevision.current === saveRevision.current && !busyRef.current) {
+          const loaded = normalizeBook(incoming);
+          bookRef.current = loaded;
+          setBook(loaded);
+          persistedUpdatedAt.current = loaded.updatedAt;
+          persistedRevision.current = advanceSaveRevision();
+        } else {
+          saveConflictRef.current = true;
+          setSaveConflict(true);
+          setDirty(true);
+          setStatus(bookConflictMessage);
+        }
       } catch {
         // A malformed update is handled by the next explicit load; keep the local page intact.
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, [book?.id, deviceWriterState.role, isDeviceRuntime]);
+  }, [book?.id, isDeviceRuntime]);
 
   useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
@@ -714,30 +628,9 @@ function App() {
   };
 
   useEffect(() => {
-    if (isDeviceRuntime && deviceWriterState.role === 'checking') return undefined;
-    const isInitialBootstrap = !bootstrapCompleteRef.current;
-    const requestedBookId = takeoverRequestRef.current;
-    const isTakeoverReconcile = isDeviceRuntime && deviceWriterState.role === 'writer'
-      && requestedBookId !== undefined;
-    const isFailedTakeover = isDeviceRuntime && deviceWriterState.role !== 'writer'
-      && requestedBookId !== undefined;
-
-    // An occupied takeover moves checking -> reader. Keep the current reader
-    // snapshot intact; only a successful takeover is allowed to reconcile it.
-    if (!isInitialBootstrap && !isTakeoverReconcile) {
-      if (isFailedTakeover) takeoverRequestRef.current = undefined;
-      return undefined;
-    }
-
-    const preferredBookId = isInitialBootstrap ? undefined : requestedBookId ?? undefined;
-    if (!isInitialBootstrap) takeoverRequestRef.current = undefined;
     let active = true;
     const loadGeneration = ++libraryLoadGenerationRef.current;
-    const expectedRole = deviceWriterState.role;
-    const persistedOnly = isDeviceRuntime && expectedRole !== 'writer';
-    const isCurrent = () => active
-      && loadGeneration === libraryLoadGenerationRef.current
-      && (!isDeviceRuntime || deviceWriterRoleRef.current === expectedRole);
+    const isCurrent = () => active && loadGeneration === libraryLoadGenerationRef.current;
 
     setLibraryReady(false);
     setLibrary([]);
@@ -753,14 +646,23 @@ function App() {
     advanceSaveRevision();
     setDirty(false);
     setSaveConflict(false);
-    setReaderRefreshAvailable(false);
-    setReaderBookDeleted(false);
     setView('shelf');
-    setStatus(persistedOnly ? '正在读取已保存书目…' : isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
+    setStatus(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
     void (async () => {
       try {
+        let libraryWarning = '';
+        const readLibrary = async () => {
+          try { return await api.listBooks(); }
+          catch (error) {
+            if (api.runtime !== 'device') throw error;
+            // A failed coordinator must not hide already-saved Books or their
+            // export path. Writes still go through the gate and report errors.
+            libraryWarning = error instanceof Error ? error.message : '设备保存协调暂不可用。';
+            return api.listPersistedBooks();
+          }
+        };
         const [entries, profiles] = await Promise.all([
-          persistedOnly && api.runtime === 'device' ? api.listPersistedBooks() : api.listBooks(),
+          readLibrary(),
           api.listProviderProfiles(),
         ]);
         if (!isCurrent()) return;
@@ -772,25 +674,21 @@ function App() {
         }
         if (!isCurrent()) return;
         setLibrary(entries);
-        const selectedBookId = preferredBookId && entries.some((entry) => entry.id === preferredBookId)
-          ? preferredBookId
-          : entries[0]?.id;
+        const selectedBookId = entries[0]?.id;
         if (selectedBookId) {
-          await openBook(selectedBookId, { persistedOnly });
+          await openBook(selectedBookId);
         }
         if (!isCurrent()) return;
-        bootstrapCompleteRef.current = true;
         setLibraryReady(true);
-        if (!saveConflictRef.current && !persistedOnly) setStatus('');
+        if (!saveConflictRef.current) setStatus(libraryWarning);
       } catch (error) {
         if (!isCurrent()) return;
-        bootstrapCompleteRef.current = true;
         setLibraryReady(true);
         setStatus(error instanceof Error ? error.message : '无法打开书库。');
       }
     })();
     return () => { active = false; };
-  }, [deviceWriterState.role, isDeviceRuntime]);
+  }, [isDeviceRuntime]);
 
   useEffect(() => {
     if (!book || !dirty || !canEdit) return;
@@ -800,7 +698,7 @@ function App() {
     setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
       ...items.filter((item) => item.id !== book.id)]);
     setStatus(api.runtime === 'device'
-      ? (cachedLocally ? '已自动保存到此设备。' : '当前设备的浏览器存储不可用。')
+      ? (cachedLocally ? '本页恢复草稿已保留，正在保存到此设备…' : '本页恢复草稿无法写入，正在尝试保存书目…')
       : '正在保存到书库…');
 
     const revision = saveRevision.current;
@@ -810,7 +708,6 @@ function App() {
         if (saveRevision.current !== revision) return;
         const normalizedSaved = normalizeBook(saved);
         if (api.runtime === 'device') {
-          cacheBook(normalizedSaved);
           clearCurrentDraft(normalizedSaved.id);
         }
         bookRef.current = normalizedSaved;
@@ -841,11 +738,8 @@ function App() {
 
   const openBook = async (bookId: string, options: { ignoreDraft?: boolean; persistedOnly?: boolean } = {}) => {
     const loadGeneration = ++bookLoadGenerationRef.current;
-    const expectedRole = deviceWriterRoleRef.current;
-    const isCurrent = () => loadGeneration === bookLoadGenerationRef.current
-      && (!isDeviceRuntime || deviceWriterRoleRef.current === expectedRole);
-    const persistedOnly = options.persistedOnly ?? (isDeviceRuntime && expectedRole !== 'writer');
-    if (!persistedOnly && isDeviceRuntime) assertDeviceWriterLease();
+    const isCurrent = () => loadGeneration === bookLoadGenerationRef.current;
+    const persistedOnly = options.persistedOnly ?? false;
     if (book && book.id !== bookId && dirty && !persistedOnly) await saveCurrent();
     if (!isCurrent()) return;
     rememberCurrentSectionDraft();
@@ -866,71 +760,8 @@ function App() {
     restoreSectionDraft(loaded.id, '');
     persistedRevision.current = loadedDirty ? null : revision;
     setDirty(persistedOnly ? false : loadedDirty);
-    setReaderRefreshAvailable(false);
-    setReaderBookDeleted(false);
     if (!persistedOnly && draftConflict) setStatus(bookConflictMessage);
     setView('shelf');
-  };
-
-  const tryTakeover = async () => {
-    if (!isDeviceRuntime || takeoverPending || deviceWriterState.role === 'writer' || !libraryReady) return;
-    const lease = deviceLeaseRef.current;
-    if (!lease) {
-      setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
-      return;
-    }
-    takeoverRequestRef.current = bookRef.current?.id ?? null;
-    setTakeoverPending(true);
-    setStatus('正在尝试成为编辑页…');
-    try {
-      const next = await lease.attempt();
-      if (deviceLeaseRef.current !== lease) return;
-      if (next.role !== 'writer') takeoverRequestRef.current = undefined;
-      if (next.role === 'writer' && deviceWriterRoleRef.current === 'writer' && hasDeviceWriterLease()) {
-        setStatus('已获得编辑权限，正在重新读取书库…');
-      } else if (next.reason === 'occupied') {
-        setStatus('另一个编辑页仍在使用书库，请关闭后再试。');
-      } else if (next.reason === 'unsupported') {
-        setStatus('当前浏览器暂不支持安全编辑，请使用现代浏览器并在 HTTPS 或可信本地页面打开。');
-      } else {
-        setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
-      }
-    } catch {
-      takeoverRequestRef.current = undefined;
-      setStatus('此页面暂时无法获得安全编辑权限，请稍后重试。');
-    } finally {
-      setTakeoverPending(false);
-    }
-  };
-
-  const refreshReader = async () => {
-    if (!isDeviceRuntime || deviceWriterState.role === 'writer') return;
-    const expectedRole = deviceWriterRoleRef.current;
-    setStatus('正在重新读取已保存书目…');
-    try {
-      const entries = await (api.runtime === 'device' ? api.listPersistedBooks() : api.listBooks());
-      if (deviceWriterRoleRef.current !== expectedRole) return;
-      setLibrary(entries);
-      const currentId = bookRef.current?.id;
-      const nextId = currentId && entries.some((entry) => entry.id === currentId)
-        ? currentId
-        : entries[0]?.id;
-      if (nextId) {
-        await openBook(nextId, { persistedOnly: true });
-      } else {
-        bookRef.current = null;
-        setBook(null);
-        setSectionId('');
-        setInstruction('');
-        setSectionDrafts({});
-        setDirty(false);
-        setStatus('书库中暂无可读书目；关闭编辑页后可尝试成为编辑页。');
-      }
-      setReaderRefreshAvailable(false);
-      setReaderBookDeleted(false);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : '无法重新读取书库。');
-    }
   };
 
   const changeBook = (recipe: (current: Book) => Book) => {
@@ -946,6 +777,8 @@ function App() {
 
   const queueBookSave = (candidate: Book, revision: number, autosaveRevision?: number): Promise<Book> => {
     assertDeviceWriteAccess();
+    const owner = bookLoadGenerationRef.current;
+    const ownsBook = () => owner === bookLoadGenerationRef.current && bookRef.current?.id === candidate.id;
     const existing = saveFlights.current.get(revision);
     if (existing) return existing;
     let persisted = false;
@@ -956,19 +789,26 @@ function App() {
       if (autosaveRevision !== undefined && saveRevision.current !== autosaveRevision) {
         return candidate;
       }
+      if (!ownsBook()) throw staleSaveError();
       if (saveConflictRef.current) throw blockedBookConflictError();
       if (!persistedUpdatedAt.current) throw new Error('缺少当前书目的服务端保存基线，请重新载入后再保存。');
       persisted = true;
       return api.saveBook(candidate, persistedUpdatedAt.current);
     });
     const tracked: Promise<Book> = task.then((saved) => {
-      if (persisted) {
+      if (persisted && ownsBook()) {
         persistedUpdatedAt.current = saved.updatedAt;
         if (saveRevision.current === revision) persistedRevision.current = revision;
+        else if (api.runtime === 'device' && bookRef.current) {
+          // Newer edits extend this successful write. Their recovery baseline
+          // must advance too, without clearing or replacing their draft.
+          draftBaseUpdatedAt.current = saved.updatedAt;
+          cacheCurrentDraft(bookRef.current);
+        }
       }
       return saved;
     }, (error) => {
-      if (isBookConflictError(error)) {
+      if (ownsBook() && isBookConflictError(error)) {
         saveConflictRef.current = true;
         setSaveConflict(true);
         setDirty(true);
@@ -996,7 +836,6 @@ function App() {
     const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
     if (saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
     if (api.runtime === 'device') {
-      cacheBook(saved);
       clearCurrentDraft(saved.id);
     }
     bookRef.current = saved;
@@ -1018,6 +857,7 @@ function App() {
     assertDeviceWriteAccess();
     const currentBook = bookRef.current ?? book;
     if (!currentBook) throw new Error('请先打开一本书。');
+    const owner = bookLoadGenerationRef.current;
     const candidate = normalizeBook({
       ...recipe(currentBook),
       updatedAt: new Date().toISOString(),
@@ -1032,9 +872,9 @@ function App() {
     setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
     try {
       const saved = normalizeBook(await queueBookSave(candidate, revision));
-      if (saveRevision.current !== revision) throw staleSaveError();
+      // The write succeeded, but later edits still own the visible Book.
+      if (owner !== bookLoadGenerationRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) return saved;
       if (api.runtime === 'device') {
-        cacheBook(saved);
         clearCurrentDraft(saved.id);
       }
       bookRef.current = saved;
@@ -1049,10 +889,15 @@ function App() {
       setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
       return saved;
     } catch (error) {
+      if (owner !== bookLoadGenerationRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) throw error;
       if (!deferCommit && !isBookConflictError(error)) {
         bookRef.current = currentBook;
         setBook(currentBook);
-        setDirty(false);
+        setDirty(dirty);
+        if (api.runtime === 'device') {
+          if (dirty) cacheCurrentDraft(currentBook);
+          else clearCurrentDraft(currentBook.id);
+        }
       } else if (isBookConflictError(error)) {
         setDirty(true);
       }
@@ -1647,7 +1492,6 @@ function App() {
       const normalizedCreated = normalizeBook(created);
       setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
       setBook(normalizedCreated);
-      if (api.runtime === 'device') cacheBook(normalizedCreated);
       draftBaseUpdatedAt.current = undefined;
       persistedUpdatedAt.current = normalizedCreated.updatedAt;
       saveConflictRef.current = false;
@@ -1686,7 +1530,6 @@ function App() {
     setSaveConflict(false);
     bookRef.current = restored;
     setBook(restored);
-    if (api.runtime === 'device') cacheBook(restored);
     setLibrary((items) => [{
       id: restored.id,
       title: restored.title,
@@ -1720,7 +1563,7 @@ function App() {
       await saveQueue.current.catch(() => undefined);
       await api.deleteBook(deletedBook.id);
       removeContextDraftSessions(deletedBook.id);
-      removeCachedBook(deletedBook.id);
+      removeDraftBook(deletedBook.id);
       setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
       if (nextResolution) {
         const {
@@ -2065,10 +1908,6 @@ function App() {
   };
 
   const reloadCurrentBook = async () => {
-    if (isDeviceRuntime && !canEdit) {
-      await refreshReader();
-      return;
-    }
     if (!book) return;
     if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
     await openBook(book.id, { ignoreDraft: true });
@@ -2135,17 +1974,6 @@ function App() {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
-      {isDeviceRuntime && deviceWriterState.role !== 'writer' && (
-        <DeviceAccessBanner
-          state={deviceWriterState}
-          pending={takeoverPending}
-          ready={libraryReady}
-          refreshAvailable={readerRefreshAvailable}
-          bookDeleted={readerBookDeleted}
-          onTakeover={() => void tryTakeover()}
-          onRefresh={() => void withBusy(refreshReader)}
-        />
-      )}
       {view === 'shelf' && <header className="app-header">
         <div className="header-context" aria-live="polite">
           <strong>故事书屋</strong>
@@ -2197,7 +2025,7 @@ function App() {
           >
             <Download aria-hidden="true" />
           </button>
-          {(saveConflict || readerRefreshAvailable) && <button
+          {saveConflict && <button
             type="button"
             className="icon-button"
             onClick={() => void withBusy(reloadCurrentBook)}
@@ -2329,15 +2157,6 @@ function App() {
             onImport={() => importInput.current?.click()}
           />
         )}
-        {!book && libraryReady && !canEdit && (
-          <section className="reader-empty-state" aria-labelledby="reader-empty-title">
-            <h1 id="reader-empty-title">当前没有可读书目</h1>
-            <p>关闭其他编辑页后，可以尝试成为编辑页；已有书目会在这里显示并可导出。</p>
-            <button type="button" className="quiet-action" onClick={() => void tryTakeover()} disabled={takeoverPending}>
-              {takeoverPending ? '正在尝试成为编辑页…' : '尝试成为编辑页'}
-            </button>
-          </section>
-        )}
       </main>
 
       <div className={view === 'write' ? 'sr-only' : 'status-line'} role="status" aria-live="polite">{status}</div>
@@ -2384,76 +2203,6 @@ function App() {
         onClose={closeExport}
       />
 
-    </div>
-  );
-}
-
-
-function DeviceAccessBanner({
-  state,
-  pending,
-  ready,
-  refreshAvailable,
-  bookDeleted,
-  onTakeover,
-  onRefresh,
-}: {
-  state: DeviceWriterState;
-  pending: boolean;
-  ready: boolean;
-  refreshAvailable: boolean;
-  bookDeleted: boolean;
-  onTakeover: () => void;
-  onRefresh: () => void;
-}) {
-  const copy = state.role === 'checking'
-    ? {
-        title: pending ? '正在尝试成为编辑页…' : '正在检查此设备的编辑权限…',
-        detail: pending ? '当前内容仍可阅读，确认完成前保持只读。' : '确认完成前不会打开编辑器或恢复草稿。',
-      }
-      : state.reason === 'unsupported'
-        ? {
-            title: '当前页面为只读。',
-            detail: '当前浏览器或页面环境暂不支持安全编辑，请使用现代浏览器并在 HTTPS 或可信本地页面打开；也可以使用本机运行方式继续编辑。',
-          }
-      : state.reason === 'error'
-        ? {
-            title: '当前页面为只读。',
-            detail: '此页面暂时无法获得安全编辑权限，请关闭其他编辑页后重试。',
-          }
-        : bookDeleted
-          ? {
-              title: '当前书目已被其他页面删除。',
-              detail: '当前页面保留已读内容；重新载入后可继续阅读现存书目。',
-            }
-          : {
-              title: '另一个 Story Room 标签页正在编辑此设备书库。当前页面为只读。',
-              detail: '可以阅读已保存内容和导出当前书目；关闭编辑页后可尝试成为编辑页。',
-            };
-  return (
-    <div className="device-access-banner" role="status" aria-live="polite" aria-atomic="true">
-      <div className="device-access-copy">
-        <strong>{copy.title}</strong>
-        <span>{copy.detail}</span>
-      </div>
-      <div className="device-access-actions">
-        {refreshAvailable && (
-          <button type="button" className="quiet-action" onClick={onRefresh} disabled={pending}>
-            重新载入书库
-          </button>
-        )}
-        {(state.role !== 'checking' || pending) && (
-          <button
-            type="button"
-            className="primary-action"
-            onClick={onTakeover}
-            disabled={pending || !ready}
-            aria-busy={pending || undefined}
-          >
-            {pending ? '正在尝试成为编辑页…' : '尝试成为编辑页'}
-          </button>
-        )}
-      </div>
     </div>
   );
 }

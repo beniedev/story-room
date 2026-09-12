@@ -55,27 +55,23 @@ Author mode and character mode share the persistence, context-plan, Provider req
 | Runtime | Storage and generation | Maintenance notes |
 | --- | --- | --- |
 | `local-host` | Books are written to readable files; generation can use Fake or a configured OpenAI-compatible Provider | Keep the Provider key separate from the Book; save requests are version-checked and serialized |
-| `hosted/device` | Books and recovery drafts are stored in the current `origin`'s browser storage; generation remains Fake | Storage is unencrypted; one editor page is allowed per storage area, and other pages can only read saved Books |
+| `hosted/device` | Books persist in localStorage; recovery drafts belong to each tab; generation remains Fake | Storage is unencrypted; writes serialize automatically and stale saves are rejected |
 
-Web Locks in device mode coordinate only the storage area of the same browser and the same `origin`:
+Every browser page can edit. Initialization, creation, deletion, import, and save use `withDeviceLibraryWrite`; version checks and synchronous Book/index writes happen inside that critical section. Each operation acquires and releases Web Locks when available. An IndexedDB readwrite transaction also coordinates writes when available, including pages without Web Locks. Coordination failures must surface; never replay a failed write outside the gate. IndexedDB stores no manuscript data.
 
-- When the page is a secure context (HTTPS or a trusted local page) and the lock is available, one tab obtains the writer lease.
-- Other tabs are readers. They can read saved Books, view saved context, change display settings, and export saved content, but they cannot read the writer's draft or write the Book.
-- Before a reader selects “Try to become editor,” it should close the old writer. After acquiring the lease, it rereads the library and current Book, then checks the recovery draft again.
-- If the browser lacks Web Locks, the page is not a secure context, or lock setup fails, reading and export remain available but device editing stays disabled.
-- Different `origin` values, browser profiles, devices, and independent host processes are not coordinated by this lock.
+Recovery drafts use per-tab `sessionStorage`, surviving reloads but ending with the tab session; Books remain in `localStorage`. Copy a legacy shared draft into the current tab before removing the old key, inside write coordination. Other tabs must not overwrite or clear this page's drafts. Successful older revisions may advance persistence and draft baselines, but cannot replace newer edits.
 
-These behaviors are joined by `deviceWriterLease.ts`, `deviceLibrary.ts`, and `App.tsx`. When adding device behavior, do not replace this with polling, forced lock acquisition, shared drafts, or a bypass of the writer check. Preserve the existing HTTP save boundary for the host runtime as well.
+Coordination covers one browser storage area, not different devices or independent local-host processes.
 
 ## Code map
 
 | Entry point | Responsibility | Check first when changing it |
 | --- | --- | --- |
-| [`src/App.tsx`](../src/App.tsx) | Runtime startup, Book selection, writer/reader state, autosave, conflicts, generation, and component callbacks | Check whether the same action already has a callback and save pipeline; do not add persistence in a component |
+| [`src/App.tsx`](../src/App.tsx) | Runtime startup, Book selection, write coordination, autosave, conflicts, generation, and component callbacks | Check whether the same action already has a callback and save pipeline; do not add persistence in a component |
 | [`src/types.ts`](../src/types.ts) | Data contracts for `Book`, `Chapter`, `Section`, blocks, candidates, `SectionContextReference`, and `SectionMemory` | Check whether a new field needs normalization, import validation, export support, and support in both runtimes |
 | [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | Bookshelf, chapter/section directory, character/world lists (shared [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)), book settings, material-loading scope, and name dialogs | Check the current Chinese labels, the `canEdit` read-only gate, confirmation dialogs, `Bookshelf.onBookChange` save callbacks, and per-list drag sorting in source selection mode |
 | [`src/components/Writer.tsx`](../src/components/Writer.tsx) | Continuous manuscript view, author/character modes, block editing, candidate actions, generation input, and status messages | Check the target block for each generation action, read-only disabling, and candidate semantics |
-| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | In-place chapter and section title editing through double-click, double-tap, and keyboard input | A single pointer click on a title does not navigate; other row areas open or expand immediately. Preserve input-method handling, cancellation, save failures, and read-only protection |
+| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | In-place chapter and section title editing through double-click, double-tap, and keyboard input | A single pointer click on a title does not navigate; other row areas open or expand immediately. Preserve input-method handling, cancellation, save failures, and disabled states |
 | [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) and [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | Previous-text selection, session drafts, summary generation, and confirmation | Closing keeps unconfirmed drafts isolated by Book and section; only confirmation writes them. Existing inactive references can be explicitly retained or deselected |
 | [`src/directoryOperations.ts`](../src/directoryOperations.ts) | Directory drag sorting with stable IDs, inverse positions, and reference eligibility changes | Keep sorting in directory selection mode; do not delete and recreate entries or undo with whole-Book snapshots. Adopt a new order only after saving succeeds |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “Current context overview,” including material, reasons, and estimates | Show summaries only; do not expose raw Provider messages or hidden reasoning |
@@ -86,7 +82,7 @@ These behaviors are joined by `deviceWriterLease.ts`, `deviceLibrary.ts`, and `A
 | [`src/sectionMemory.ts`](../src/sectionMemory.ts) | Section Memory structure, content fingerprint, freshness, confirmation, previous snapshot, and rollback | An unconfirmed `model-draft` cannot support ordinary continuation; manuscript changes expire Memory |
 | [`src/bookImport.ts`](../src/bookImport.ts) and [`src/bookExport.ts`](../src/bookExport.ts) | JSON validation/normalization, new-ID imports, and EPUB/Markdown/TXT/JSON export | Imports create a copy without overwriting the current Book; validate references and candidate relationships within one Book |
 | [`src/api.ts`](../src/api.ts) | Host/device API shape, runtime split, Provider testing, and generation responses | Device generation remains Fake; do not write a temporary key to the story or `localStorage` |
-| [`src/deviceLibrary.ts`](../src/deviceLibrary.ts) and [`src/deviceWriterLease.ts`](../src/deviceWriterLease.ts) | Persisted device Books, draft boundaries, the single writer lease, and reader reads | Readers must call persisted-read paths, not writer paths that repair or seed data |
+| [`src/deviceLibrary.ts`](../src/deviceLibrary.ts) and [`src/deviceWriterLease.ts`](../src/deviceWriterLease.ts) | Persisted device Books, draft boundaries, and per-operation write coordination | All mutations must use the same write gate; plain reads and exports stay pure |
 | `server/domain.ts`, `server/store.ts`, `server/providers.ts`, `server/providerStream.ts` | Local-host Book reads/writes, version conflicts, Provider calls, and the streaming protocol | Preserve full-Book saves, the serialized save queue, key/Book separation, and real error propagation |
 | [`src/fixtures.ts`](../src/fixtures.ts) and `tests/` | Synthetic examples, legacy-data compatibility, feature contracts, and regression verification | Use neutral fake data only; do not mistake test doubles for production capability |
 
@@ -136,11 +132,11 @@ Directory drag sorting changes story order only. The six-dot handles appear in d
 
 Character-card and worldbuilding lists use selection mode for per-item six-dot drag sorting. Both lists share [`src/components/SourceList.tsx`](../src/components/SourceList.tsx); `src/sourceSelection.ts`'s `moveSourceItem` computes each move, and `Bookshelf.onBookChange` routes it through the existing Book save chain. Each handle supports mouse or touch dragging; focus it and press Arrow Up or Arrow Down to move one item at a time, and press Escape to cancel an in-progress drag. Dragging one item within its own list saves the new order automatically; grouped dragging and Undo are not supported.
 
-### Changing the device single-writer flow
+### Changing device write coordination
 
-First inspect `deviceWriterLease.ts`, `deviceLibrary.ts`, the App's startup/takeover/storage events, and `tests/device-writer-lease.test.ts` and `tests/app-device-recovery.test.tsx`. Preserve this call chain: check the secure context and Web Locks → decide writer/reader → only the writer reads drafts or enters a Book-changing path → readers only read persisted Books or export → close the old writer and explicitly select “Try to become editor” → the new writer rereads and checks the recovery draft again.
+Start with `deviceWriterLease.ts`, `deviceLibrary.ts`, the App save queue, and storage events. Every Book/index mutation must recheck its version inside the same short critical section. App callbacks must not write persisted Books again after the API returns. Drafts belong to the current tab; export has no write side effects. Do not restore page ownership, takeover controls, polling, or forced locks.
 
-Do not use the host API, polling, forced lock release, or extra dependencies to “fix” device concurrency. When a reader sees a storage update from another page, prompt for a reload rather than silently replacing the content being read.
+Cover real concurrent tabs, interleaved initialization/create/delete/import/save, same-Book conflicts, and per-tab reload recovery. Referenced directory moves must pass real disk save, JSON import, and undo. Future-position references can be stored; model context still strictly excludes current and future sections.
 
 ## Reproducing issues with synthetic data
 
@@ -151,7 +147,7 @@ Choose the scenario that matches the current issue; there is no need to cover th
 - Generation, candidate, or manuscript issues: use Fake Provider with a Book containing one chapter and two or three sections. Cover the relevant author/character mode, empty manuscript, final user-input block, multiple AI candidates, or cancellation.
 - Material or context issues: use only the current Book's character cards and world setting, then compare `contextReferences` and the visible context summary before and after confirmation.
 - Import/export issues: use a complete JSON string in memory and confirm that import creates a new ID without overwriting the original Book.
-- Device concurrency issues: use a fake lock and isolated jsdom storage to verify the relevant reader persisted read, draft isolation, writer write, or takeover reread.
+- Device concurrency issues: use isolated test storage and real browser tabs to verify concurrent writes, stale revisions, and draft isolation.
 - Provider issues: use fake responses or Fake Provider; never send a key to a real endpoint.
 
 These cases can reproduce behavior and can safely enter public tests and `issue` reports. If an issue occurs only with a real Provider or a particular browser, record the abstract capability and error shape. Do not bring credentials, complete requests, raw private logs, or a user's manuscript into the repository.
@@ -197,8 +193,8 @@ If a user asks for a new feature, find the narrowest implementation entry in cod
 
 | Symptom | Check first | Correct user explanation |
 | --- | --- | --- |
-| The device page cannot be edited | `deviceWriterLease.ts`, the App's `DeviceAccessBanner`, the secure context, and Web Locks | The page may be read-only. It can read and export; close other editor pages, then select “Try to become editor.” |
-| A change does not appear immediately | App autosave state, `updatedAt`, the save queue, and the reader's storage event | Check the status message first. On conflict, export JSON and explicitly reload; there is no automatic merge. |
+| A device save fails | Write coordinator, browser storage, and current Book revision | Keep local edits; report the actual failure and allow JSON export. Do not request editor ownership. |
+| A change does not appear immediately | App autosave state, `updatedAt`, the save queue, and storage events | Check the status message first. On conflict, export JSON and explicitly reload; there is no automatic merge. |
 | An AI answer seems to repeat the user input | The `respond-to-input` path in `generationRequests.ts` and “Generate answer” in Writer | The action under the final user block generates an answer; it does not copy that input. |
 | A changed summary does not affect generation | The confirmation flow in `ContextToolsDrawer.tsx`, Section Memory freshness, and `contextReferences` | Confirm “Save and load summary.” Closing the previous-text drawer without confirmation has no effect. |
 | Provider testing succeeds but generation fails | The `/models` test semantics, Provider implementation, and the actual `/chat/completions` response | The test proves model discovery or connectivity only, not full generation compatibility. |

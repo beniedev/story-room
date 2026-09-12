@@ -44,7 +44,7 @@ A Book consists of chapters and sections:
 3. Click outside the title on a section row to open the manuscript immediately. Click outside the title on a chapter row to expand or collapse the chapter. Each section shows a word count and an estimated token count so you can gauge its size.
 4. Double-click or double-tap a chapter or section title to rename it in place; a single pointer click on the title stays in the directory. With the title focused, Enter, Space, or F2 also starts editing.
 
-Renaming shows only an input field: click outside to save changes, or leave editing if the name is unchanged. Enter also saves; Escape restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. Read-only pages allow reading but cannot rename titles. The small arrow on each chapter changes direction when it expands or collapses.
+Renaming shows only an input field: click outside to save changes, or leave editing if the name is unchanged. Enter also saves; Escape restores the original name. Confirming a character through an input method does not submit. Blank names and failed saves show an inline message and keep your input for correction or retry. The small arrow on each chapter changes direction when it expands or collapses.
 
 The manuscript is stored and displayed as continuous fiction. User input and AI output are recorded internally as blocks, while the interface presents them as prose that can be read continuously. It does not turn the novel into chat bubbles or a group-chat timeline.
 
@@ -85,7 +85,7 @@ Each material item has a load-scope control:
 2. On the load page, select the chapters and sections that should use it. You can also choose **Select all**.
 3. Choose the confirmation icon and complete **Confirm load** in the confirmation dialog.
 
-Sections you did not select will not load the material. The load scope is part of the Book data and is saved in a JSON full backup. A browser read-only page can view saved load scopes but cannot change them.
+Sections you did not select will not load the material. The load scope is part of the Book data and is saved in a JSON full backup.
 
 ## Write in the manuscript
 
@@ -204,17 +204,11 @@ Local-host saving has transaction logs and snapshots for process interruption. T
 
 ### Multiple browser tabs
 
-In hosted/device mode, one tab in the same browser and origin serves as the editor. Other tabs show that the current page is read-only, but can view saved Books, inspect context settings, export saved content, and adjust display preferences. They do not read the editor's recovery draft and cannot edit the manuscript or Book material.
+Every tab can edit, including different Books on the same device. Library writes are automatically serialized; there is no editor ownership or takeover step. If two pages edit the same Book, the stale save is rejected and its local text stays available for export or reload. A clean page automatically displays the latest saved version.
 
-When Web Locks is supported and the page is on HTTPS or a trusted local environment, a tab automatically tries to obtain editing rights. To hand editing to another tab:
+Books persist on the device. Unsaved recovery drafts are isolated in each tab's session storage and survive a reload of that tab. Closing the tab ends its session; confirm that the Book was saved before closing, and export JSON if saving fails. A legacy shared draft is transferred into the first page that opens that Book. Other pages cannot overwrite or clear this page's draft.
 
-1. Close the original editor tab.
-2. In the read-only tab, choose **Try to become editor**.
-3. The new editor reloads the saved library and Book, then checks for a recovery draft.
-
-If another editor is still active, the page explains that the other editor is still using the library and must be closed first. If the browser lacks secure editing support, the page is not a secure context, or lock setup fails, the library can still be read and exported, but device editing stays off. There is no background polling or forced takeover.
-
-After another page saves, the reader page says that content has been updated and can be reloaded. Choose **Reload library** or **Reload current Book**. If the Book was deleted, the page keeps the content currently being read until you reload, then shows the Books that still exist.
+Coordination covers one browser storage area and origin. Refresh older tabs after upgrading. Different devices, browser profiles, and independent local hosts do not synchronize automatically.
 
 ## Current Alpha boundaries
 
@@ -271,4 +265,4 @@ The guide uses English operation names for readability. The running interface cu
 | Profile name / API Key / URL / Model ID | 方案名称 / API Key / URL / 模型 ID |
 | Max context / Max output / Test | 最大上下文 / 最大输出 / 测试 |
 | Skin / Global font / Font size | 皮肤 / 全局字体 / 字号大小 |
-| Try to become editor / Reload library / Reload current Book | 尝试成为编辑页 / 重新载入书库 / 重新载入当前书目 |
+| Reload current Book | 重新载入当前书目 |

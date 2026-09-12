@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { deviceLibrary } from '../src/deviceLibrary';
-import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
 import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
@@ -18,7 +17,6 @@ class MemoryStorage implements Storage {
 
 describe('device-local library', () => {
   let environment: ReturnType<typeof installFakeDeviceLocks>;
-  let writerLease: ReturnType<typeof createDeviceWriterLease>;
 
   beforeEach(async () => {
     Object.defineProperty(globalThis, 'localStorage', {
@@ -26,12 +24,9 @@ describe('device-local library', () => {
       value: new MemoryStorage(),
     });
     environment = installFakeDeviceLocks();
-    writerLease = createDeviceWriterLease(() => undefined);
-    await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
   });
 
   afterEach(() => {
-    writerLease.dispose();
     environment.restore();
   });
 
@@ -155,31 +150,49 @@ describe('device-local library', () => {
     expect(deltas).toEqual([result.draft]);
   });
 
-  it('keeps persisted reads pure for a reader and guards every device mutation', async () => {
-    await deviceLibrary.listBooks();
-    const persistedBefore = await deviceLibrary.listPersistedBooks();
-    const storageBefore = Array.from({ length: localStorage.length }, (_, index) => {
-      const key = localStorage.key(index)!;
-      return [key, localStorage.getItem(key)] as const;
-    });
-    try {
-      writerLease.dispose();
-      await expect(deviceLibrary.listBooks()).rejects.toThrow('不是设备书库编辑页');
-      await expect(deviceLibrary.createBook('reader')).rejects.toThrow('不是设备书库编辑页');
-      await expect(deviceLibrary.importBook(createExampleBooks()[0]!)).rejects.toThrow('不是设备书库编辑页');
-      const book = await deviceLibrary.loadPersistedBook(persistedBefore[0]!.id);
-      await expect(deviceLibrary.saveBook(book, book.updatedAt)).rejects.toThrow('不是设备书库编辑页');
-      await expect(deviceLibrary.deleteBook(book.id)).rejects.toThrow('不是设备书库编辑页');
-      await expect(deviceLibrary.listPersistedBooks()).resolves.toEqual(persistedBefore);
-      await expect(deviceLibrary.loadPersistedBook(book.id)).resolves.toEqual(book);
-      const storageAfter = Array.from({ length: localStorage.length }, (_, index) => {
-        const key = localStorage.key(index)!;
-        return [key, localStorage.getItem(key)] as const;
-      });
-      expect(storageAfter).toEqual(storageBefore);
-    } finally {
-      writerLease.dispose();
+  it('keeps persisted reads pure and does not bypass a failed write coordinator', async () => {
+    const entries = await deviceLibrary.listBooks();
+    const book = await deviceLibrary.loadBook(entries[0].id);
+    const before = JSON.stringify(Array.from({ length: localStorage.length }, (_, i) => {
+      const key = localStorage.key(i)!;
+      return [key, localStorage.getItem(key)];
+    }));
+    await deviceLibrary.listPersistedBooks();
+    await deviceLibrary.loadPersistedBook(book.id);
+    for (const write of [
+      () => deviceLibrary.listBooks(),
+      () => deviceLibrary.createBook('Synthetic'),
+      () => deviceLibrary.importBook(book),
+      () => deviceLibrary.saveBook(book, book.updatedAt),
+      () => deviceLibrary.deleteBook(book.id),
+    ]) {
+      environment.locks.rejectNext();
+      await expect(write()).rejects.toThrow('Web Locks failure');
     }
+    expect(JSON.stringify(Array.from({ length: localStorage.length }, (_, i) => {
+      const key = localStorage.key(i)!;
+      return [key, localStorage.getItem(key)];
+    }))).toBe(before);
+  });
+
+  it('serializes all mutations and checks the version after waiting', async () => {
+    await Promise.all([deviceLibrary.listBooks(), deviceLibrary.listBooks()]);
+    expect(await deviceLibrary.listBooks()).toHaveLength(3);
+    const [one, two] = await Promise.all([deviceLibrary.createBook('One'), deviceLibrary.createBook('Two')]);
+    const results = await Promise.allSettled([
+      deviceLibrary.saveBook({ ...one, title: 'First' }, one.updatedAt),
+      deviceLibrary.saveBook({ ...one, title: 'Stale' }, one.updatedAt),
+      deviceLibrary.saveBook({ ...two, title: 'Other book' }, two.updatedAt),
+      deviceLibrary.importBook(one),
+      deviceLibrary.deleteBook('the-observatory'),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled', 'fulfilled', 'fulfilled']);
+    expect(results[1]).toMatchObject({ reason: { code: 'BOOK_CONFLICT' } });
+    const entries = await deviceLibrary.listBooks();
+    expect(entries).toHaveLength(5);
+    expect(new Set(entries.map((entry) => entry.id)).size).toBe(5);
+    expect((await deviceLibrary.loadBook(one.id)).title).toBe('First');
+    expect((await deviceLibrary.loadBook(two.id)).title).toBe('Other book');
   });
 
   it('preserves an explicit empty index instead of reseeding examples', async () => {

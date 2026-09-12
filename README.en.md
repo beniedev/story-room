@@ -88,13 +88,13 @@ Before publishing a local-host save, the store records a private transaction jou
 
 </details>
 
-### Opening more than one browser tab
+### Multiple browser tabs
 
-The hosted/device runtime allows one editing tab per browser storage area and origin. A supported browser in a secure context (HTTPS or trusted localhost) uses the Web Locks API to choose that tab automatically. Additional tabs stay read-only: they can browse saved Books, inspect context, export saved content, and change display preferences. They do not read the editing tab's recovery drafts. Changes from another tab show a reload action rather than replacing the text while you are reading.
+Every tab can edit, including different Books on the same device. Library writes are automatically serialized; there is no editor ownership or takeover step. If two pages edit the same Book, the stale save is rejected and its local text stays available for export or reload. A clean page automatically displays the latest saved version.
 
-To move editing to a read-only tab, close the previous editing tab and choose the option to try becoming the editing tab. The new editing tab reloads the saved library and Book before checking recovery drafts and enabling edits. There is no background retry or forced takeover. If Web Locks are unavailable, the page is not a secure context, or lock setup fails, saved Books remain readable and exportable but device editing stays disabled. Use a supported browser and secure URL, or run the local-host mode above; local-host editing does not depend on Web Locks.
+Books persist on the device. Unsaved recovery drafts are isolated in each tab's session storage and survive a reload of that tab. Closing the tab ends its session; confirm that the Book was saved before closing, and export JSON if saving fails. A legacy shared draft is transferred into the first page that opens that Book. Other pages cannot overwrite or clear this page's draft.
 
-The `updatedAt` and draft `baseUpdatedAt` checks remain a second layer against stale saves and recovery drafts. The lock coordinates tabs running this version at the same origin; close older tabs after upgrading. It does not coordinate different origins, browser profiles, devices, or independent hosts. Browser events and `localStorage` are not a collaboration or durability system; conflict recovery remains export or reload.
+Coordination covers one browser storage area and origin. Refresh older tabs after upgrading. Different devices, browser profiles, and independent local hosts do not synchronize automatically.
 
 ### Trying another continuation
 

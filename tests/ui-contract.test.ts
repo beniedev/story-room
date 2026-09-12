@@ -500,51 +500,12 @@ describe('writing UI contract', () => {
     expect(styles).toContain('max(1rem, var(--manuscript-font-size, 16px))');
   });
 
-  it('keeps full-book cache device-only and clears legacy host caches', async () => {
+  it('keeps persisted Book writes in the device API and page drafts out of shared storage', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    const shelf = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
-    const source = `${app}\n${shelf}`;
-    const readStart = source.indexOf('const readCachedBook');
-    const cacheStart = source.indexOf('const cacheBook');
-    const removeStart = source.indexOf('const removeCachedBook');
-    const clearStart = source.indexOf('const clearHostBookCaches');
-    const newerStart = source.indexOf('const newerBook');
-    expect(readStart).toBeGreaterThanOrEqual(0);
-    expect(cacheStart).toBeGreaterThan(readStart);
-    expect(removeStart).toBeGreaterThan(cacheStart);
-    expect(clearStart).toBeGreaterThan(removeStart);
-    expect(newerStart).toBeGreaterThan(clearStart);
-
-    const readCache = source.slice(readStart, cacheStart);
-    const writeCache = source.slice(cacheStart, removeStart);
-    const removeCache = source.slice(removeStart, clearStart);
-    const clearCache = source.slice(clearStart, newerStart);
-    expect(readCache).toContain("if (api.runtime !== 'device') return null;");
-    expect(readCache).toContain('localStorage.getItem(bookCacheKey(bookId)');
-    expect(writeCache).toContain("if (api.runtime !== 'device') return false;");
-    expect(writeCache).toContain('localStorage.setItem(bookCacheKey(book.id)');
-    expect(removeCache).toContain("if (api.runtime !== 'device') return;");
-    expect(removeCache).toContain('localStorage.removeItem(bookCacheKey(bookId))');
-    expect(clearCache).toContain("if (api.runtime === 'device') return;");
-    expect(clearCache).toContain('localStorage.length');
-    expect(clearCache).toContain('key?.startsWith(bookCachePrefix)');
-    expect(clearCache).toContain('localStorage.removeItem(key)');
-    expect(source).toMatch(/useEffect\(\(\) => \{\s+clearHostBookCaches\(\);\s+\}, \[\]\);/);
-    expect(source).toContain("const cached = api.runtime === 'device' ? readCachedBook(bookId) : null;");
-    expect(source).toContain("if (api.runtime === 'device') cachedLocally = cacheCurrentDraft(candidate);");
-    expect(source).toContain('正在保存到书库…');
-    expect(source).toContain('已自动保存。');
-    expect(source).not.toContain('已自动保存到此设备，正在写入本机故事目录…');
-    expect(source).not.toContain('已自动保存到此设备和本机故事目录。');
-    expect(source).toContain('<Download aria-hidden="true" />');
-    expect(source).toContain('className="export-dialog"');
-    expect(source).toContain('EPUB 电子书');
-    expect(source).toContain('Markdown 文档');
-    expect(source).toContain('TXT 纯文字');
-    expect(source).toContain('JSON 完整备份');
-    expect(source).toContain('className="book-library-drawer"');
-    expect(source).toContain('className="book-selector-card"');
-    expect(source).not.toContain('id="book-select"');
+    expect(app).not.toContain('localStorage.setItem(bookCacheKey');
+    expect(app).not.toContain('localStorage.removeItem(bookCacheKey');
+    expect(app).toContain('sessionStorage.setItem(bookDraftKey(book.id)');
+    expect(app).toContain('const clearHostBookCaches');
   });
 
   it('keeps book creation and source management compact and understandable', async () => {

@@ -1,7 +1,7 @@
 import { createExampleBooks } from './fixtures';
 import { makeId } from './components/shared/id';
 import { buildContextPlan, toContextPlanPreview } from './contextPlan';
-import { assertDeviceWriterLease } from './deviceWriterLease';
+import { withDeviceLibraryWrite } from './deviceWriterLease';
 import {
   normalizeBook,
   serializeSectionMemoryDraft,
@@ -39,7 +39,6 @@ const readJson = <T>(key: string): T | null => {
 };
 
 const writeLibrary = (entries: BookIndexEntry[]) => {
-  assertDeviceWriterLease();
   localStorage.setItem(libraryKey, JSON.stringify(entries));
 };
 
@@ -93,7 +92,6 @@ const cachedBooks = () => {
 };
 
 const ensureLibrary = (): BookIndexEntry[] => {
-  assertDeviceWriterLease();
   const recovered = cachedBooks();
   const byId = new Map(recovered.map((book) => [book.id, book]));
   const existingValue = localStorage.getItem(libraryKey);
@@ -145,7 +143,6 @@ const loadPersistedBook = (bookId: string): Book => {
 const loadBook = loadPersistedBook;
 
 const writeBook = (book: Book, options: { expectedUpdatedAt?: string; createOnly?: boolean } = {}): Book => {
-  assertDeviceWriterLease();
   const existingValue = localStorage.getItem(bookKey(book.id));
   let previousUpdatedAt: string | undefined;
   if (options.createOnly) {
@@ -176,7 +173,6 @@ const writeBook = (book: Book, options: { expectedUpdatedAt?: string; createOnly
 };
 
 const createBook = (title: string): Book => {
-  assertDeviceWriterLease();
   let id = makeId('book');
   while (localStorage.getItem(bookKey(id))) id = makeId('book');
   return writeBook({
@@ -199,7 +195,6 @@ const createBook = (title: string): Book => {
 };
 
 const importBook = (book: Book): Book => {
-  assertDeviceWriterLease();
   let id = makeId('book');
   while (localStorage.getItem(bookKey(id))) id = makeId('book');
   return writeBook({
@@ -210,7 +205,6 @@ const importBook = (book: Book): Book => {
 };
 
 const deleteBook = (bookId: string) => {
-  assertDeviceWriterLease();
   const library = ensureLibrary();
   if (!library.some((entry) => entry.id === bookId)) throw new Error(`找不到 Book：${bookId}`);
   localStorage.removeItem(bookKey(bookId));
@@ -225,14 +219,14 @@ const fakeDraft = (mode: GenerationRequest['mode']) => (
 );
 
 export const deviceLibrary = {
-  listBooks: async () => ensureLibrary(),
+  listBooks: () => withDeviceLibraryWrite(ensureLibrary),
   listPersistedBooks: async () => listPersistedBooks(),
   loadBook: async (bookId: string) => loadPersistedBook(bookId),
   loadPersistedBook: async (bookId: string) => loadPersistedBook(bookId),
-  createBook: async (title: string) => createBook(title),
-  saveBook: async (book: Book, expectedUpdatedAt: string) => writeBook(book, { expectedUpdatedAt }),
-  importBook: async (book: Book) => importBook(book),
-  deleteBook: async (bookId: string) => deleteBook(bookId),
+  createBook: (title: string) => withDeviceLibraryWrite(() => createBook(title)),
+  saveBook: (book: Book, expectedUpdatedAt: string) => withDeviceLibraryWrite(() => writeBook(book, { expectedUpdatedAt })),
+  importBook: (book: Book) => withDeviceLibraryWrite(() => importBook(book)),
+  deleteBook: (bookId: string) => withDeviceLibraryWrite(() => deleteBook(bookId)),
   contextPlan: async (request: GenerationRequest): Promise<ContextPlanPreview> => (
     toContextPlanPreview(buildContextPlan(loadBook(request.bookId), request))
   ),

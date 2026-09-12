@@ -6,7 +6,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import App from '../src/App';
 import { makeId } from '../src/components/shared/id';
 import { deviceLibrary } from '../src/deviceLibrary';
-import { createDeviceWriterLease } from '../src/deviceWriterLease';
 import { createExampleBooks } from '../src/fixtures';
 import { createSectionMemory } from '../src/sectionMemory';
 import * as proseFormatting from '../src/proseFormatting';
@@ -481,9 +480,7 @@ describe('browser IDs without crypto.randomUUID', () => {
 
   it('creates a device-runtime Book with compatible IDs', async () => {
     const environment = installFakeDeviceLocks();
-    const writerLease = createDeviceWriterLease(() => undefined);
     try {
-      await expect(writerLease.attempt()).resolves.toEqual({ role: 'writer' });
       const created = await deviceLibrary.createBook('Fallback Book');
 
       expect(created.id).toMatch(new RegExp(`^book-${uuidPattern.source.slice(1, -1)}$`));
@@ -492,7 +489,6 @@ describe('browser IDs without crypto.randomUUID', () => {
         .toMatch(new RegExp(`^section-${uuidPattern.source.slice(1, -1)}$`));
       expect((await deviceLibrary.loadBook(created.id)).title).toBe('Fallback Book');
     } finally {
-      writerLease.dispose();
       environment.restore();
     }
   });

@@ -57,27 +57,23 @@
 | 运行方式 | 保存和生成 | 维护时要记住 |
 | --- | --- | --- |
 | `local-host`（本地服务模式） | 书目写入可读文件；内置示例服务（Fake）或配置的 OpenAI 兼容模型服务 | 模型服务密钥与书目分开保存；保存请求按版本校验并串行处理 |
-| `hosted/device`（浏览器模式） | 书目和恢复草稿保存在当前 `origin` 的浏览器存储中；生成仍使用示例服务 | 存储未加密；同一存储区域只能有一个编辑页，其他页面只能读取已保存书目 |
+| `hosted/device`（浏览器模式） | 书目保存在 localStorage，恢复草稿按标签页保存；生成仍使用示例服务 | 存储未加密；写入自动互斥，旧版本保存被拒绝 |
 
-浏览器模式的 Web Locks 只协调同一浏览器、同一 `origin` 的存储区域：
+浏览器页面始终可编辑。初始化、创建、删除、导入和保存共用 `withDeviceLibraryWrite`，在获得协调后才读取当前版本并同步写入 Book 与索引。Web Locks 可用时按操作获取并自动释放；IndexedDB 可用时也以 readwrite 事务协调，因此没有 Web Locks 的页面仍可正常保存。协调失败必须报错，不得无锁重放写入。IndexedDB 不存放书稿。
 
-- 支持安全上下文（HTTPS 或可信本地页面）且锁可用时，一个页面取得编辑租约。
-- 其他页面是只读页，可以阅读已保存书目、查看已保存上下文、调整显示设置和导出已保存内容，但不读取编辑页的草稿，也不能写入书目。
-- 只读页点“尝试成为编辑页”前应先关闭旧编辑页；取得租约后会重新读取书库和当前书目，再检查恢复草稿。
-- 浏览器不支持 Web Locks、页面不是安全上下文或锁设置失败时，仍可阅读和导出，但浏览器模式编辑保持关闭。
-- 不同 `origin`、浏览器配置文件、设备和独立的本地服务进程不由这把锁协调。
+恢复草稿使用每页独立的 `sessionStorage`，刷新可恢复，关闭标签页会结束会话；Book 仍保存在 `localStorage`。旧共享草稿在写入协调范围内先复制到当前页，成功后才移除旧键。其他标签页不能清除或覆盖本页草稿。成功保存旧 revision 时只推进已保存版本和草稿基线，不替换较新的页面编辑。
 
-这些行为分别由 `deviceWriterLease.ts`、`deviceLibrary.ts` 和 `App.tsx` 串起来。新增浏览器模式行为时，不要改成轮询、强制抢锁、共享草稿或绕过编辑页检查；本地服务模式的 HTTP 保存路径也应保持原有边界。
+以上仅协调同一浏览器存储区域，不包含跨设备同步或本地服务进程间协调。
 
 ## 代码小地图
 
 | 入口 | 负责什么 | 修改时先看 |
 | --- | --- | --- |
-| [`src/App.tsx`](../src/App.tsx) | 运行时启动、书目选择、编辑页/只读页状态、自动保存、冲突、生成和组件回调 | 是否已经有同一动作的回调和保存管线；不要在组件里另写持久化 |
+| [`src/App.tsx`](../src/App.tsx) | 运行时启动、书目选择、保存协调、自动保存、冲突、生成和组件回调 | 是否已经有同一动作的回调和保存管线；不要在组件里另写持久化 |
 | [`src/types.ts`](../src/types.ts) | `Book`、`Chapter`、`Section`、块、候选、`SectionContextReference`、`SectionMemory` 的数据契约 | 新字段是否需要规范化、导入校验、导出和两种运行时同时支持 |
-| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、角色卡/世界观列表（共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)）、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 只读门、确认对话框、`Bookshelf.onBookChange` 保存回调，以及资料多选模式下的单项列表拖动 |
-| [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、只读页禁用状态和候选语义 |
-| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 单击标题不导航，其他区域立即打开或展开；保留输入法、取消、保存失败和只读保护 |
+| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、角色卡/世界观列表（共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)）、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 就绪状态、确认对话框、`Bookshelf.onBookChange` 保存回调，以及资料多选模式下的单项列表拖动 |
+| [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、保存期间控件状态和候选语义 |
+| [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 单击标题不导航，其他区域立即打开或展开；保留输入法、取消、保存失败和禁用状态 |
 | [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) 与 [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | 前文选择、会话草稿、梗概生成及确认 | 关闭保留未确认草稿；按书目和小节隔离；确认才写入，暂时不可用的既有引用可显式保留或取消 |
 | [`src/directoryOperations.ts`](../src/directoryOperations.ts) | 整理模式下的目录拖动排序、稳定 ID、逆向位置和前文资格变化 | 拖动只在目录多选模式进行；不删除重建，不用整书快照撤销；成功保存后才采用新顺序 |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “本轮上下文概览”，展示纳入资料、原因和估算 | 只展示摘要，不泄露原始模型服务消息或隐藏推理 |
@@ -88,7 +84,7 @@
 | [`src/sectionMemory.ts`](../src/sectionMemory.ts) | `SectionMemory`（小节梗概）的结构、内容指纹、新鲜度、确认、上一快照和回滚 | `model-draft` 未确认不可用于普通续写；正文变化会使小节梗概过期 |
 | [`src/bookImport.ts`](../src/bookImport.ts) 与 [`src/bookExport.ts`](../src/bookExport.ts) | JSON 校验/规范化、新 ID 导入、EPUB/Markdown/TXT/JSON 导出 | 导入建立副本且不覆盖现有书目；校验同一书目内的引用和候选关系 |
 | [`src/api.ts`](../src/api.ts) | 本地服务模式/浏览器模式 API 形状、运行时分流、模型服务测试和生成响应 | 浏览器模式保持示例生成；不要把临时密钥写入书目数据或 `localStorage` |
-| [`src/deviceLibrary.ts`](../src/deviceLibrary.ts) 与 [`src/deviceWriterLease.ts`](../src/deviceWriterLease.ts) | 浏览器模式持久书目、草稿边界、单编辑页租约和只读读取 | 只读页只调用持久读取，不调用会修复或播种数据的编辑页入口 |
+| [`src/deviceLibrary.ts`](../src/deviceLibrary.ts) 与 [`src/deviceWriterLease.ts`](../src/deviceWriterLease.ts) | 浏览器模式持久书目、草稿边界和逐操作保存协调 | 写入共用协调入口；普通读取和导出不写书稿 |
 | `server/domain.ts`、`server/store.ts`、`server/providers.ts`、`server/providerStream.ts` | 本地服务模式的书目读写、版本冲突、模型服务调用和流式协议 | 全书目保存、串行保存队列、密钥与书目分离、真实错误不能吞掉 |
 | [`src/fixtures.ts`](../src/fixtures.ts) 与 `tests/` | 合成示例、兼容旧数据、功能契约和回归验证 | 只使用中性假数据；测试替身不能被误当成生产能力 |
 
@@ -138,11 +134,11 @@
 
 角色卡和世界观设定列表在多选模式下支持单项六点把手拖动排序。两个列表共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)；每次移动由 `src/sourceSelection.ts` 的 `moveSourceItem` 计算，再由 `Bookshelf.onBookChange` 接入原有书目保存链。把手支持鼠标或触屏拖动；聚焦后按上、下方向键可逐项移动，拖动进行中按 Esc 可取消。单项在各自列表内拖动后会自动保存新顺序；不支持整组选中内容拖动，也没有“撤销”。
 
-### 改浏览器模式单编辑页
+### 改浏览器模式保存协调
 
-先看 `deviceWriterLease.ts`、`deviceLibrary.ts`、App 的启动/接管/存储事件和 `tests/device-writer-lease.test.ts`、`tests/app-device-recovery.test.tsx`。维护时保留以下调用链：检查安全上下文和 Web Locks → 决定编辑页/只读页 → 只有编辑页才读取草稿或执行会改变书目的入口 → 只读页只读持久书目/导出 → 关闭旧编辑页后显式“尝试成为编辑页” → 新编辑页重新读取并再次检查恢复草稿。
+先看 `deviceWriterLease.ts`、`deviceLibrary.ts`、App 的保存队列和存储事件。每个 Book／索引写入入口都必须在同一个短临界区中重新检查版本；App 回调不得在返回后再次直写持久 Book。草稿只写当前标签页，导出无写入副作用。不要恢复页面独占、接管按钮、轮询或强制抢锁。
 
-不要通过本地服务 API、轮询、强制释放锁或额外依赖来“修好”浏览器模式并发。只读页看到其他页面的存储更新时，应提示重新载入，不能静默替换正在阅读的内容。
+回归应覆盖真实多标签并发写入、初始化／创建／删除／导入与保存交错、同书版本冲突及各页刷新恢复。带引用的目录移动必须经过真实磁盘保存、JSON 导入与撤销；暂时位于后方的引用可存储，模型前文仍严格排除当前和未来小节。
 
 ## 用合成数据复现问题
 
@@ -153,7 +149,7 @@
 - 生成、候选或正文问题：用示例服务建一本只有一章和两三个小节的书目，覆盖问题涉及的作者/角色模式、空正文、最后一块用户输入、多个候选或取消生成。
 - 资料和上下文问题：只使用当前书目的角色卡和世界观，检查确认前后 `contextReferences` 和可见上下文摘要的变化。
 - 导入导出问题：用完整 JSON 的内存字符串，确认导入生成新 ID 且不覆盖原书目。
-- 浏览器模式并发问题：使用模拟锁和独立的 jsdom 存储，验证问题涉及的只读页持久读取、草稿隔离、编辑页写入或接管重读。
+- 浏览器模式并发问题：使用独立测试存储与真实多标签页验证并发写入、旧版本和草稿隔离。
 - 模型服务问题：使用假的响应或示例服务；不要向真实端点发送密钥。
 
 这样得到的案例既能复现行为，也能安全放进公开测试和问题报告。若问题只在真实模型服务或特定浏览器发生，要记录抽象后的能力和错误形状，不要把凭据、完整请求、原始私密日志或用户书稿带进仓库。
@@ -199,8 +195,8 @@ git diff --check
 
 | 现象 | 先查哪里 | 正确的用户解释 |
 | --- | --- | --- |
-| 浏览器模式页面无法编辑 | `deviceWriterLease.ts`、App 的 `DeviceAccessBanner`、安全上下文和 Web Locks | 页面可能是只读；可以阅读/导出，关闭其他编辑页后点“尝试成为编辑页” |
-| 修改后没有马上出现 | App 自动保存状态、`updatedAt`、保存队列和只读页的 `storage` 事件 | 先看状态提示；冲突时导出 JSON，再显式重新载入，不自动合并 |
+| 浏览器模式保存失败 | 保存协调器、浏览器存储、当前书目版本 | 保留本页编辑，显示实际错误并允许 JSON 导出；不要求用户管理编辑权 |
+| 修改后没有马上出现 | App 自动保存状态、`updatedAt`、保存队列和`storage` 事件 | 先看状态提示；冲突时导出 JSON，再显式重新载入，不自动合并 |
 | 模型回答似乎重复用户输入 | `generationRequests.ts` 的 `respond-to-input` 路径和 Writer 的“生成回答” | 末尾用户块下的操作会生成回答，不会复制那段输入 |
 | 梗概改了但生成没变化 | `ContextToolsDrawer.tsx` 的确认流程、小节梗概新鲜度和 `contextReferences` | 先确认“保存并加载梗概”；关闭前文抽屉而不确认不会生效 |
 | 模型服务测试成功但生成失败 | `/models` 测试语义、模型服务实现和实际 `/chat/completions` 响应 | 测试只证明模型发现或连通，不证明完整生成兼容 |
