@@ -350,7 +350,10 @@ const ManuscriptBlock = memo(function ManuscriptBlock({ block, selected, onSelec
     cancelPointerGesture();
   };
 
-  const handlePointerLeave = () => {
+  const handlePointerLeave = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Touch/pen pointers leave after lifting, sometimes before the compatibility click.
+    // Keep the completed gesture and double-tap history until click consumes them.
+    if (isTouchLikePointer(event.pointerType) && !pointerGestureRef.current) return;
     cancelPointerGesture();
   };
 
