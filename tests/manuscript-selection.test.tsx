@@ -82,7 +82,7 @@ const mount = async (overrides: Partial<ComponentProps<typeof Writer>> = {}) => 
 
 const dispatchPointer = async (
   target: Element,
-  type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel',
+  type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel' | 'pointerout',
   {
     pointerId = 1,
     pointerType = 'mouse',
@@ -173,6 +173,50 @@ afterEach(async () => {
 });
 
 describe('manuscript block selection', () => {
+  it.each(['touch', 'pen'])('keeps a completed %s tap when pointerleave precedes click', async (pointerType) => {
+    const container = await mount();
+    const block = blockFor(container, 'second-block');
+    await dispatchPointer(block, 'pointerdown', { pointerType, timeStamp: 10 });
+    await dispatchPointer(block, 'pointerup', { pointerType, timeStamp: 50 });
+    await dispatchPointer(block, 'pointerout', { pointerType, timeStamp: 51 });
+    const click = await dispatchClick(block, 1);
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(groupFor(container, 'second-block').dataset.selected).toBe('true');
+    expect(container.querySelector('[aria-label="编辑所选片段"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="再生成一版：重新生成所选 AI 输出"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="删除所选片段"]')).not.toBeNull();
+  });
+
+  it.each(['mouse', 'touch', 'pen'])('still cancels a %s gesture that leaves before lifting', async (pointerType) => {
+    const container = await mount();
+    const block = blockFor(container, 'second-block');
+    await dispatchPointer(block, 'pointerdown', { pointerType, timeStamp: 10 });
+    await dispatchPointer(block, 'pointerout', { pointerType, timeStamp: 30 });
+    await dispatchPointer(block, 'pointerup', { pointerType, timeStamp: 50 });
+    await dispatchClick(block, 1);
+    expect(groupFor(container, 'second-block').dataset.selected).toBeUndefined();
+    expect(container.querySelector('.manuscript-block-actions')).toBeNull();
+  });
+
+  it('preserves native double-tap selection when touch pointerleave also follows each click', async () => {
+    const container = await mount();
+    const block = blockFor(container, 'second-block');
+    await dispatchPointer(block, 'pointerdown', { pointerType: 'touch', timeStamp: 10 });
+    await dispatchPointer(block, 'pointerup', { pointerType: 'touch', timeStamp: 50 });
+    await dispatchClick(block, 1);
+    await dispatchPointer(block, 'pointerout', { pointerType: 'touch', timeStamp: 51 });
+    expect(groupFor(container, 'second-block').dataset.selected).toBe('true');
+
+    await dispatchPointer(block, 'pointerdown', { pointerType: 'touch', timeStamp: 100 });
+    selectBlockText(block);
+    await dispatchPointer(block, 'pointerup', { pointerType: 'touch', timeStamp: 140 });
+    await dispatchPointer(block, 'pointerout', { pointerType: 'touch', timeStamp: 141 });
+    await dispatchClick(block, 2);
+    expect(groupFor(container, 'second-block').dataset.selected).toBeUndefined();
+    expect(document.getSelection()?.toString()).toBe('第二块正文。');
+  });
+
   it('selects from a short ordinary click and keeps the separate selection button keyboard reachable', async () => {
     const container = await mount();
     const block = blockFor(container);
