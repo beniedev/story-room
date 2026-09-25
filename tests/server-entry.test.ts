@@ -331,10 +331,10 @@ describe('local server entry', () => {
     }
   });
 
-  it('sends a saved section note as a final assistant prefill through the real generation path', async () => {
+  it('generates with section notes when the provider rejects a trailing assistant turn', async () => {
     const note = 'Skip the journey and write the reunion after arrival.';
     const providerRequests: Array<{ messages?: Array<{ role: string; content: string }> }> = [];
-    let rejectPrefill = false;
+    let rejectRequest = false;
     const upstream = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -344,9 +344,9 @@ describe('local server entry', () => {
         };
         providerRequests.push(payload);
         response.setHeader('content-type', 'application/json');
-        if (rejectPrefill && payload.messages?.at(-1)?.role === 'assistant') {
+        if (rejectRequest || payload.messages?.at(-1)?.role === 'assistant') {
           response.statusCode = 400;
-          response.end(JSON.stringify({ error: { message: 'Unsupported assistant prefill.' } }));
+          response.end(JSON.stringify({ error: { message: 'Unsupported request.' } }));
           return;
         }
         response.end(JSON.stringify({ choices: [{ message: { content: 'Synthetic generated prose.' } }] }));
@@ -402,11 +402,11 @@ describe('local server entry', () => {
       expect(responseBody).not.toContain(note);
 
       const messages = providerRequests[0]?.messages;
-      expect(messages?.map(({ role }) => role)).toEqual(['system', 'user', 'assistant']);
+      expect(messages?.map(({ role }) => role)).toEqual(['system', 'user', 'assistant', 'user']);
       expect(messages?.[2]).toEqual({ role: 'assistant', content: note });
       expect(messages?.filter(({ content }) => content.includes(note))).toHaveLength(1);
 
-      rejectPrefill = true;
+      rejectRequest = true;
       const rejected = await generate();
       expect(rejected.status).toBe(502);
       expect(await rejected.json()).toMatchObject({ error: 'Provider 返回 HTTP 400。' });

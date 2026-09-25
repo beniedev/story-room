@@ -32,7 +32,7 @@ const userPacketOf = (plan: ReturnType<typeof buildContextPlan>) => {
 };
 
 describe('context reference helpers', () => {
-  it('sends the saved section note as raw content in a trailing assistant message', () => {
+  it('sends the raw section note as assistant history followed by a user continuation', () => {
     const note = '  SYNTHETIC_PREFILL_NOTE first line\nsecond line  \n';
     const target = { ...section('target', 'Current prose.'), note };
     const plan = buildContextPlan(bookWithReferences([target]), {
@@ -42,8 +42,11 @@ describe('context reference helpers', () => {
     });
     const packet = userPacketOf(plan);
 
-    expect(plan.messages.map((message) => message.role)).toEqual(['system', 'user', 'assistant']);
-    expect(plan.messages.at(-1)?.content).toBe(note);
+    expect(plan.messages.map((message) => message.role)).toEqual(['system', 'user', 'assistant', 'user']);
+    expect(plan.messages.at(-2)?.content).toBe(note);
+    expect(plan.messages.at(-1)).toMatchObject({ role: 'user', content: expect.any(String), blockIds: [] });
+    expect(plan.messages.at(-1)?.content.trim()).not.toBe('');
+    expect(plan.messages.filter((message) => message.content.includes('SYNTHETIC_PREFILL_NOTE'))).toHaveLength(1);
     expect(plan.included.find((item) => item.layer === 'note')?.messageRole).toBe('assistant');
     expect(packet.blocks.some((item) => item.kind === 'note' || item.title === '小节注释')).toBe(false);
     expect(plan.messages[1]?.content).not.toContain('SYNTHETIC_PREFILL_NOTE');
@@ -82,12 +85,14 @@ describe('context reference helpers', () => {
       targetBlockId: 'target-reply',
     });
 
-    expect(continued.messages.at(-1)?.content).toBe(authorNote);
+    expect(continued.messages.at(-2)?.content).toBe(authorNote);
+    expect(continued.messages.at(-1)?.role).toBe('user');
     expect(continued.messages[1]?.content).not.toContain('SYNTHETIC_SAVED_NOTE');
     expect(continued.messages[1]?.content).not.toContain('SYNTHETIC_AUTHOR_NOTE');
     expect(blankAuthorNote.messages.map((message) => message.role)).toEqual(['system', 'user']);
     expect(blankAuthorNote.messages[1]?.content).not.toContain('SYNTHETIC_SAVED_NOTE');
-    expect(regenerated.messages.at(-1)?.content).toBe(savedNote);
+    expect(regenerated.messages.at(-2)?.content).toBe(savedNote);
+    expect(regenerated.messages.at(-1)?.role).toBe('user');
     expect(regenerated.messages[1]?.content).toContain('PREFIX_ONLY');
     expect(regenerated.messages[1]?.content).not.toContain('TARGET_TO_REPLACE');
     expect(regenerated.messages[1]?.content).not.toContain('LATER_BLOCK');
@@ -124,8 +129,8 @@ describe('context reference helpers', () => {
       targetBlockId: 'input',
     });
 
-    expect(plan.messages.map((message) => message.role)).toEqual(['system', 'user', 'assistant']);
-    expect(plan.messages.at(-1)?.content).toBe(targetNote);
+    expect(plan.messages.map((message) => message.role)).toEqual(['system', 'user', 'assistant', 'user']);
+    expect(plan.messages.at(-2)?.content).toBe(targetNote);
     expect(plan.messages[1]?.content).toContain('SYNTHETIC_TARGET_INPUT');
     expect(plan.messages.map((message) => message.content).join('\n'))
       .not.toContain('SYNTHETIC_OTHER_SECTION_NOTE');

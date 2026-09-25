@@ -459,7 +459,7 @@ describe('context plan', () => {
     expect(plan.included.some((item) => item.layer === 'note')).toBe(true);
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
     expect(packet).not.toContain('Synthetic persistent section guidance.');
-    expect(plan.messages.at(-1)).toMatchObject({
+    expect(plan.messages.at(-2)).toMatchObject({
       role: 'assistant',
       content: 'Synthetic persistent section guidance.',
     });

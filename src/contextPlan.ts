@@ -480,6 +480,10 @@ const messagesFor = (
       role: 'assistant',
       content: assistantBlocks.map((item) => item.content).join('\n\n'),
       blockIds: assistantBlocks.map((item) => item.id),
+    }, {
+      role: 'user',
+      content: '请按前述写作任务生成正文，不要复述小节注释。',
+      blockIds: [],
     });
   }
   return messages;
