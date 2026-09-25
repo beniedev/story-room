@@ -271,6 +271,7 @@ describe('App streaming generation boundaries', () => {
       await flushMicrotasks();
       await waitFor(() => apiState.getPersisted().chapters[0]?.sections[0]?.blocks
         ?.find((block) => block.content === '完整流式结果。') ?? null);
+      expect(container.querySelector('.writer-status')?.textContent).toContain('未提供明确的结束原因');
       expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({
           kind: 'assistant',
@@ -279,6 +280,43 @@ describe('App streaming generation boundaries', () => {
         }),
       ]));
       expect(container.querySelector('.streaming-draft-block')).toBeNull();
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps the provider final draft after a length-limited stream without applying it', async () => {
+    const book = makeBook();
+    const stream = makeNdjsonStream();
+    const apiState = installHostApi({ book, onGenerate: async () => stream.response });
+    const { container, root } = await renderApp(book);
+    try {
+      await enableStreaming(container);
+      const instruction = await waitFor(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '合成截断流式请求。'));
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await waitFor(() => apiState.generations[0] ?? null);
+      await act(async () => stream.push({ type: 'delta', text: '较早的流式增量。' }));
+      await flushMicrotasks();
+
+      await act(async () => {
+        stream.push({
+          type: 'result',
+          result: { draft: '服务最终返回的部分草稿。', finishReason: 'length' },
+        });
+        stream.close();
+      });
+      await waitFor(() => container.querySelector('.streaming-draft-block[data-streaming-status="failed"]'));
+
+      expect(container.querySelector('.streaming-draft-text')?.textContent).toBe('服务最终返回的部分草稿。');
+      expect(container.querySelector('.streaming-draft-block')?.textContent).toContain('输出长度上限');
+      expect([...container.querySelectorAll('button')].some((button) => button.textContent?.includes('复制临时草稿')))
+        .toBe(true);
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks).toEqual([
+        { id: 'existing-answer', kind: 'assistant', content: '原来的正文。' },
+      ]);
+      expect(apiState.saves.some((candidate) => JSON.stringify(candidate).includes('服务最终返回的部分草稿。')))
+        .toBe(false);
     } finally {
       await unmount(root);
     }
@@ -457,6 +495,72 @@ describe('App streaming generation boundaries', () => {
     }
   });
 
+  it('keeps a copyable length-limited JSON draft without saving it', async () => {
+    const book = makeBook();
+    const apiState = installHostApi({
+      book,
+      onGenerate: async () => jsonResponse({ draft: 'JSON 部分草稿。', finishReason: 'length' }),
+    });
+    const { container, root } = await renderApp(book);
+    try {
+      const instruction = await waitFor(() => container.querySelector<HTMLTextAreaElement>('#writing-instruction'));
+      await act(async () => setControlValue(instruction, '合成截断 JSON 请求。'));
+      await act(async () => container.querySelector<HTMLButtonElement>('.writer-send-button')?.click());
+      await waitFor(() => container.querySelector('.streaming-draft-block[data-streaming-status="failed"]'));
+
+      expect(apiState.generations[0]?.stream).toBe(false);
+      expect(container.querySelector('.streaming-draft-text')?.textContent).toBe('JSON 部分草稿。');
+      expect([...container.querySelectorAll('button')].some((button) => button.textContent?.includes('复制临时草稿')))
+        .toBe(true);
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks).toEqual([
+        { id: 'existing-answer', kind: 'assistant', content: '原来的正文。' },
+      ]);
+      expect(apiState.saves.some((candidate) => JSON.stringify(candidate).includes('JSON 部分草稿。')))
+        .toBe(false);
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('does not replace an existing answer when the service explicitly refuses regeneration', async () => {
+    const book = makeBook([{
+      id: 'refusal-answer',
+      kind: 'assistant',
+      content: '已采用的回答。',
+      candidates: [
+        { id: 'refusal-old', content: '旧候选。' },
+        { id: 'refusal-current', content: '已采用的回答。' },
+      ],
+      adoptedCandidateId: 'refusal-current',
+    }]);
+    const apiState = installHostApi({
+      book,
+      onGenerate: async () => jsonResponse({ draft: '服务拒绝前返回的片段。', finishReason: 'refusal' }),
+    });
+    const { container, root } = await renderApp(book);
+    try {
+      await selectBlock(container, 'refusal-answer');
+      await act(async () => container.querySelector<HTMLButtonElement>(
+        'button[aria-label="再生成一版：重新生成所选 AI 输出"]',
+      )?.click());
+      await waitFor(() => container.querySelector('.streaming-draft-block[data-streaming-status="failed"]'));
+
+      expect(container.querySelector('[data-block-id="refusal-answer"] .manuscript-block')?.textContent)
+        .toContain('已采用的回答。');
+      expect(container.querySelector('.streaming-draft-text')?.textContent).toBe('服务拒绝前返回的片段。');
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.blocks?.[0]).toMatchObject({
+        content: '已采用的回答。',
+        adoptedCandidateId: 'refusal-current',
+        candidates: [
+          { id: 'refusal-old', content: '旧候选。' },
+          { id: 'refusal-current', content: '已采用的回答。' },
+        ],
+      });
+    } finally {
+      await unmount(root);
+    }
+  });
+
   it('keeps summary generation non-streaming even when streaming output is enabled', async () => {
     const sections = [
       {
@@ -495,6 +599,54 @@ describe('App streaming generation boundaries', () => {
       await waitFor(() => apiState.generations[0] ?? null);
       expect(apiState.generations[0]).toMatchObject({ generationKind: 'summarize-section', stream: false });
       expect(container.querySelector('.streaming-draft-block')).toBeNull();
+    } finally {
+      await unmount(root);
+    }
+  });
+
+  it('keeps a truncated summary as a copyable JSON draft on the visible section without saving Memory', async () => {
+    const sections = [
+      {
+        id: 'summary-source-section',
+        title: '前文小节',
+        content: '前文正文内容。',
+      },
+      {
+        id: 'summary-visible-section',
+        title: '当前小节',
+        content: '当前正文内容。',
+      },
+    ];
+    const book = makeBook([], sections);
+    const partialJson = '{"synopsis":"未完成的合成梗概';
+    const apiState = installHostApi({
+      book,
+      onGenerate: async () => jsonResponse({ draft: partialJson, finishReason: 'length' }),
+    });
+    const { container, root } = await renderApp(book, '当前小节');
+    try {
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="选择前文"]')?.click());
+      const disclose = await waitFor(() => container.querySelector<HTMLButtonElement>('button[aria-label="展开前文小节梗概"]'));
+      await act(async () => disclose.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="生成该节梗概"]')?.click());
+      const confirm = await waitFor(() => [...container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent?.includes('确认生成')) ?? null);
+      await act(async () => confirm.click());
+      await waitFor(() => container.querySelector('.streaming-draft-block[data-streaming-status="failed"]'));
+
+      expect(apiState.generations[0]).toMatchObject({
+        sectionId: 'summary-source-section',
+        generationKind: 'summarize-section',
+        stream: false,
+      });
+      expect(container.querySelector('.streaming-draft-block')?.textContent).toContain('梗概 JSON 草稿，未保存');
+      expect(container.querySelector('.streaming-draft-block')?.textContent).toContain('「前文小节」的梗概');
+      expect(container.querySelector('.streaming-draft-text')?.textContent).toBe(partialJson);
+      expect([...container.querySelectorAll('button')].some((button) => button.textContent?.includes('复制临时草稿')))
+        .toBe(true);
+      expect(apiState.getPersisted().chapters[0]?.sections[0]?.memory).toBeUndefined();
+      expect(apiState.saves.every((candidate) => candidate.chapters[0]?.sections[0]?.memory === undefined))
+        .toBe(true);
     } finally {
       await unmount(root);
     }

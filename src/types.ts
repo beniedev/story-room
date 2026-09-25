@@ -256,7 +256,18 @@ export interface GenerationRequest {
   targetBlockId?: string;
 }
 
+export type GenerationFinishReason = 'stop' | 'length' | 'content-filter' | 'refusal' | 'unsupported' | 'unknown';
+
+const generationFinishReasons: readonly GenerationFinishReason[] = [
+  'stop', 'length', 'content-filter', 'refusal', 'unsupported', 'unknown',
+];
+
+export const isGenerationFinishReason = (value: unknown): value is GenerationFinishReason => (
+  typeof value === 'string' && generationFinishReasons.includes(value as GenerationFinishReason)
+);
+
 export interface GenerationResult {
   draft: string;
+  finishReason?: GenerationFinishReason;
   sourceSignature?: string;
 }

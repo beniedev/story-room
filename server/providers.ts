@@ -12,6 +12,11 @@ import {
 } from '../src/providerProfiles.ts';
 import type { PromptMessage, ProviderLimits } from '../src/types.ts';
 import { readProviderSse, ProviderStreamProtocolError } from './providerStream.ts';
+import {
+  finishReasonAllowsEmptyDraft,
+  mapProviderFinishReason,
+  type ProviderGenerationResult,
+} from './providerResult.ts';
 
 type StoredProviderProfile = ProviderProfile & {
   apiKey?: string;
@@ -378,7 +383,7 @@ export class ProviderStore {
     messages: PromptMessage[],
     externalSignal?: AbortSignal,
     options: ProviderGenerationOptions = {},
-  ): Promise<string | null> {
+  ): Promise<ProviderGenerationResult | null> {
     const profile = await this.resolve(profileId);
     if (externalSignal?.aborted) throw new ProviderCancelledError();
     if (profile.kind === 'fake') return null;
@@ -439,7 +444,10 @@ export class ProviderStore {
       }
 
       let payload: {
-        choices?: Array<{ message?: { content?: unknown } }>;
+        choices?: Array<{
+          finish_reason?: unknown;
+          message?: { content?: unknown; refusal?: unknown };
+        }>;
       };
       try {
         payload = await readProviderJson(response) as typeof payload;
@@ -448,21 +456,23 @@ export class ProviderStore {
         throw error;
       }
       if (signal.aborted) throw new ProviderCancelledError();
-      const content = payload.choices?.[0]?.message?.content;
+      const choice = payload.choices?.[0];
+      const message = choice?.message;
+      const finishReason = mapProviderFinishReason(choice?.finish_reason, message?.refusal);
+      const content = message?.content;
+      let draft = '';
       if (typeof content === 'string' && content.trim()) {
-        if (stream) options.onDelta?.(content);
-        return content.trim();
-      }
-      if (Array.isArray(content)) {
-        const joined = content.map((item) => (
+        draft = content.trim();
+      } else if (Array.isArray(content)) {
+        draft = content.map((item) => (
           item && typeof item === 'object' && 'text' in item && typeof item.text === 'string' ? item.text : ''
         )).join('').trim();
-        if (joined) {
-          if (stream) options.onDelta?.(joined);
-          return joined;
-        }
       }
-      throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
+      if (!draft && !finishReasonAllowsEmptyDraft(finishReason)) {
+        throw new ProviderConnectionError('Provider 没有返回可写入正文的文本。');
+      }
+      if (stream && draft) options.onDelta?.(draft);
+      return { draft, finishReason };
     } catch (error) {
       if (signal.aborted) throw new ProviderCancelledError();
       if (error instanceof ProviderInputError || error instanceof ProviderConnectionError) throw error;

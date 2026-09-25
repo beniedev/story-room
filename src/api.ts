@@ -5,6 +5,7 @@ import type {
   GenerationRequest,
   GenerationResult,
 } from './types';
+import { isGenerationFinishReason } from './types';
 import { deviceLibrary } from './deviceLibrary';
 import {
   isValidProviderLimit,
@@ -88,13 +89,22 @@ const parseGenerationStreamLine = (
   if (record.type !== 'result' || !record.result || typeof record.result !== 'object') {
     throw new Error('本地书库返回了无效的流式事件。');
   }
-  const result = record.result as Record<string, unknown>;
+  return parseGenerationResult(record.result);
+};
+
+const parseGenerationResult = (value: unknown): GenerationResult => {
+  if (!value || typeof value !== 'object') throw new Error('本地书库返回了无效的生成结果。');
+  const result = value as Record<string, unknown>;
   if (typeof result.draft !== 'string') throw new Error('本地书库返回了无效的生成结果。');
   if (result.sourceSignature !== undefined && typeof result.sourceSignature !== 'string') {
     throw new Error('本地书库返回了无效的生成结果。');
   }
+  if (result.finishReason !== undefined && !isGenerationFinishReason(result.finishReason)) {
+    throw new Error('本地书库返回了无效的生成结果。');
+  }
   return {
     draft: result.draft,
+    finishReason: isGenerationFinishReason(result.finishReason) ? result.finishReason : 'unknown',
     ...(result.sourceSignature === undefined ? {} : { sourceSignature: result.sourceSignature }),
   };
 };
@@ -243,14 +253,14 @@ const hostApi = {
     method: 'POST',
     body: JSON.stringify(body),
   }),
-  generate: (body: GenerationRequest, signal?: AbortSignal, onDelta?: (delta: string) => void) => (
+  generate: async (body: GenerationRequest, signal?: AbortSignal, onDelta?: (delta: string) => void) => (
     body.stream
       ? streamRequest(body, signal, onDelta)
-      : request<GenerationResult>('/api/generate', {
+      : parseGenerationResult(await request<unknown>('/api/generate', {
           method: 'POST',
           body: JSON.stringify(body),
           signal,
-        })
+        }))
   ),
   listProviderProfiles: () => request<ProviderProfile[]>('/api/providers'),
   saveProviderProfile: (profile: ProviderProfile, apiKey?: string) => request<ProviderProfile>('/api/providers', {

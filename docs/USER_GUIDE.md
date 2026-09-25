@@ -145,6 +145,8 @@ Open **Settings**, then under **Generation** enable **Streaming output**. It is 
 - A notice says that the text is being generated incrementally and has not been written to the manuscript.
 - After choosing **Cancel generation**, the draft is not written to the Book. The page temporarily keeps the text so you can choose whether to copy it.
 - A failed generation also does not write incomplete text to the manuscript. Starting another generation or reloading the page replaces or clears this temporary preview.
+- If a service reports a length limit, content filter, refusal, or unsupported response, Story Room does not apply that text to the manuscript, replace an answer candidate, or save it as a section summary. The returned text stays in the copyable temporary preview even when streaming is off; summary text is labeled as an unsaved JSON draft.
+- If the service omits an explicit finish reason, Story Room follows its usual result flow and notes that the service did not provide one. Whether a finish reason is reported depends on the service.
 - A generated summary appears all at once when complete, ready for you to review and confirm.
 
 Cancellation only stops Story Room from applying a late result to the manuscript. A request already sent to your configured service may still be recorded or processed by that service.

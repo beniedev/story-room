@@ -75,6 +75,7 @@ import type {
   Book,
   BookIndexEntry,
   ContextPlan,
+  GenerationFinishReason,
   GenerationMode,
   GenerationRequest,
   SectionBlock,
@@ -134,6 +135,34 @@ const abortGenerationError = () => {
   }
 };
 const staleSaveError = () => new Error('保存期间正文已变化，请稍后重试。');
+const isUnsuccessfulFinishReason = (reason: GenerationFinishReason) => (
+  reason === 'length'
+  || reason === 'content-filter'
+  || reason === 'refusal'
+  || reason === 'unsupported'
+);
+const finishReasonDescription = (reason: GenerationFinishReason) => {
+  switch (reason) {
+    case 'length': return '服务因输出长度上限结束了生成';
+    case 'content-filter': return '服务的内容筛选未允许完整结果';
+    case 'refusal': return '服务明确拒绝了本次生成';
+    case 'unsupported': return '服务返回了应用当前不支持的结束类型';
+    default: return '';
+  }
+};
+const finishReasonSuccessStatus = (message: string, reason: GenerationFinishReason) => (
+  reason === 'unknown' ? `${message} 模型服务未提供明确的结束原因。` : message
+);
+const unsuccessfulFinishMessage = (
+  reason: GenerationFinishReason,
+  isSummary: boolean,
+  sourceSectionTitle?: string,
+) => {
+  const description = finishReasonDescription(reason);
+  return isSummary
+    ? `${sourceSectionTitle ? `「${sourceSectionTitle}」的` : '所选前文的'}梗概 JSON 草稿，未保存。${description}；可复制草稿后检查。`
+    : `生成未完成：${description}；正文和候选未修改，草稿可复制。`;
+};
 const isBookConflictError = (error: unknown) => error instanceof BookConflictError
   || (error instanceof Error && (error.name === 'BookConflictError' || error.name === 'DeviceBookConflictError'))
   || (typeof error === 'object' && error !== null
@@ -1109,6 +1138,13 @@ function App() {
   const runGeneration = async (request: GenerationRequest, label: string) => {
     if (generationAbort.current) throw new Error('已有生成正在进行，请先完成或取消当前生成。');
     const controller = new AbortController();
+    const visibleSelection = selectionRef.current;
+    const visibleBookId = bookRef.current?.id ?? request.bookId;
+    const requestBookSession = bookSessionRef.current;
+    const sourceSectionTitle = request.generationKind === 'summarize-section'
+      ? bookRef.current?.chapters.flatMap((chapter) => chapter.sections)
+        .find((item) => item.id === request.sectionId)?.title
+      : undefined;
     const target = {
       bookId: request.bookId,
       sectionId: request.sectionId,
@@ -1128,9 +1164,32 @@ function App() {
       );
       if (controller.signal.aborted
         || generationAbort.current !== controller
-        || generationTarget.current !== target) throw abortGenerationError();
+        || generationTarget.current !== target
+        || bookRef.current?.id !== visibleBookId
+        || bookSessionRef.current !== requestBookSession
+        || selectionRef.current.sectionId !== visibleSelection.sectionId
+        || selectionRef.current.view !== visibleSelection.view) throw abortGenerationError();
+      const finishReason = result.finishReason ?? 'unknown';
+      if (isUnsuccessfulFinishReason(finishReason)) {
+        const isSummary = request.generationKind === 'summarize-section';
+        const message = unsuccessfulFinishMessage(finishReason, isSummary, sourceSectionTitle);
+        cancelStreamingFrame();
+        streamingControllerRef.current = null;
+        streamingPending.current = null;
+        setStreamingDraftState({
+          key: `${request.bookId}:${visibleSelection.sectionId}:${request.targetBlockId ?? 'section'}`,
+          bookId: visibleBookId,
+          sectionId: visibleSelection.sectionId,
+          ...(request.targetBlockId ? { targetBlockId: request.targetBlockId } : {}),
+          replaceTarget: request.generationKind === 'regenerate-block',
+          content: result.draft,
+          status: 'failed',
+          message,
+        });
+        throw new Error(message);
+      }
       if (request.stream) clearStreamingDraft(controller);
-      return result;
+      return { ...result, finishReason };
     } catch (error) {
       if (request.stream && streamingControllerRef.current === controller) {
         finishStreamingDraft(controller, isAbortError(error) ? 'stopped' : 'failed');
@@ -1222,7 +1281,7 @@ function App() {
       }
       finalizePreviousAnswerCandidates(savedResponse, targetSectionId, inputBlockId);
     }
-    setStatus('续写已加入当前小节。');
+    setStatus(finishReasonSuccessStatus('续写已加入当前小节。', result.finishReason ?? 'unknown'));
   });
 
   const updateSectionNote = (value: string) => {
@@ -1403,7 +1462,7 @@ function App() {
         return;
       }
       finalizePreviousAnswerCandidates(savedResponse, targetSectionId, blockId);
-      setStatus('已生成回答并加入正文。');
+      setStatus(finishReasonSuccessStatus('已生成回答并加入正文。', result.finishReason ?? 'unknown'));
     });
   };
 
@@ -1492,7 +1551,7 @@ function App() {
           return;
         }
       }
-      setStatus('已生成新的回答，并已切换到当前版本。');
+      setStatus(finishReasonSuccessStatus('已生成新的回答，并已切换到当前版本。', result.finishReason ?? 'unknown'));
     });
   };
 
@@ -1843,7 +1902,7 @@ function App() {
       } satisfies GenerationRequest;
       const result = await runGeneration(generation, '正在生成前文梗概…');
       const draft = parseSectionMemoryDraft(result.draft);
-      setStatus(`已生成「${source.section.title}」的梗概草稿，请确认保存。`);
+      setStatus(finishReasonSuccessStatus(`已生成「${source.section.title}」的梗概草稿，请确认保存。`, result.finishReason ?? 'unknown'));
       return draft;
     } catch (error) {
       setStatus(isAbortError(error)

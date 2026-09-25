@@ -1,3 +1,12 @@
+import type { GenerationFinishReason } from '../src/types.ts';
+import {
+  finishReasonAllowsEmptyDraft,
+  hasExplicitRefusal,
+  mapProviderFinishReason,
+  preserveFailureFinishReason,
+  type ProviderGenerationResult,
+} from './providerResult.ts';
+
 export class ProviderStreamProtocolError extends Error {
   constructor(message = 'Provider 流式响应无效。') {
     super(message);
@@ -7,7 +16,7 @@ export class ProviderStreamProtocolError extends Error {
 
 type StreamChoice = {
   index?: unknown;
-  delta?: { content?: unknown };
+  delta?: { content?: unknown; refusal?: unknown };
   finish_reason?: unknown;
 };
 
@@ -39,7 +48,7 @@ export const readProviderSse = async (
   response: Response,
   signal: AbortSignal,
   onDelta?: DeltaSink,
-): Promise<string> => {
+): Promise<ProviderGenerationResult> => {
   const body = response.body;
   if (!body) throw new ProviderStreamProtocolError();
 
@@ -49,6 +58,7 @@ export const readProviderSse = async (
   let buffer = '';
   let dataLines: string[] = [];
   let output = '';
+  let finishReason: GenerationFinishReason = 'unknown';
   let sawDone = false;
   let sawFinish = false;
   let cancelledByAbort = false;
@@ -77,6 +87,10 @@ export const readProviderSse = async (
           choice && typeof choice === 'object' && (choice as StreamChoice).index === 0
         )) as StreamChoice | undefined;
     if (!typedChoice) return;
+    const refusal = typedChoice.delta?.refusal;
+    if (hasExplicitRefusal(refusal)) {
+      finishReason = preserveFailureFinishReason(finishReason, 'refusal');
+    }
     const content = typedChoice.delta?.content;
     if (typeof content === 'string') {
       output += content;
@@ -84,6 +98,10 @@ export const readProviderSse = async (
     }
     if (typeof typedChoice.finish_reason === 'string' && typedChoice.finish_reason.trim()) {
       sawFinish = true;
+      finishReason = preserveFailureFinishReason(
+        finishReason,
+        mapProviderFinishReason(typedChoice.finish_reason, refusal),
+      );
     }
   };
 
@@ -147,9 +165,12 @@ export const readProviderSse = async (
       processEvent();
     }
     if (!sawDone && !sawFinish) throw new ProviderStreamProtocolError('Provider 流式响应未正常结束。');
-    if (!output.trim()) throw new ProviderStreamProtocolError('Provider 没有返回可写入正文的文本。');
+    const draft = output.trim();
+    if (!draft && !finishReasonAllowsEmptyDraft(finishReason)) {
+      throw new ProviderStreamProtocolError('Provider 没有返回可写入正文的文本。');
+    }
     completed = true;
-    return output.trim();
+    return { draft, finishReason };
   } finally {
     signal.removeEventListener('abort', abortReader);
     if (sawDone || !completed) {

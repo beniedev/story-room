@@ -675,11 +675,12 @@ describe('App generation save and cancellation boundaries', () => {
 
   it('does not append a result after cancellation or a pre-generation save failure', async () => {
     const book = makeBook([{ id: 'answer-block', kind: 'assistant', content: '已有正文。' }]);
+    const lateGeneration = deferred<Response>();
     const apiState = installHostApi({
       book,
-      onGenerate: async (_request, signal) => new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
-      }),
+      // This fake deliberately ignores AbortSignal and resolves after cancel,
+      // so the App's late-result guard—not fetch cancellation—must reject it.
+      onGenerate: async () => lateGeneration.promise,
     });
     const { container, root } = await renderApp(book);
     let rootUnmounted = false;
@@ -690,7 +691,11 @@ describe('App generation save and cancellation boundaries', () => {
       await waitForElement(() => container.querySelector<HTMLButtonElement>('.writer-cancel-button'));
       await act(async () => container.querySelector<HTMLButtonElement>('.writer-cancel-button')?.click());
       await flushMicrotasks();
+      lateGeneration.resolve(jsonResponse({ draft: '取消后的迟到截断草稿。', finishReason: 'length' }));
+      await flushMicrotasks();
       expect(container.querySelector('.manuscript')?.textContent).not.toContain('合成生成结果。');
+      expect(container.querySelector('.manuscript')?.textContent).not.toContain('取消后的迟到截断草稿。');
+      expect(container.querySelector('.streaming-draft-block')).toBeNull();
       expect(instruction?.value).toBe('可取消的续写。');
 
       await unmount(root);

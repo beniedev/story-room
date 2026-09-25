@@ -144,7 +144,7 @@ describe('local provider store', () => {
         { role: 'user' as const, content: JSON.stringify({ target: 'synthetic-target', text: '继续写' }), blockIds: ['user:block'] },
         { role: 'assistant' as const, content: 'Write the reunion after arrival.', blockIds: ['section-a:note'] },
       ];
-      expect(await store.generate(profile.id, messages)).toBe('续写正文');
+      expect(await store.generate(profile.id, messages)).toEqual({ draft: '续写正文', finishReason: 'unknown' });
       expect(requests.map(({ url, authorization }) => ({ url, authorization }))).toEqual([
         { url: '/v1/models', authorization: 'Bearer private-test-key' },
         { url: '/v1/chat/completions', authorization: 'Bearer private-test-key' },
@@ -184,6 +184,47 @@ describe('local provider store', () => {
 
     await expect(pending).rejects.toBeInstanceOf(ProviderCancelledError);
     expect(providerSignal.aborted).toBe(true);
+  });
+
+  it('maps JSON finish reasons and only uses explicit refusal fields', async () => {
+    let choice: Record<string, unknown> = {};
+    const { baseUrl } = await startServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ choices: [choice] }));
+    });
+    const store = await makeStore();
+    const profile = profileAt(baseUrl);
+    await store.save(profile, 'synthetic-json-reason-key');
+    const generate = async (nextChoice: Record<string, unknown>) => {
+      choice = nextChoice;
+      return store.generate(profile.id, [{ role: 'user', content: 'Synthetic request.', blockIds: [] }]);
+    };
+
+    await expect(generate({ message: { content: 'Normal completed prose.' }, finish_reason: 'stop' }))
+      .resolves.toEqual({ draft: 'Normal completed prose.', finishReason: 'stop' });
+    await expect(generate({ message: { content: 'Legacy provider prose.' } }))
+      .resolves.toEqual({ draft: 'Legacy provider prose.', finishReason: 'unknown' });
+    await expect(generate({ message: { content: 'Unknown reason prose.' }, finish_reason: 'synthetic_new_reason' }))
+      .resolves.toEqual({ draft: 'Unknown reason prose.', finishReason: 'unknown' });
+    await expect(generate({ message: { content: '' }, finish_reason: 'length' }))
+      .resolves.toEqual({ draft: '', finishReason: 'length' });
+    await expect(generate({ message: { content: null }, finish_reason: 'content_filter' }))
+      .resolves.toEqual({ draft: '', finishReason: 'content-filter' });
+    await expect(generate({ message: { refusal: 'Synthetic explicit refusal details' }, finish_reason: 'stop' }))
+      .resolves.toEqual({ draft: '', finishReason: 'refusal' });
+    await expect(generate({ message: { content: 'The character refused the invitation, then continued the scene.' }, finish_reason: 'stop' }))
+      .resolves.toEqual({
+        draft: 'The character refused the invitation, then continued the scene.',
+        finishReason: 'stop',
+      });
+    await expect(generate({ message: { content: null }, finish_reason: 'tool_calls' }))
+      .resolves.toEqual({ draft: '', finishReason: 'unsupported' });
+    await expect(generate({ message: { content: null }, finish_reason: 'function_call' }))
+      .resolves.toEqual({ draft: '', finishReason: 'unsupported' });
+    await expect(generate({ message: { content: '' }, finish_reason: 'stop' }))
+      .rejects.toThrow('没有返回可写入正文的文本');
+    await expect(generate({ message: { content: '' }, finish_reason: 'synthetic_new_reason' }))
+      .rejects.toThrow('没有返回可写入正文的文本');
   });
 
   it('lets long generations continue until the caller cancels', async () => {
@@ -408,6 +449,6 @@ describe('local provider store', () => {
     await store.save(profile, 'synthetic-test-key');
     await expect(store.test(profile)).resolves.toEqual({ ok: true, modelId: 'test-model' });
     await expect(store.generate(profile.id, [{ role: 'user', content: 'Continue.', blockIds: [] }]))
-      .resolves.toBe(content);
+      .resolves.toEqual({ draft: content, finishReason: 'unknown' });
   });
 });

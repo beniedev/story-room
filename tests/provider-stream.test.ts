@@ -81,7 +81,7 @@ describe('OpenAI-compatible provider streaming', () => {
     await expect(store.generate(profile.id, messages, undefined, {
       stream: true,
       onDelta: (delta) => deltas.push(delta),
-    })).resolves.toBe('苹果');
+    })).resolves.toEqual({ draft: '苹果', finishReason: 'stop' });
 
     expect(deltas).toEqual(['苹', '果']);
     const request = fetchMock.mock.calls[0]?.[1];
@@ -99,7 +99,7 @@ describe('OpenAI-compatible provider streaming', () => {
     await expect(store.generate(profile.id, messages, undefined, {
       stream: true,
       onDelta: (delta) => deltas.push(delta),
-    })).resolves.toBe('一次兼容结果');
+    })).resolves.toEqual({ draft: '一次兼容结果', finishReason: 'unknown' });
 
     expect(deltas).toEqual(['一次兼容结果']);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -131,13 +131,84 @@ describe('OpenAI-compatible provider streaming', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(responseFromChunks(utf8Chunks(
       'data: {"choices":[{"index":0,"delta":{"content":"完成"},"finish_reason":"stop"}]}\n\n',
     )));
-    await expect(store.generate(profile.id, messages, undefined, { stream: true })).resolves.toBe('完成');
+    await expect(store.generate(profile.id, messages, undefined, { stream: true }))
+      .resolves.toEqual({ draft: '完成', finishReason: 'stop' });
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(responseFromChunks(utf8Chunks(
       'data: {"choices":[{"index":0,"delta":{"content":"半成"},"finish_reason":{"value":"stop"}}]}\n\n',
     )));
     await expect(store.generate(profile.id, messages, undefined, { stream: true }))
       .rejects.toThrow('未正常结束');
+  });
+
+  it('keeps explicit failure reasons through later stop and DONE frames', async () => {
+    const store = await makeStore();
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    fetchMock.mockResolvedValueOnce(responseFromChunks(utf8Chunks(
+      'data: {"choices":[{"index":0,"delta":{"content":"The character refused the invitation."}}]}\n\n'
+        + 'data: [DONE]\n\n',
+    )));
+    await expect(store.generate(profile.id, messages, undefined, { stream: true }))
+      .resolves.toEqual({
+        draft: 'The character refused the invitation.',
+        finishReason: 'unknown',
+      });
+
+    const cases = [
+      {
+        frame: 'data: {"choices":[{"index":0,"delta":{"content":"SYNTHETIC_PARTIAL"},"finish_reason":"length"}]}\n\n',
+        finishReason: 'length',
+        draft: 'SYNTHETIC_PARTIAL',
+      },
+      {
+        frame: 'data: {"choices":[{"index":0,"delta":{"content":null},"finish_reason":"content_filter"}]}\n\n',
+        finishReason: 'content-filter',
+        draft: '',
+      },
+      {
+        frame: 'data: {"choices":[{"index":0,"delta":{"refusal":"Synthetic explicit refusal details"}}]}\n\n',
+        finishReason: 'refusal',
+        draft: '',
+      },
+      {
+        frame: 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        finishReason: 'unsupported',
+        draft: '',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      fetchMock.mockResolvedValueOnce(responseFromChunks(utf8Chunks(
+        testCase.frame
+          + 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+          + 'data: [DONE]\n\n',
+      )));
+      const deltas: string[] = [];
+      await expect(store.generate(profile.id, messages, undefined, {
+        stream: true,
+        onDelta: (delta) => deltas.push(delta),
+      }))
+        .resolves.toEqual({ draft: testCase.draft, finishReason: testCase.finishReason });
+      expect(deltas).toEqual(testCase.draft ? [testCase.draft] : []);
+    }
+  });
+
+  it('maps an unrecognized streamed finish reason to unknown and requires text', async () => {
+    const store = await makeStore();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(responseFromChunks(utf8Chunks(
+      'data: {"choices":[{"index":0,"delta":{"content":"Synthetic unknown-reason prose."},"finish_reason":"synthetic_new_reason"}]}\n\n'
+        + 'data: [DONE]\n\n',
+    )));
+    await expect(store.generate(profile.id, messages, undefined, { stream: true }))
+      .resolves.toEqual({ draft: 'Synthetic unknown-reason prose.', finishReason: 'unknown' });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(responseFromChunks(utf8Chunks(
+      'data: {"choices":[{"index":0,"delta":{"content":null},"finish_reason":"synthetic_new_reason"}]}\n\n'
+        + 'data: [DONE]\n\n',
+    )));
+    await expect(store.generate(profile.id, messages, undefined, { stream: true }))
+      .rejects.toThrow('没有返回可写入正文的文本');
   });
 
   it('cancels an upstream body after receiving [DONE]', async () => {
@@ -161,7 +232,8 @@ describe('OpenAI-compatible provider streaming', () => {
     }));
     const store = await makeStore();
 
-    await expect(store.generate(profile.id, messages, undefined, { stream: true })).resolves.toBe('结束');
+    await expect(store.generate(profile.id, messages, undefined, { stream: true }))
+      .resolves.toEqual({ draft: '结束', finishReason: 'unknown' });
     expect(canceled).toBe(true);
   });
 
@@ -191,7 +263,8 @@ describe('OpenAI-compatible provider streaming', () => {
     }), { headers: { 'content-type': 'application/json' } }));
     const store = await makeStore();
 
-    await expect(store.generate(profile.id, messages)).resolves.toBe('非流式结果');
+    await expect(store.generate(profile.id, messages))
+      .resolves.toEqual({ draft: '非流式结果', finishReason: 'unknown' });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('stream');
   });
 });

@@ -171,6 +171,8 @@ npm ci
 
 变更资料加载时，要保持这些事实：剧情大纲是未来指导；`continue-section` 请求优先使用 `authorNote`，其他正文生成请求使用当前 `section.note`；非空小节注释以原文作为末尾 assistant 消息发送，空白注释不发送；应用不会把注释写入正文块或自动拼到生成结果后面；小节梗概需要新鲜且已确认；用户没有确认的前文选择不能写入书目。作者模式和角色模式都应经过同一保存、上下文、模型服务和应用结果管线。
 
+生成结果可以带 `finishReason`。`stop` 按正常流程应用；`length`、`content-filter`、`refusal` 和 `unsupported` 对应的草稿应可复制，但不能应用到正文、替换候选或保存为梗概。缺失或 `unknown` 按普通结果流程应用，并提示服务没有提供明确结束原因。只根据结构化字段判断，不从草稿措辞猜测；迟到结果仍须检查请求目标和 Book 会话。
+
 ### 改模型服务或 API 密钥
 
 入口通常是 `src/providerProfiles.ts`、`src/api.ts`、`src/components/ProviderSettings.tsx` 和 `server/providers.ts`。先区分本地服务模式与浏览器模式：
@@ -276,6 +278,6 @@ git diff --check
 
 本地模型密钥文件按明文处理；POSIX 写入权限为 `0600`，Windows 文件权限不能视为等价凭据存储。改变已保存连接的 `endpoint` 或 `kind` 需要重新输入密钥。HTTP/HTTPS 的用户配置服务可位于公网、回环、局域网或私有网络；元数据地址、链路本地地址和重定向仍被拒绝。
 
-`POST /api/context-plan` 返回紧凑预览；`POST /api/generate` 返回草稿和候选来源签名，不回显内部消息。生成请求可指定布尔值 `stream`：开启后响应为 `application/x-ndjson`，按行发送 `{"type":"delta","text":"…"}`，最后发送带普通结果的 `{"type":"result","result":{…}}`，或带错误信息的 `{"type":"error","error":"…"}`。只有最终 `result` 表示生成完成；中途断开不是完整答案。未启用流式时仍返回 JSON。小节梗概等待完整结构化结果，不使用正文的流式显示。
+`POST /api/context-plan` 返回紧凑预览；`POST /api/generate` 返回草稿、可选的 `finishReason` 和候选来源签名，不回显内部消息。生成请求可指定布尔值 `stream`：开启后响应为 `application/x-ndjson`，按行发送 `{"type":"delta","text":"…"}`，最后发送带普通结果的 `{"type":"result","result":{…}}`，或带错误信息的 `{"type":"error","error":"…"}`。最终 `result` 表示生成响应结束；草稿是否可以应用由 `finishReason` 判断，中途断流不算完整响应。未启用流式时仍返回 JSON。小节梗概等待完整结构化结果，不使用正文的流式显示。
 
 保存仍传输、校验整个 Book，并使用 `updatedAt` 比较已保存版本。相同版本的重复保存复用结果；本地服务跳过内容未变化的来源和正文文件重写。应用不为正文、候选、请求或响应设置武断上限，大书仍需要更多内存和 I/O。模型上下文与输出设置接受正的安全整数，实际可用范围取决于服务；上下文估算是提示，不会阻止生成。[增量保存 API](INCREMENTAL_SAVE.md) 尚未实现。

@@ -370,8 +370,10 @@ export const createStoryServer = (
           if (generated !== null) {
             const result = {
               draft: body.generationKind === 'summarize-section'
-                ? normalizeSectionMemoryResponse(generated)
-                : generated,
+                && (generated.finishReason === 'stop' || generated.finishReason === 'unknown')
+                ? normalizeSectionMemoryResponse(generated.draft)
+                : generated.draft,
+              finishReason: generated.finishReason,
               sourceSignature: plan.sourceSignature,
             };
             if (streamingGeneration) {
@@ -386,6 +388,7 @@ export const createStoryServer = (
           const fake = fakeGenerate(book, body, limits, plan);
           const result = {
             draft: fake.draft,
+            finishReason: 'stop',
             sourceSignature: fake.sourceSignature,
           };
           if (streamingGeneration) {

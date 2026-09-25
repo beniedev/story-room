@@ -299,7 +299,7 @@ describe('local server entry', () => {
         expect(messages).toHaveLength(2);
         expect(messages.map((message) => (message as { role: string }).role)).toEqual(['system', 'user']);
         expect(JSON.stringify(messages)).toContain('Existing text.');
-        return 'Synthetic generated text.';
+        return { draft: 'Synthetic generated text.', finishReason: 'stop' };
       }),
     };
     const server = createStoryServer(storyStore as never, providerStore as never);
@@ -474,8 +474,8 @@ describe('local server entry', () => {
     const providerStore = {
       getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
       generate: vi.fn()
-        .mockResolvedValueOnce(validDraft)
-        .mockResolvedValueOnce('{"synopsis":"not enough"}'),
+        .mockResolvedValueOnce({ draft: validDraft, finishReason: 'stop' })
+        .mockResolvedValueOnce({ draft: '{"synopsis":"not enough"}', finishReason: 'stop' }),
     };
     const server = createStoryServer(storyStore as never, providerStore as never);
 

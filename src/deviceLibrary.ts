@@ -241,6 +241,7 @@ export const deviceLibrary = {
       draft: request.generationKind === 'summarize-section'
         ? serializeSectionMemoryDraft(syntheticSectionMemoryDraft())
         : fakeDraft(request.mode),
+      finishReason: 'stop' as const,
       sourceSignature: plan.sourceSignature,
     };
     if (request.stream) {

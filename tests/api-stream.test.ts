@@ -30,13 +30,14 @@ describe('host generation stream client', () => {
   it('delivers delta callbacks across UTF-8 and line boundaries and returns only final result', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => responseFromChunks([
       '{"type":"delta","text":"苹',
-      '果"}\n{"type":"result","result":{"draft":"苹果","sourceSignature":"synthetic-signature"}}\n',
+      '果"}\n{"type":"result","result":{"draft":"苹果","finishReason":"stop","sourceSignature":"synthetic-signature"}}\n',
     ]));
     vi.stubGlobal('fetch', fetchMock);
     const deltas: string[] = [];
 
     await expect(api.generate(request, undefined, (delta) => deltas.push(delta))).resolves.toEqual({
       draft: '苹果',
+      finishReason: 'stop',
       sourceSignature: 'synthetic-signature',
     });
     expect(deltas).toEqual(['苹果']);
@@ -51,7 +52,7 @@ describe('host generation stream client', () => {
         if (sent) return;
         sent = true;
         controller.enqueue(new TextEncoder().encode(
-          '{"type":"result","result":{"draft":"完整结果"}}\n',
+          '{"type":"result","result":{"draft":"完整结果","finishReason":"length"}}\n',
         ));
       },
       cancel() {
@@ -62,8 +63,28 @@ describe('host generation stream client', () => {
       headers: { 'content-type': 'application/x-ndjson' },
     })));
 
-    await expect(api.generate(request)).resolves.toEqual({ draft: '完整结果' });
+    await expect(api.generate(request)).resolves.toEqual({ draft: '完整结果', finishReason: 'length' });
     expect(canceled).toBe(true);
+  });
+
+  it('defaults legacy JSON responses without an end reason to unknown', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ draft: '兼容结果。' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.generate({ ...request, stream: false })).resolves.toEqual({
+      draft: '兼容结果。',
+      finishReason: 'unknown',
+    });
+  });
+
+  it('rejects unrecognized finish-reason values in streamed results', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => responseFromChunks([
+      '{"type":"result","result":{"draft":"不可信结果","finishReason":"service-secret-mode"}}\n',
+    ])));
+
+    await expect(api.generate(request)).rejects.toThrow('无效的生成结果');
   });
 
   it('does not resolve a stream that ends before a result event', async () => {

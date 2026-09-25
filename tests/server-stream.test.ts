@@ -2,7 +2,7 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
 import { ProviderConnectionError } from '../server/providers';
-import type { Book } from '../src/types';
+import type { Book, GenerationFinishReason } from '../src/types';
 
 const book: Book = {
   id: 'synthetic-stream-book',
@@ -55,6 +55,43 @@ afterEach(() => {
 });
 
 describe('local generation NDJSON stream', () => {
+  it.each([false, true])('preserves structured incomplete results with stream=%s', async (stream) => {
+    const cases: Array<{ draft: string; finishReason: GenerationFinishReason; generationKind: string }> = [
+      { draft: 'Unfinished synthetic paragraph', finishReason: 'length', generationKind: 'continue-section' },
+      { draft: '', finishReason: 'refusal', generationKind: 'continue-section' },
+      { draft: 'Partial synthetic text', finishReason: 'content-filter', generationKind: 'continue-section' },
+      // A partial summary must retain its reason instead of being parsed as complete JSON.
+      { draft: '{"synopsis":"Unfinished', finishReason: 'length', generationKind: 'summarize-section' },
+    ];
+    const generate = vi.fn();
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate,
+    };
+    const { server, origin } = await startServer(providerStore);
+    const before = structuredClone(book);
+    try {
+      for (const { generationKind, ...generated } of cases) {
+        generate.mockResolvedValueOnce(generated);
+        const response = await fetch(`${origin}/api/generate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: makeBody({ stream, generationKind }),
+        });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        const result = stream
+          ? JSON.parse(text.trim().split('\n').at(-1)!).result
+          : JSON.parse(text);
+        expect(result).toEqual({ ...generated, sourceSignature: expect.stringMatching(/^[0-9a-f]{16}$/) });
+      }
+      expect(generate).toHaveBeenCalledTimes(cases.length);
+      expect(book).toEqual(before);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
   it('writes delta events before the final result and passes stream options to the Provider', async () => {
     const providerStore = {
       getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
@@ -66,7 +103,7 @@ describe('local generation NDJSON stream', () => {
       ) => {
         options.onDelta?.('流');
         options.onDelta?.('式');
-        return '流式结果';
+        return { draft: '流式结果', finishReason: 'stop' };
       }),
     };
     const { server, origin } = await startServer(providerStore);
@@ -82,7 +119,7 @@ describe('local generation NDJSON stream', () => {
       expect(events).toEqual([
         { type: 'delta', text: '流' },
         { type: 'delta', text: '式' },
-        { type: 'result', result: expect.objectContaining({ draft: '流式结果' }) },
+        { type: 'result', result: expect.objectContaining({ draft: '流式结果', finishReason: 'stop' }) },
       ]);
       expect(providerStore.generate).toHaveBeenCalledWith(
         'synthetic-provider',
