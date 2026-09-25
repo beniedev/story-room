@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
+import { ProviderStore } from '../server/providers';
 import { StoreConflictError, StoryStore } from '../server/store';
+import type { ProviderProfile } from '../src/providerProfiles';
 import type { Book } from '../src/types';
 import { createSectionMemory } from '../src/sectionMemory';
 import { formatUrlHost } from '../vite.config';
@@ -326,6 +328,99 @@ describe('local server entry', () => {
       expect(providerStore.generate).toHaveBeenCalledOnce();
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('sends a saved section note as a final assistant prefill through the real generation path', async () => {
+    const note = 'Skip the journey and write the reunion after arrival.';
+    const providerRequests: Array<{ messages?: Array<{ role: string; content: string }> }> = [];
+    let rejectPrefill = false;
+    const upstream = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        providerRequests.push(payload);
+        response.setHeader('content-type', 'application/json');
+        if (rejectPrefill && payload.messages?.at(-1)?.role === 'assistant') {
+          response.statusCode = 400;
+          response.end(JSON.stringify({ error: { message: 'Unsupported assistant prefill.' } }));
+          return;
+        }
+        response.end(JSON.stringify({ choices: [{ message: { content: 'Synthetic generated prose.' } }] }));
+      });
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'story-section-prefill-'));
+    const storyStore = new StoryStore(path.join(root, 'books'));
+    const providerStore = new ProviderStore(path.join(root, 'providers.json'));
+    let server: ReturnType<typeof createStoryServer> | undefined;
+
+    try {
+      await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+      const upstreamAddress = upstream.address();
+      if (!upstreamAddress || typeof upstreamAddress === 'string') throw new Error('Fake Provider did not bind a TCP port.');
+      const profile: ProviderProfile = {
+        id: 'synthetic-provider',
+        name: 'Synthetic Provider',
+        kind: 'openai-compatible',
+        baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
+        modelId: 'synthetic-model',
+        maxContext: 128_000,
+        maxOutput: 8_192,
+      };
+      await providerStore.save(profile, 'synthetic-provider-key');
+      let book = await storyStore.createBook('Synthetic Book');
+      const section = book.chapters[0]?.sections[0];
+      if (!section) throw new Error('Synthetic section fixture is missing.');
+      section.content = 'Existing synthetic prose.';
+      section.note = note;
+      book = await storyStore.saveBook(book, { expectedUpdatedAt: book.updatedAt });
+      const storyServer = createStoryServer(storyStore, providerStore);
+      server = storyServer;
+      await new Promise<void>((resolve) => storyServer.listen(0, '127.0.0.1', resolve));
+      const address = storyServer.address();
+      if (!address || typeof address === 'string') throw new Error('Story server did not bind a TCP port.');
+      const generate = () => fetch(`http://127.0.0.1:${address.port}/api/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          bookId: book.id,
+          sectionId: section.id,
+          providerProfileId: profile.id,
+          mode: 'author',
+          instruction: 'Continue the scene.',
+          generationKind: 'continue-section',
+        }),
+      });
+
+      const response = await generate();
+      const responseBody = await response.text();
+      expect(response.status).toBe(200);
+      expect(JSON.parse(responseBody)).toMatchObject({ draft: 'Synthetic generated prose.' });
+      expect(responseBody).not.toContain(note);
+
+      const messages = providerRequests[0]?.messages;
+      expect(messages?.map(({ role }) => role)).toEqual(['system', 'user', 'assistant']);
+      expect(messages?.[2]).toEqual({ role: 'assistant', content: note });
+      expect(messages?.filter(({ content }) => content.includes(note))).toHaveLength(1);
+
+      rejectPrefill = true;
+      const rejected = await generate();
+      expect(rejected.status).toBe(502);
+      expect(await rejected.json()).toMatchObject({ error: 'Provider 返回 HTTP 400。' });
+      expect(providerRequests).toHaveLength(2);
+      expect(providerRequests[1]?.messages).toEqual(messages);
+    } finally {
+      const storyServer = server;
+      if (storyServer?.listening) {
+        await new Promise<void>((resolve, reject) => storyServer.close((error) => error ? reject(error) : resolve()));
+      }
+      if (upstream.listening) {
+        await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+      }
+      await rm(root, { recursive: true, force: true });
     }
   });
 

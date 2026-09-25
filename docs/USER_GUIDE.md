@@ -108,7 +108,9 @@ The **Writing actions** menu at the bottom has two modes:
 
 Character mode requires a character from the current Book. With no character selected, the page explains that you must choose one before sending.
 
-**Writing actions** also lets you edit the **Section note**. It is useful for directions such as “Skip the journey and write the reunion after arrival.” It does not enter the manuscript directly. Changes are retained and take effect in both author mode and character mode.
+**Writing actions** also lets you edit the **Section note**, persistent hidden guidance for this section. For example, you can ask for a restrained reunion scene and skip the journey there. It stays saved and editable, and existing notes adopt the same behavior automatically.
+
+The existing controls and steps stay the same. For **Send and continue writing**, **Generate answer**, and **Regenerate version** in either mode, Story Room sends the note's original text as a final assistant message. Clear the note to remove it from future requests. The app does not save the note as a manuscript block or append it to the returned text. JSON full backups retain it; EPUB, Markdown, and TXT reading exports omit it. The selected model service must support a final assistant message. If it does not, clear the note before generating again; Story Room does not resend it as a user message or guarantee that the service will follow it.
 
 ### Edit manuscript blocks
 

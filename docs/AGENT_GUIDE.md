@@ -167,7 +167,7 @@ Do not call `localStorage.setItem` directly in a component or create a shortcut 
 
 Read `contextPlan.ts`, `generationRequests.ts`, and the relevant tests first. Identify the request's unique target, source range, and candidate source signature. Also check the visible summary in `ContextCompositionDrawer`: it should broadly match the real inclusion reasons but must not show raw Provider messages or hidden reasoning.
 
-When changing material loading, preserve these facts: the plot outline is future guidance; a current-section note applies only to its relevant request; Section Memory must be fresh and confirmed; and an unconfirmed previous-text selection must not be written to the Book. Both author and character modes must go through the same persistence/context/Provider/apply pipeline.
+When changing material loading, preserve these facts: the plot outline is future guidance; for `continue-section`, request `authorNote` takes precedence over `section.note`; other body-generation requests use the current `section.note`, sent verbatim as a final assistant message and omitted when empty; the app does not write that note into manuscript blocks or append it to generated results; Section Memory must be fresh and confirmed; and an unconfirmed previous-text selection must not be written to the Book. Both author and character modes must go through the same persistence/context/Provider/apply pipeline.
 
 ### Changing a Provider or API key
 

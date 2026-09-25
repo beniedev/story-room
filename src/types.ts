@@ -128,7 +128,7 @@ export type PromptLayer =
 
 export type PromptCacheBand = 'stable' | 'session' | 'dynamic';
 
-export type PromptMessageRole = 'system' | 'user';
+export type PromptMessageRole = 'system' | 'user' | 'assistant';
 export type PromptSemanticRole =
   | 'contract'
   | 'constraint'

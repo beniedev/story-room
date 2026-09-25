@@ -458,8 +458,12 @@ describe('context plan', () => {
     expect(targetBlockIndex).toBe(-1);
     expect(plan.included.some((item) => item.layer === 'note')).toBe(true);
     expect(plan.included.some((item) => item.layer === 'instruction')).toBe(false);
-    expect(packet).toContain('Synthetic persistent section guidance.');
-    expect(packet).not.toContain('Synthetic transient note.');
+    expect(packet).not.toContain('Synthetic persistent section guidance.');
+    expect(plan.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'Synthetic persistent section guidance.',
+    });
+    expect(promptText(plan)).not.toContain('Synthetic transient note.');
     expect(packet).not.toContain('Rewrite only the target block.');
     expect(() => buildContextPlan(book, {
       sectionId: section.id,

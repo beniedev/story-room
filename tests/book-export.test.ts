@@ -72,10 +72,12 @@ describe('book exports', () => {
     expect(JSON.parse(String(file.content))).toEqual(book);
   });
 
-  it('keeps plan and memory in JSON but excludes them from reading formats', () => {
+  it('keeps notes, plans, and memory in JSON but excludes them from reading formats', () => {
     const complete = structuredClone(book);
     const section = complete.chapters[0]?.sections[0];
     if (!section) throw new Error('section fixture missing');
+    const note = 'Synthetic hidden section prefill';
+    section.note = note;
     section.plan = { goal: 'Synthetic future plan', intendedBeats: ['Synthetic beat'] };
     section.memory = createSectionMemory({
       synopsis: 'Synthetic memory synopsis',
@@ -86,12 +88,15 @@ describe('book exports', () => {
     }, section.content);
 
     expect(JSON.parse(String(createBookExport(complete, 'json').content))).toEqual(complete);
+    expect(renderBookMarkdown(complete)).not.toContain(note);
+    expect(renderBookText(complete)).not.toContain(note);
     expect(renderBookMarkdown(complete)).not.toContain('Synthetic future plan');
     expect(renderBookText(complete)).not.toContain('Synthetic memory synopsis');
     const epub = unzipSync(renderBookEpub(complete));
     const sectionDocument = strFromU8(epub[`EPUB/text/${section.id}.xhtml`]);
     expect(sectionDocument).not.toContain('Synthetic future plan');
     expect(sectionDocument).not.toContain('Synthetic memory synopsis');
+    expect(sectionDocument).not.toContain(note);
   });
 
   it('exports only adopted candidate content in reading formats and keeps all candidates in JSON', () => {

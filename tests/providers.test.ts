@@ -142,6 +142,7 @@ describe('local provider store', () => {
       const messages = [
         { role: 'system' as const, content: 'synthetic system contract', blockIds: ['system:block'] },
         { role: 'user' as const, content: JSON.stringify({ target: 'synthetic-target', text: '继续写' }), blockIds: ['user:block'] },
+        { role: 'assistant' as const, content: 'Write the reunion after arrival.', blockIds: ['section-a:note'] },
       ];
       expect(await store.generate(profile.id, messages)).toBe('续写正文');
       expect(requests.map(({ url, authorization }) => ({ url, authorization }))).toEqual([

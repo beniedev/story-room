@@ -458,8 +458,9 @@ const messagesFor = (
   book: Book,
 ): PromptMessage[] => {
   const systemBlocks = included.filter((item) => item.messageRole === 'system');
-  const userBlocks = included.filter((item) => item.messageRole !== 'system');
-  return [
+  const userBlocks = included.filter((item) => item.messageRole === 'user');
+  const assistantBlocks = included.filter((item) => item.messageRole === 'assistant');
+  const messages: PromptMessage[] = [
     {
       role: 'system',
       content: systemBlocks.map((item) => item.content).join('\n\n'),
@@ -474,6 +475,14 @@ const messagesFor = (
       blockIds: userBlocks.map((item) => item.id),
     },
   ];
+  if (assistantBlocks.length) {
+    messages.push({
+      role: 'assistant',
+      content: assistantBlocks.map((item) => item.content).join('\n\n'),
+      blockIds: assistantBlocks.map((item) => item.id),
+    });
+  }
+  return messages;
 };
 
 export const estimateMessages = (messages: PromptMessage[]): number => estimateTokens(JSON.stringify(
@@ -719,6 +728,7 @@ export function buildContextPlan(
       Boolean(sectionNote.trim()),
       false,
       {
+        messageRole: 'assistant',
         semanticRole: 'note',
         manualSelection: true,
         source: { bookId: book.id, sourceId: `${section.id}:note`, sectionId: target.sectionId, chapterId: target.chapterId },
