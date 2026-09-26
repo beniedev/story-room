@@ -1,43 +1,32 @@
-import {
-  defaultProviderProfiles,
-  isValidProviderLimit,
-  MAX_PROVIDER_CONTEXT_TOKENS,
-  MAX_PROVIDER_OUTPUT_TOKENS,
-} from './providerProfiles.ts';
-import { isEligibleSectionMemory, normalizeBook, sectionMemoryFreshness, hashSectionContent } from './sectionMemory.ts';
+import { normalizeBook, hashSectionContent } from './sectionMemory.ts';
 import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent.ts';
-import { estimateTokens } from './textMetrics.ts';
+import { block, sourceBlock, characterBlock } from './context/promptBlocks.ts';
+import { referenceBlocks, assertReferenceMemoryAvailability } from './context/referenceBlocks.ts';
+import { messagesFor } from './context/promptMessages.ts';
+import { budgetFor, estimateMessages, normalizedLimits } from './context/contextBudget.ts';
+import { ContextPlanInputError } from './context/contextErrors.ts';
 import type {
   Book,
-  ContextBudget,
   ContextPlan,
   ContextPlanPreview,
   ContextTarget,
   GenerationKind,
   GenerationRequest,
   PromptBlock,
-  PromptCacheBand,
-  PromptLayer,
-  PromptMessage,
-  PromptSource,
   ProviderLimits,
-  SectionContextReference,
 } from './types';
 
-export class ContextPlanInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ContextPlanInputError';
-  }
-}
-
-export const CONTEXT_PROTOCOL_OVERHEAD = 512;
-export const CONTEXT_SAFETY_MARGIN = 256;
-
-export const DEFAULT_PROVIDER_LIMITS: ProviderLimits = {
-  maxContext: defaultProviderProfiles[0]?.maxContext ?? 128000,
-  maxOutput: defaultProviderProfiles[0]?.maxOutput ?? 8192,
-};
+export { ContextPlanInputError } from './context/contextErrors.ts';
+export { serializePromptPacket } from './context/promptMessages.ts';
+export {
+  CONTEXT_PROTOCOL_OVERHEAD,
+  CONTEXT_SAFETY_MARGIN,
+  DEFAULT_PROVIDER_LIMITS,
+  estimateMessages,
+  largestContextItems,
+  hasManualReference,
+  messageFramingResidual,
+} from './context/contextBudget.ts';
 
 const BASE_SYSTEM_CONTRACT = [
   '你是小说写作助手。只输出可以直接接入连续小说正文的内容，不输出聊天标签、消息气泡说明或模型自述。',
@@ -59,293 +48,7 @@ const SUMMARY_SYSTEM_CONTRACT = [
   '摘要是待确认的模型草稿，不会自动改变普通 continuation。',
 ].join('\n');
 
-type BlockOptions = Partial<Pick<PromptBlock,
-  'messageRole' | 'semanticRole' | 'source' | 'manualSelection' | 'freshness' | 'transformedFrom'
-  | 'truncated' | 'truncationReason' | 'future'>>;
 
-const block = (
-  bookId: string,
-  layer: PromptLayer,
-  cacheBand: PromptCacheBand,
-  sourceId: string,
-  title: string,
-  content: string,
-  reason: string,
-  included: boolean,
-  readOnly: boolean,
-  options: BlockOptions = {},
-): PromptBlock => ({
-  id: `${layer}:${sourceId}`,
-  layer,
-  cacheBand,
-  title,
-  content,
-  bookId,
-  sourceId,
-  reason,
-  included,
-  readOnly,
-  charCount: Array.from(content).length,
-  estimatedTokens: estimateTokens(content),
-  messageRole: options.messageRole ?? (layer === 'system' ? 'system' : 'user'),
-  semanticRole: options.semanticRole ?? 'constraint',
-  source: options.source ?? { bookId, sourceId },
-  manualSelection: options.manualSelection ?? false,
-  ...(options.freshness ? { freshness: options.freshness } : {}),
-  ...(options.transformedFrom ? { transformedFrom: options.transformedFrom } : {}),
-  truncated: options.truncated ?? false,
-  ...(options.truncationReason ? { truncationReason: options.truncationReason } : {}),
-  future: options.future ?? false,
-});
-
-const sourceBlock = (
-  bookId: string,
-  layer: PromptLayer,
-  source: PromptSource,
-  target: ContextTarget,
-  reason: string,
-  forceInclude = false,
-  options: BlockOptions = {},
-) => block(
-  bookId,
-  layer,
-  'stable',
-  source.id,
-  source.title,
-  source.content,
-  forceInclude ? `${reason}（当前模式必需）` : reason,
-  forceInclude || (source.includeInPrompt
-    && (source.loadedSectionIds === undefined || source.loadedSectionIds.includes(target.sectionId))),
-  false,
-  {
-    ...options,
-    source: options.source ?? {
-      bookId,
-      sourceId: source.id,
-      chapterId: target.chapterId,
-      chapterIndex: target.chapterIndex,
-      sectionId: target.sectionId,
-      sectionIndex: target.sectionIndex,
-    },
-  },
-);
-
-const characterBlock = (
-  bookId: string,
-  character: Book['characters'][number],
-  target: ContextTarget,
-  reason: string,
-  forceInclude = false,
-) => block(
-  bookId,
-  'character',
-  'stable',
-  character.id,
-  character.name,
-  [`角色名：${character.name}`, `角色身份：${character.role}`, character.content].join('\n'),
-  forceInclude ? `${reason}（当前模式必需）` : reason,
-  forceInclude || (character.includeInPrompt
-    && (character.loadedSectionIds === undefined || character.loadedSectionIds.includes(target.sectionId))),
-  false,
-  {
-    semanticRole: 'constraint',
-    source: {
-      bookId,
-      sourceId: character.id,
-      chapterId: target.chapterId,
-      chapterIndex: target.chapterIndex,
-      sectionId: target.sectionId,
-      sectionIndex: target.sectionIndex,
-    },
-  },
-);
-
-type SectionLocation = {
-  chapter: Book['chapters'][number];
-  section: Book['chapters'][number]['sections'][number];
-  chapterIndex: number;
-  sectionIndex: number;
-  ordinal: number;
-};
-
-const sectionLocations = (book: Book) => {
-  const locations = new Map<string, SectionLocation>();
-  let ordinal = 0;
-  book.chapters.forEach((chapter, chapterIndex) => {
-    chapter.sections.forEach((section, sectionIndex) => {
-      locations.set(section.id, { chapter, section, chapterIndex, sectionIndex, ordinal });
-      ordinal += 1;
-    });
-  });
-  return locations;
-};
-
-const referenceBlocks = (
-  book: Book,
-  target: ContextTarget,
-  section: Book['chapters'][number]['sections'][number],
-) => {
-  const locations = sectionLocations(book);
-  const targetLocation = locations.get(target.sectionId);
-  if (!targetLocation) return [];
-
-  const uniqueReferences = new Map<string, SectionContextReference>();
-  for (const reference of section.contextReferences ?? []) {
-    // Persisted/imported input can repeat a source. Last-wins keeps one block
-    // and avoids duplicate IDs or duplicate manuscript content.
-    uniqueReferences.set(reference.sectionId, reference);
-  }
-
-  return [...uniqueReferences.values()].flatMap((reference) => {
-    const sourceLocation = locations.get(reference.sectionId);
-    if (!sourceLocation) {
-      return [block(
-        book.id,
-        'manuscript',
-        'session',
-        `${target.sectionId}:reference:${reference.sectionId}`,
-        `REFERENCE · ${reference.sectionId}`,
-        '',
-        '引用不存在或不属于当前 Book',
-        false,
-        true,
-        {
-          messageRole: 'user',
-          semanticRole: 'reference-manuscript',
-          source: { bookId: book.id, sourceId: reference.sectionId, sectionId: reference.sectionId },
-          manualSelection: true,
-        },
-      )];
-    }
-    if (sourceLocation.ordinal >= targetLocation.ordinal) {
-      return [block(
-        book.id,
-        'manuscript',
-        'session',
-        `${target.sectionId}:reference:${sourceLocation.section.id}`,
-        `REFERENCE · 第${sourceLocation.chapterIndex + 1}章 / 第${sourceLocation.sectionIndex + 1}节 · ${sourceLocation.section.title}`,
-        '',
-        '当前或未来 Section 不能作为前文',
-        false,
-        true,
-        {
-          messageRole: 'user',
-          semanticRole: 'reference-manuscript',
-          source: {
-            bookId: book.id,
-            sourceId: sourceLocation.section.id,
-            chapterId: sourceLocation.chapter.id,
-            chapterIndex: sourceLocation.chapterIndex,
-            sectionId: sourceLocation.section.id,
-            sectionIndex: sourceLocation.sectionIndex,
-          },
-          manualSelection: true,
-        },
-      )];
-    }
-
-    const source = {
-      bookId: book.id,
-      sourceId: sourceLocation.section.id,
-      chapterId: sourceLocation.chapter.id,
-      chapterIndex: sourceLocation.chapterIndex,
-      sectionId: sourceLocation.section.id,
-      sectionIndex: sourceLocation.sectionIndex,
-    };
-    const title = `REFERENCE · 第${sourceLocation.chapterIndex + 1}章 / 第${sourceLocation.sectionIndex + 1}节 · ${sourceLocation.section.title}`;
-    const common = {
-      messageRole: 'user' as const,
-      semanticRole: 'reference-manuscript' as const,
-      source,
-      manualSelection: true,
-    };
-    const memoryFreshness = sectionMemoryFreshness(
-      sourceLocation.section.memory,
-      sourceLocation.section.content,
-    );
-    const eligibleMemory = Boolean(sourceLocation.section.memory && isEligibleSectionMemory(
-      sourceLocation.section.memory,
-      sourceLocation.section.content,
-    ));
-    const memoryReason = memoryFreshness === 'missing'
-      ? '前文记忆缺失'
-      : memoryFreshness === 'stale'
-        ? '前文记忆已过期'
-        : sourceLocation.section.memory?.provenance === 'model-draft'
-          ? '前文记忆尚未确认'
-          : '手选前文新鲜梗概';
-    const memoryBlock = block(
-      book.id,
-      'summary',
-      'session',
-      `${target.sectionId}:reference:${sourceLocation.section.id}:memory`,
-      `REFERENCE MEMORY · 第${sourceLocation.chapterIndex + 1}章 / 第${sourceLocation.sectionIndex + 1}节 · ${sourceLocation.section.title}`,
-      eligibleMemory && sourceLocation.section.memory
-        ? JSON.stringify({
-            synopsis: sourceLocation.section.memory.synopsis,
-            beats: sourceLocation.section.memory.beats,
-            continuityFacts: sourceLocation.section.memory.continuityFacts,
-            characterStateChanges: sourceLocation.section.memory.characterStateChanges,
-            foreshadowingCandidates: sourceLocation.section.memory.foreshadowingCandidates,
-          })
-        : '',
-      memoryReason,
-      eligibleMemory,
-      true,
-      {
-        ...common,
-        semanticRole: 'memory',
-        freshness: memoryFreshness,
-        transformedFrom: eligibleMemory ? 'summary' : undefined,
-      },
-    );
-    if (reference.mode === 'summary') return [memoryBlock];
-    const fullBlock = block(
-      book.id,
-      'manuscript',
-      'session',
-      `${target.sectionId}:reference:${sourceLocation.section.id}${reference.mode === 'both' ? ':full' : ''}`,
-      title,
-      sourceLocation.section.content,
-      '手选前文全文参考',
-      Boolean(sourceLocation.section.content.trim()),
-      true,
-      { ...common, transformedFrom: 'full' },
-    );
-    if (reference.mode === 'both') return [memoryBlock, fullBlock];
-    return [fullBlock];
-  });
-};
-
-const assertReferenceMemoryAvailability = (
-  book: Book,
-  target: ContextTarget,
-  section: Book['chapters'][number]['sections'][number],
-) => {
-  const locations = sectionLocations(book);
-  const targetLocation = locations.get(target.sectionId);
-  if (!targetLocation) return;
-  for (const reference of section.contextReferences ?? []) {
-    const sourceLocation = locations.get(reference.sectionId);
-    if (!sourceLocation || sourceLocation.ordinal >= targetLocation.ordinal) continue;
-    if (!sourceLocation.section.content.trim()) {
-      throw new ContextPlanInputError(
-        `前文「${sourceLocation.section.title}」尚无正文，请先改为不使用，或补充正文后再生成。`,
-      );
-    }
-    if (reference.mode !== 'summary' && reference.mode !== 'both') continue;
-    const freshness = sectionMemoryFreshness(sourceLocation.section.memory, sourceLocation.section.content);
-    if (freshness === 'fresh' && isEligibleSectionMemory(sourceLocation.section.memory, sourceLocation.section.content)) continue;
-    const reason = freshness === 'missing'
-      ? '尚未建立'
-      : freshness === 'stale'
-        ? '已过期'
-        : '尚未确认';
-    throw new ContextPlanInputError(
-      `前文「${sourceLocation.section.title}」的梗概${reason}，请完整复核 Memory，或改为全文/不使用后再生成。`,
-    );
-  }
-};
 
 const findTarget = (book: Book, sectionId: string): ContextTarget => {
   for (let chapterIndex = 0; chapterIndex < book.chapters.length; chapterIndex += 1) {
@@ -372,143 +75,8 @@ const generationKinds: GenerationKind[] = [
   'summarize-section',
 ];
 
-const normalizedLimits = (limits?: ProviderLimits): ProviderLimits => (
-  limits && isValidProviderLimit(limits.maxContext, MAX_PROVIDER_CONTEXT_TOKENS)
-    && isValidProviderLimit(limits.maxOutput, MAX_PROVIDER_OUTPUT_TOKENS)
-    ? { maxContext: limits.maxContext, maxOutput: limits.maxOutput }
-    : { ...DEFAULT_PROVIDER_LIMITS }
-);
 
-const targetReminders: Record<GenerationKind, { start: string; end: string }> = {
-  'continue-section': {
-    start: 'TARGET：只处理 JSON packet 中的唯一目标；只输出接在 TARGET SECTION 末尾的新小说正文。',
-    end: 'TARGET：REFERENCE SECTION 已完成，不得重写/续写/总结；只输出接在 TARGET SECTION 末尾的新小说正文。',
-  },
-  'regenerate-block': {
-    start: 'TARGET：只处理 JSON packet 中的唯一目标；从 TARGET 之前的当前正文重新作答，只输出一份新的回答。',
-    end: 'TARGET：只输出新的回答；不得复述 TARGET 或读取其后的正文。',
-  },
-  'respond-to-input': {
-    start: 'TARGET：只处理 JSON packet 中的唯一目标；回答 TARGET USER block，只输出一份新的回答。',
-    end: 'TARGET：只输出 TARGET USER block 的回答；不得重复 TARGET USER 或读取其后的正文。',
-  },
-  'rewrite-selection': {
-    start: 'TARGET：只处理 JSON packet 中的唯一目标；只输出选区替换正文。',
-    end: 'TARGET：只输出选区替换正文，不输出其他 Section 内容。',
-  },
-  'summarize-section': {
-    start: 'TARGET：只处理 JSON packet 中的唯一目标；只输出 SectionMemoryDraft schema JSON。',
-    end: 'TARGET：只输出 schema JSON，不续写正文。',
-  },
-};
 
-export const serializePromptPacket = (
-  packet: unknown,
-  generationKind: GenerationKind = 'continue-section',
-) => {
-  const reminder = targetReminders[generationKind];
-  return `${reminder.start}\n${JSON.stringify(packet)}\n${reminder.end}`;
-};
-
-const packetFor = (
-  book: Book,
-  chapter: Book['chapters'][number],
-  section: Book['chapters'][number]['sections'][number],
-  target: ContextTarget,
-  request: Omit<GenerationRequest, 'bookId'>,
-  generationKind: GenerationKind,
-  selectedCharacter: Book['characters'][number] | undefined,
-  userBlocks: PromptBlock[],
-) => ({
-  version: 1,
-  generationKind,
-  target: {
-    locator: {
-      book: { title: book.title, index: 0 },
-      chapter: { title: chapter.title, index: target.chapterIndex },
-      section: { title: section.title, index: target.sectionIndex },
-    },
-  },
-  mode: request.mode,
-  ...(generationKind === 'summarize-section' ? {} : {
-    selectedCharacterName: selectedCharacter?.name,
-  }),
-  blocks: userBlocks.map((item) => ({
-    kind: item.semanticRole,
-    title: item.title,
-    content: item.content,
-    ...(item.source?.chapterIndex !== undefined || item.source?.sectionIndex !== undefined ? {
-      location: {
-        ...(item.source.chapterIndex !== undefined ? { chapterIndex: item.source.chapterIndex } : {}),
-        ...(item.source.sectionIndex !== undefined ? { sectionIndex: item.source.sectionIndex } : {}),
-      },
-    } : {}),
-    ...(item.future ? { future: true } : {}),
-  })),
-});
-
-const messagesFor = (
-  target: ContextTarget,
-  request: Omit<GenerationRequest, 'bookId'>,
-  generationKind: GenerationKind,
-  selectedCharacter: Book['characters'][number] | undefined,
-  included: PromptBlock[],
-  chapter: Book['chapters'][number],
-  section: Book['chapters'][number]['sections'][number],
-  book: Book,
-): PromptMessage[] => {
-  const systemBlocks = included.filter((item) => item.messageRole === 'system');
-  const userBlocks = included.filter((item) => item.messageRole === 'user');
-  const assistantBlocks = included.filter((item) => item.messageRole === 'assistant');
-  const messages: PromptMessage[] = [
-    {
-      role: 'system',
-      content: systemBlocks.map((item) => item.content).join('\n\n'),
-      blockIds: systemBlocks.map((item) => item.id),
-    },
-    {
-      role: 'user',
-      content: serializePromptPacket(
-        packetFor(book, chapter, section, target, request, generationKind, selectedCharacter, userBlocks),
-        generationKind,
-      ),
-      blockIds: userBlocks.map((item) => item.id),
-    },
-  ];
-  if (assistantBlocks.length) {
-    messages.push({
-      role: 'assistant',
-      content: assistantBlocks.map((item) => item.content).join('\n\n'),
-      blockIds: assistantBlocks.map((item) => item.id),
-    }, {
-      role: 'user',
-      content: '请按前述写作任务生成正文，不要复述小节注释。',
-      blockIds: [],
-    });
-  }
-  return messages;
-};
-
-export const estimateMessages = (messages: PromptMessage[]): number => estimateTokens(JSON.stringify(
-  messages.map((message) => ({ role: message.role, content: message.content })),
-));
-
-const isManualReferenceBlock = (item: PromptBlock) => item.manualSelection === true
-  && (item.semanticRole === 'reference-manuscript' || item.semanticRole === 'memory');
-
-export const largestContextItems = (items: PromptBlock[], limit = 3): PromptBlock[] => {
-  const references = items.filter(isManualReferenceBlock);
-  return [...(references.length ? references : items)]
-    .sort((left, right) => right.estimatedTokens - left.estimatedTokens)
-    .slice(0, limit);
-};
-
-export const hasManualReference = (items: PromptBlock[]) => items.some(isManualReferenceBlock);
-
-export const messageFramingResidual = (plan: Pick<ContextPlan, 'included' | 'estimatedTokens'>): number => Math.max(
-  0,
-  plan.estimatedTokens - plan.included.reduce((total, item) => total + item.estimatedTokens, 0),
-);
 
 const previewItem = (item: PromptBlock) => ({
   layer: item.layer,
@@ -532,25 +100,6 @@ export const toContextPlanPreview = (plan: ContextPlan): ContextPlanPreview => (
   budget: plan.budget,
 });
 
-const budgetFor = (limits: ProviderLimits, estimatedInput: number): ContextBudget => {
-  const availableInput = Math.max(
-    0,
-    limits.maxContext - limits.maxOutput - CONTEXT_PROTOCOL_OVERHEAD - CONTEXT_SAFETY_MARGIN,
-  );
-  const remainingInput = availableInput - estimatedInput;
-  return {
-    maxContext: limits.maxContext,
-    protocolOverhead: CONTEXT_PROTOCOL_OVERHEAD,
-    safetyMargin: CONTEXT_SAFETY_MARGIN,
-    reservedOutput: limits.maxOutput,
-    availableInput,
-    estimatedInput,
-    remainingInput,
-    overflow: remainingInput < 0,
-    overflowTokens: Math.max(0, -remainingInput),
-    estimateKind: 'approximate',
-  };
-};
 
 export function buildContextPlan(
   book: Book,
