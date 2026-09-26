@@ -1,3 +1,5 @@
+import { bookCachePrefix, bookCacheKey, isCachedBook, cacheDraftBook, removeDraftBook, clearHostBookCaches } from './deviceDrafts';
+import { resolveBookForLoad, type BookLoadResolution } from './bookRecovery';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenText,
@@ -85,10 +87,6 @@ import type {
 } from './types';
 
 type ViewName = 'write' | 'shelf';
-const bookCachePrefix = 'story-native:book:';
-const bookCacheKey = (bookId: string) => `${bookCachePrefix}${bookId}`;
-const bookDraftPrefix = 'story-native:draft:';
-const bookDraftKey = (bookId: string) => `${bookDraftPrefix}${bookId}`;
 const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
@@ -173,164 +171,6 @@ const blockedBookConflictError = () => new BookConflictError();
 const generationSourceFingerprint = (blocks: SectionBlock[], targetIndex: number) => JSON.stringify(
   blocks.slice(0, targetIndex).map((block) => [block.id, block.kind, block.content]),
 );
-
-const isCachedBook = (value: unknown, bookId: string): value is Book => {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<Book>;
-  return candidate.id === bookId
-    && typeof candidate.title === 'string'
-    && typeof candidate.updatedAt === 'string'
-    && Array.isArray(candidate.characters)
-    && Array.isArray(candidate.worldRules)
-    && Array.isArray(candidate.canonFacts)
-    && Array.isArray(candidate.summaries)
-    && Array.isArray(candidate.chapters)
-    && Array.isArray(candidate.branches);
-};
-
-type DeviceDraftEnvelope = {
-  schemaVersion: 1;
-  book: Book;
-  baseUpdatedAt: string | null;
-  draftEditedAt: string;
-};
-
-type DeviceDraftRecord = {
-  book: Book;
-  baseUpdatedAt: string | null;
-  legacy: boolean;
-};
-
-const isDraftEnvelope = (value: unknown, bookId: string): value is DeviceDraftEnvelope => {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<DeviceDraftEnvelope>;
-  return candidate.schemaVersion === 1
-    && (typeof candidate.baseUpdatedAt === 'string' || candidate.baseUpdatedAt === null)
-    && typeof candidate.draftEditedAt === 'string'
-    && isCachedBook(candidate.book, bookId);
-};
-
-const readDraftRecord = (bookId: string): DeviceDraftRecord | null => {
-  if (api.runtime !== 'device') return null;
-  try {
-    const value = sessionStorage.getItem(bookDraftKey(bookId));
-    if (!value) return null;
-    const parsed = JSON.parse(value) as unknown;
-    if (isDraftEnvelope(parsed, bookId)) {
-      return {
-        book: normalizeBook(parsed.book),
-        baseUpdatedAt: parsed.baseUpdatedAt,
-        legacy: false,
-      };
-    }
-    if (isCachedBook(parsed, bookId)) {
-      return {
-        book: normalizeBook(parsed),
-        baseUpdatedAt: null,
-        legacy: true,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-// Copy before removing a legacy shared draft, within the library write gate.
-const importLegacyDraft = async (bookId: string) => {
-  if (api.runtime !== 'device') return;
-  if (localStorage.getItem(bookDraftKey(bookId)) === null || sessionStorage.getItem(bookDraftKey(bookId))) return;
-  await withDeviceLibraryWrite(() => {
-    if (sessionStorage.getItem(bookDraftKey(bookId))) return;
-    const legacy = localStorage.getItem(bookDraftKey(bookId));
-    if (legacy === null) return;
-    sessionStorage.setItem(bookDraftKey(bookId), legacy);
-    localStorage.removeItem(bookDraftKey(bookId));
-  });
-};
-
-const cacheDraftBook = (book: Book, baseUpdatedAt: string | null = null) => {
-  if (api.runtime !== 'device') return false;
-  try {
-    const envelope: DeviceDraftEnvelope = {
-      schemaVersion: 1,
-      book: normalizeBook(book),
-      baseUpdatedAt,
-      draftEditedAt: new Date().toISOString(),
-    };
-    sessionStorage.setItem(bookDraftKey(book.id), JSON.stringify(envelope));
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const removeDraftBook = (bookId: string) => {
-  if (api.runtime !== 'device') return;
-  try {
-    sessionStorage.removeItem(bookDraftKey(bookId));
-  } catch {
-    // Browser persistence is optional on the device runtime.
-  }
-};
-
-const clearHostBookCaches = () => {
-  if (api.runtime === 'device') return;
-  const staleKeys: string[] = [];
-  try {
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key?.startsWith(bookCachePrefix) || key?.startsWith(bookDraftPrefix)) staleKeys.push(key);
-    }
-  } catch {
-    return;
-  }
-  for (const key of staleKeys) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // A storage failure must not prevent the host app from starting.
-    }
-  }
-};
-
-type BookLoadResolution = {
-  stored: Book;
-  loaded: Book;
-  draft: DeviceDraftRecord | null;
-  draftConflict: boolean;
-  loadedDirty: boolean;
-};
-
-const resolveBookForLoad = async (
-  bookId: string,
-  options: { ignoreDraft?: boolean; persistedOnly?: boolean } = {},
-): Promise<BookLoadResolution> => {
-  const stored = normalizeBook(await (options.persistedOnly && api.runtime === 'device'
-    ? api.loadPersistedBook(bookId)
-    : api.loadBook(bookId)));
-  if (options.persistedOnly) {
-    return {
-      stored,
-      loaded: stored,
-      draft: null,
-      draftConflict: false,
-      loadedDirty: false,
-    };
-  }
-  if (api.runtime === 'device') await importLegacyDraft(bookId);
-  const draft = api.runtime === 'device' ? readDraftRecord(bookId) : null;
-  const recoverDraft = !options.ignoreDraft && draft !== null;
-  const draftConflict = recoverDraft && (draft!.legacy || draft!.baseUpdatedAt !== stored.updatedAt);
-  const loaded = recoverDraft ? draft!.book : stored;
-  return {
-    stored,
-    loaded,
-    draft,
-    draftConflict,
-    loadedDirty: recoverDraft,
-  };
-};
 
 function App() {
   const isDeviceRuntime = api.runtime === 'device';
