@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { deviceLibrary } from '../src/deviceLibrary';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deviceLibrary, DeviceBookConflictError } from '../src/deviceLibrary';
 import { createExampleBooks } from '../src/fixtures';
-import { createSectionMemory } from '../src/sectionMemory';
+import { createSectionMemory, serializeSectionMemoryDraft, syntheticSectionMemoryDraft } from '../src/sectionMemory';
+import { createFakeGenerationApi } from '../src/runtime/fakeGeneration';
 import { installFakeDeviceLocks } from './helpers/fakeDeviceLocks';
 
 class MemoryStorage implements Storage {
@@ -188,6 +189,7 @@ describe('device-local library', () => {
     ]);
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled', 'fulfilled', 'fulfilled']);
     expect(results[1]).toMatchObject({ reason: { code: 'BOOK_CONFLICT' } });
+    if (results[1].status === 'rejected') expect(results[1].reason).toBeInstanceOf(DeviceBookConflictError);
     const entries = await deviceLibrary.listBooks();
     expect(entries).toHaveLength(5);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(5);
@@ -217,5 +219,43 @@ describe('device-local library', () => {
     expect(await deviceLibrary.listBooks()).toEqual([]);
     expect(localStorage.getItem('story-native:library')).toBe('[]');
     expect(localStorage.getItem('story-native:book:the-observatory')).toBeNull();
+  });
+
+  it('runs the extracted Fake adapter with an injected Book read and no persistence or write gate', async () => {
+    const book = createExampleBooks()[0];
+    const section = book.chapters[0]?.sections[0];
+    if (!section) throw new Error('device fixture section missing');
+    const loadBook = vi.fn(() => book);
+    const fake = createFakeGenerationApi(loadBook);
+    const request = { bookId: book.id, sectionId: section.id, mode: 'author' as const, instruction: '' };
+
+    const preview = await fake.contextPlan(request);
+    expect(preview).not.toHaveProperty('messages');
+    const result = await fake.generate({ ...request, generationKind: 'summarize-section' });
+    expect(result).toEqual({
+      draft: serializeSectionMemoryDraft(syntheticSectionMemoryDraft()),
+      finishReason: 'stop',
+      sourceSignature: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
+    expect(loadBook).toHaveBeenCalledTimes(2);
+    expect(loadBook).toHaveBeenCalledWith(book.id);
+    expect(localStorage.length).toBe(0);
+    expect(environment.locks.requests).toEqual([]);
+  });
+
+  it('rejects an already-canceled Fake generation before reading a Book or delivering a delta', async () => {
+    const loadBook = vi.fn(() => createExampleBooks()[0]);
+    const fake = createFakeGenerationApi(loadBook);
+    const controller = new AbortController();
+    controller.abort();
+    const onDelta = vi.fn();
+
+    await expect(fake.generate({
+      bookId: 'synthetic-book', sectionId: 'synthetic-section', mode: 'author', instruction: '', stream: true,
+    }, controller.signal, onDelta)).rejects.toMatchObject({ name: 'AbortError', message: '生成已取消。' });
+    expect(loadBook).not.toHaveBeenCalled();
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+    expect(environment.locks.requests).toEqual([]);
   });
 });

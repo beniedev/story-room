@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../src/api';
+import { readGenerationStream } from '../src/runtime/generationStream';
 import type { GenerationRequest } from '../src/types';
 
 const request: GenerationRequest = {
@@ -96,8 +97,9 @@ describe('host generation stream client', () => {
   });
 
   it('propagates client cancellation while reading NDJSON', async () => {
+    const cancel = vi.fn();
     const body = new ReadableStream<Uint8Array>({
-      cancel() { /* The reader is canceled by the abort handler. */ },
+      cancel,
     });
     let receivedSignal: AbortSignal | undefined;
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
@@ -109,10 +111,13 @@ describe('host generation stream client', () => {
     const controller = new AbortController();
     const pending = api.generate(request, controller.signal);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(body.locked).toBe(true));
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(receivedSignal?.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalled();
+    expect(body.locked).toBe(false);
   });
 
   it('rejects an already-aborted stream before acquiring the reader lock', async () => {
@@ -132,5 +137,55 @@ describe('host generation stream client', () => {
 
     await expect(api.generate(request)).rejects.toThrow('本机 Provider 调用失败');
     await expect(api.generate(request)).rejects.not.toThrow('provider-secret-error');
+  });
+
+  it('decodes a multibyte character split inside its UTF-8 bytes and a split CRLF', async () => {
+    const text = '{"type":"delta","text":"苹果"}\r\n{"type":"result","result":{"draft":"苹果","finishReason":"stop"}}';
+    const bytes = new TextEncoder().encode(text);
+    const characterStart = new TextEncoder().encode(text.slice(0, text.indexOf('苹'))).length;
+    const carriageReturn = bytes.indexOf(13);
+    const chunks = [bytes.slice(0, characterStart + 1), bytes.slice(characterStart + 1, carriageReturn + 1), bytes.slice(carriageReturn + 1)];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(chunk));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body)));
+    const deltas: string[] = [];
+
+    await expect(api.generate(request, undefined, (delta) => deltas.push(delta))).resolves.toEqual({
+      draft: '苹果', finishReason: 'stop',
+    });
+    expect(deltas).toEqual(['苹果']);
+    expect(body.locked).toBe(false);
+  });
+
+  it.each([
+    ['not-json\n', '本地书库返回了无法读取的流式数据。'],
+    ['{"type":"delta","text":5}\n', '本地书库返回了无效的流式片段。'],
+    ['{"type":"result","result":{"draft":"partial","sourceSignature":5}}\n', '本地书库返回了无效的生成结果。'],
+  ])('cancels and releases a malformed stream without replacing its error', async (text, message) => {
+    const cancel = vi.fn(() => { throw new Error('synthetic cleanup failure'); });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(text)); },
+      cancel,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body)));
+
+    await expect(api.generate(request)).rejects.toThrow(message);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  });
+
+  it('requires a final result even when a response only exposes text', async () => {
+    const deltas: string[] = [];
+    const response = (text: string) => ({ body: null, text: async () => text }) as Response;
+
+    await expect(readGenerationStream(response('{"type":"delta","text":"partial"}\n'), undefined, (delta) => deltas.push(delta)))
+      .rejects.toThrow('本地书库流式响应未正常结束。');
+    expect(deltas).toEqual(['partial']);
+    await expect(readGenerationStream(response('{"type":"result","result":{"draft":"complete"}}'), undefined, undefined))
+      .resolves.toEqual({ draft: 'complete', finishReason: 'unknown' });
   });
 });
