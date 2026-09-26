@@ -517,6 +517,96 @@ describe('context drawers real interactions', () => {
     expect(sessionDrafts.has(key)).toBe(false);
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'preserves a recreated same-key session when a save from an unmounted drawer settles with %s',
+    async (outcome) => {
+    const book = makeBook();
+    const sessionDrafts = new Map<string, ContextToolDraftSession>();
+    let resolveSave!: () => void;
+    let rejectSave!: (error: Error) => void;
+    const oldProps = {
+      ...makeToolProps(book),
+      sessionDrafts,
+      onSaveMemoriesAndLoad: vi.fn(() => new Promise<void>((resolve, reject) => {
+        resolveSave = resolve;
+        rejectSave = reject;
+      })),
+    };
+    const first = await render(<ContextToolsDrawer {...oldProps} />);
+    await act(async () => first.container
+      .querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]')?.click());
+    const firstTextarea = first.container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!valueSetter || !firstTextarea) throw new Error('Textarea value setter is unavailable.');
+    await act(async () => {
+      valueSetter.call(firstTextarea, '重挂载前的编辑');
+      firstTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => first.container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...first.container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => confirm?.click());
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    expect(sessionDrafts.has(key)).toBe(true);
+    sessionDrafts.delete(key);
+    await unmount(first.root);
+
+    const second = await render(<ContextToolsDrawer {...makeToolProps(book)} sessionDrafts={sessionDrafts} />);
+    await act(async () => second.container
+      .querySelector<HTMLButtonElement>('[aria-label="展开已有 Memory梗概"]')?.click());
+    const textarea = second.container.querySelector<HTMLTextAreaElement>('#context-summary-textarea-source-ready');
+    if (!textarea) throw new Error('Textarea is unavailable.');
+    await act(async () => {
+      valueSetter.call(textarea, '重挂载后的编辑');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(sessionDrafts.get(key)?.memoryDrafts['source-ready']?.synopsis).toBe('重挂载后的编辑');
+    await act(async () => {
+      if (outcome === 'resolve') resolveSave();
+      else rejectSave(new Error('旧保存失败'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(sessionDrafts.get(key)?.memoryDrafts['source-ready']?.synopsis).toBe('重挂载后的编辑');
+    expect(sessionDrafts.get(key)?.summaryErrors['source-ready']).toBe('');
+    await unmount(second.root);
+  });
+
+  it('clears a restored dirty session after saving without another edit', async () => {
+    const book = makeBook();
+    const key = contextToolDraftKey(book.id, 'target-ui');
+    const sessionDrafts = new Map<string, ContextToolDraftSession>([[key, {
+      bookId: book.id,
+      sectionId: 'target-ui',
+      hasChanges: true,
+      selectedSectionIds: ['source-ready'],
+      expandedSectionIds: [],
+      memoryDrafts: { 'source-ready': { ...memoryDraft, synopsis: '恢复后的待保存梗概' } },
+      generatedDrafts: {},
+      summaryErrors: {},
+    }]]);
+    const props = { ...makeToolProps(book), sessionDrafts };
+    const { container, root } = await render(<ContextToolsDrawer {...props} />);
+    expect(sessionDrafts.get(key)?.hasChanges).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('.context-summary-save')?.click());
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('确认保存并加载'));
+    await act(async () => {
+      confirm?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(props.onSaveMemoriesAndLoad).toHaveBeenCalledWith([{
+      sourceSectionId: 'source-ready',
+      draft: { ...memoryDraft, synopsis: '恢复后的待保存梗概' },
+      provenance: 'manual',
+    }]);
+    expect(sessionDrafts.has(key)).toBe(false);
+    expect(container.querySelector<HTMLDialogElement>('.confirm-dialog')?.textContent)
+      .toContain('梗概保存并加载成功');
+    await unmount(root);
+  });
+
   it('shows selected current-or-later references and reports explicit retention choices', async () => {
     const baseBook = makeBook();
     const baseChapter = baseBook.chapters[0]!;

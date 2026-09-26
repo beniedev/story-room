@@ -7,27 +7,24 @@ import {
   Settings,
   X,
 } from 'lucide-react';
-import { api, BookConflictError } from './api';
+import { api } from './api';
+import { useBookSession } from './application/useBookSession';
+import { useGenerationSession } from './application/useGenerationSession';
+import { isAbortError } from './application/generationStatus';
+import { bookConflictMessage, isBookConflictError } from './application/bookSessionErrors';
+import { deleteBookSectionBlock, editBookSectionMemory, referenceLocation, renameBookChapter, renameBookSection } from './application/bookRecipes';
 import { parseBookBackup } from './bookImport';
 import { createBookExport, type BookExportFormat } from './bookExport';
 import {
   buildContextPlan as composeContextPlan,
 } from './contextPlan';
 import {
-  applyAnswerCandidateOutcome,
-  makeRegenerateBlockRequest,
-  makeRespondToInputRequest,
-} from './generationRequests';
-import {
   adoptCandidate,
-  appendCandidate,
   deleteCandidate,
   editCandidate,
-  finalizeAnswerCandidates,
 } from './answerCandidates';
 import {
   applySummaryReferenceSelection,
-  reconcileReferencesAfterMemoryDeletion,
 } from './contextReferences';
 import {
   deleteDirectorySelection,
@@ -46,11 +43,7 @@ import {
   type ProviderProfile,
 } from './providerProfiles';
 import {
-  clearPreviousSectionMemory,
-  deleteCurrentSectionMemory,
   normalizeBook,
-  parseSectionMemoryDraft,
-  rollbackSectionMemory,
   sectionMemoryProvenanceAfterReview,
   sectionMemoryFreshness,
 } from './sectionMemory';
@@ -61,24 +54,12 @@ import { EmptyLibraryActions } from './components/EmptyLibraryActions';
 import { ExportDialog } from './components/ExportDialog';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { makeId } from './components/shared/id';
-import {
-  bookCacheKey,
-  bookCachePrefix,
-  cacheDraftBook,
-  clearHostBookCaches,
-  isCachedBook,
-  removeDraftBook,
-} from './deviceDrafts';
-import { resolveBookForLoad, type BookLoadResolution } from './bookRecovery';
+
 import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
 import { clampManuscriptFontSize, defaultManuscriptFontSize, type ManuscriptFontFamily } from './components/AppearanceSettings';
 import type {
   Book,
-  BookIndexEntry,
-  ContextPlan,
-  GenerationFinishReason,
   GenerationMode,
-  GenerationRequest,
   SectionBlock,
   SectionMemoryDraft,
   SectionMemoryProvenance,
@@ -94,80 +75,12 @@ type SectionDraft = {
   instruction: string;
 };
 
-type StreamingDraftStatus = 'streaming' | 'stopped' | 'failed';
-type StreamingDraft = {
-  key: string;
-  bookId: string;
-  sectionId: string;
-  targetBlockId?: string;
-  replaceTarget: boolean;
-  content: string;
-  status: StreamingDraftStatus;
-  message: string;
-};
-
-const streamingDraftKey = (request: Pick<GenerationRequest, 'bookId' | 'sectionId' | 'targetBlockId'>) => (
-  `${request.bookId}:${request.sectionId}:${request.targetBlockId ?? 'section'}`
-);
-
 const sectionDraftKey = (bookId: string, sectionId: string) => `${bookId}:${sectionId}`;
 const emptySectionDraft = (): SectionDraft => ({ instruction: '' });
-const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
-  || error instanceof Error && error.name === 'AbortError';
-const abortGenerationError = () => {
-  try {
-    return new DOMException('生成已取消。', 'AbortError');
-  } catch {
-    const error = new Error('生成已取消。');
-    error.name = 'AbortError';
-    return error;
-  }
-};
-const staleSaveError = () => new Error('保存期间正文已变化，请稍后重试。');
-const isUnsuccessfulFinishReason = (reason: GenerationFinishReason) => (
-  reason === 'length'
-  || reason === 'content-filter'
-  || reason === 'refusal'
-  || reason === 'unsupported'
-);
-const finishReasonDescription = (reason: GenerationFinishReason) => {
-  switch (reason) {
-    case 'length': return '服务因输出长度上限结束了生成';
-    case 'content-filter': return '服务的内容筛选未允许完整结果';
-    case 'refusal': return '服务明确拒绝了本次生成';
-    case 'unsupported': return '服务返回了应用当前不支持的结束类型';
-    default: return '';
-  }
-};
-const finishReasonSuccessStatus = (message: string, reason: GenerationFinishReason) => (
-  reason === 'unknown' ? `${message} 模型服务未提供明确的结束原因。` : message
-);
-const unsuccessfulFinishMessage = (
-  reason: GenerationFinishReason,
-  isSummary: boolean,
-  sourceSectionTitle?: string,
-) => {
-  const description = finishReasonDescription(reason);
-  return isSummary
-    ? `${sourceSectionTitle ? `「${sourceSectionTitle}」的` : '所选前文的'}梗概 JSON 草稿，未保存。${description}；可复制草稿后检查。`
-    : `生成未完成：${description}；正文和候选未修改，草稿可复制。`;
-};
-const isBookConflictError = (error: unknown) => error instanceof BookConflictError
-  || (error instanceof Error && (error.name === 'BookConflictError' || error.name === 'DeviceBookConflictError'))
-  || (typeof error === 'object' && error !== null
-    && ((error as { code?: unknown }).code === 'BOOK_CONFLICT'
-      || (error as { statusCode?: unknown }).statusCode === 409));
-const bookConflictMessage = '这本书已在其他页面更新；当前本地内容仍保留，可导出 JSON 备份或重新载入当前书目。';
-const blockedBookConflictError = () => new BookConflictError();
-const generationSourceFingerprint = (blocks: SectionBlock[], targetIndex: number) => JSON.stringify(
-  blocks.slice(0, targetIndex).map((block) => [block.id, block.kind, block.content]),
-);
-
 
 function App() {
   const isDeviceRuntime = api.runtime === 'device';
-  const [library, setLibrary] = useState<BookIndexEntry[]>([]);
-  const [book, setBook] = useState<Book | null>(null);
+
   const [sectionId, setSectionId] = useState('');
   const [view, setView] = useState<ViewName>('shelf');
   const [mode, setMode] = useState<GenerationMode>('author');
@@ -191,7 +104,7 @@ function App() {
     : []);
   const [activeProviderProfileId, setActiveProviderProfileId] = useState(() =>
     localStorage.getItem(activeProviderProfileKey) ?? 'provider-primary');
-  const [dirty, setDirty] = useState(false);
+
   const [sectionDrafts, setSectionDrafts] = useState<Record<string, SectionDraft>>({});
   const [busy, setBusy] = useState(false);
   const [directoryBusy, setDirectoryBusy] = useState(false);
@@ -199,9 +112,8 @@ function App() {
   const directoryBusyRef = useRef(false);
   const contextToolDrafts = useRef(new Map<string, ContextToolDraftSession>());
   const pendingContextDrafts = useRef(false);
-  const [generationState, setGenerationState] = useState<'idle' | 'generating'>('idle');
   const [status, setStatus] = useState(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
-  const [libraryReady, setLibraryReady] = useState(!isDeviceRuntime);
+
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const exportDialog = useRef<HTMLDialogElement>(null);
@@ -218,78 +130,89 @@ function App() {
   const [emptyBookDialogOpen, setEmptyBookDialogOpen] = useState(false);
   const [writerBookSettingsOpen, setWriterBookSettingsOpen] = useState(false);
   const [manuscriptEditorOpen, setManuscriptEditorOpen] = useState(false);
-  const bookRef = useRef<Book | null>(null);
-  const saveRevision = useRef(0);
-  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
-  const saveFlights = useRef(new Map<number, Promise<Book>>());
-  const persistedRevision = useRef<number | null>(null);
-  const persistedUpdatedAt = useRef<string | null>(null);
-  const draftBaseUpdatedAt = useRef<string | null | undefined>(undefined);
-  const saveConflictRef = useRef(false);
-  const [saveConflict, setSaveConflict] = useState(false);
+
   const busyRef = useRef(false);
   const sectionDraftsRef = useRef<Record<string, SectionDraft>>({});
-  const generationAbort = useRef<AbortController | null>(null);
-  const generationTarget = useRef<{ bookId: string; sectionId: string; targetBlockId?: string } | null>(null);
-  const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
-  const streamingDraftRef = useRef<StreamingDraft | null>(null);
-  const streamingControllerRef = useRef<AbortController | null>(null);
-  const streamingPending = useRef<{ controller: AbortController; key: string; content: string } | null>(null);
-  const streamingFrame = useRef<number | null>(null);
   const navigationState = useRef({ dirty: false, busy: false, instruction: '', sectionDrafts: {} as Record<string, SectionDraft> });
-  const libraryLoadGenerationRef = useRef(0);
-  const bookLoadGenerationRef = useRef(0);
-  // Loading attempts can be superseded while the current Book is still saving.
-  // Only adopting a Book (including a reload) starts a new save session.
-  const bookSessionRef = useRef(0);
-  const bookNavigationPending = useRef(false);
+
   const selectionRef = useRef({ sectionId, view });
   selectionRef.current = { sectionId, view };
 
+  const bookSession = useBookSession({
+    bootstrap: {
+      load: () => api.listProviderProfiles(),
+      apply: (profiles) => {
+        setProviderProfiles(profiles);
+        if (profiles.length > 0) {
+          setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
+            ? current : profiles[0]?.id ?? current);
+        }
+      },
+    },
+    onStatus: setStatus,
+    isBusy: () => busyRef.current,
+    hasLocalEditorDraft: (bookId): boolean => hasLocalEditorDraft(bookId),
+    onTransition: (transition) => {
+      switch (transition.kind) {
+        case 'reset':
+          setSectionId('');
+          setInstruction('');
+          sectionDraftsRef.current = {};
+          setSectionDrafts({});
+          setView('shelf');
+          return;
+        case 'before-switch':
+          rememberCurrentSectionDraft();
+          return;
+        case 'activated':
+          setSectionId('');
+          setSelectedCharacterId(transition.reason === 'created' ? '' : transition.book.characters[0]?.id ?? '');
+          restoreSectionDraft(transition.book.id, '');
+          setView('shelf');
+          if (transition.reason === 'created') setEmptyBookDialogOpen(false);
+          return;
+        case 'empty':
+          setSectionId('');
+          setSelectedCharacterId('');
+          setInstruction('');
+          sectionDraftsRef.current = {};
+          setSectionDrafts({});
+          setView('shelf');
+          return;
+        case 'deleted':
+          removeContextDraftSessions(transition.bookId);
+          return;
+        case 'external-refresh': {
+          const loaded = transition.book;
+          const selected = selectionRef.current.sectionId;
+          if (selected && !loaded.chapters.some((chapter) => chapter.sections.some((item) => item.id === selected))) {
+            setSectionId('');
+            setInstruction('');
+            setContextToolsOpen(false);
+            setContextCompositionOpen(false);
+            setWriterBookSettingsOpen(false);
+            removeContextDraftSessions(loaded.id, new Set([selected]));
+            setView('shelf');
+            restoreShelfFocus.current = true;
+            setStatus('这个小节已在另一页删除，已返回本书目录。');
+          }
+          return;
+        }
+        case 'navigation-pending':
+          busyRef.current = transition.pending;
+          setBusy(transition.pending);
+          return;
+      }
+    },
+  });
+  const {
+    book, library, dirty, libraryReady, saveConflict, openBook, navigateToBook,
+    changeBook, saveCurrent, commitBookChange, ensureCurrentBookSaved,
+    assertWriteAccess: assertDeviceWriteAccess,
+  } = bookSession;
+
   const canEdit = libraryReady;
 
-  const assertDeviceWriteAccess = () => {
-    if (!libraryReady) throw new Error('书库仍在打开，请稍候。');
-  };
-
-  const cancelStreamingFrame = () => {
-    if (streamingFrame.current === null) return;
-    window.cancelAnimationFrame?.(streamingFrame.current);
-    window.clearTimeout(streamingFrame.current);
-    streamingFrame.current = null;
-  };
-
-  useEffect(() => () => {
-    generationAbort.current?.abort();
-    libraryLoadGenerationRef.current += 1;
-    bookLoadGenerationRef.current += 1;
-    bookSessionRef.current += 1;
-    cancelStreamingFrame();
-    streamingPending.current = null;
-  }, []);
-
-  const advanceSaveRevision = () => {
-    saveRevision.current += 1;
-    saveFlights.current.clear();
-    persistedRevision.current = null;
-    return saveRevision.current;
-  };
-
-  const cacheCurrentDraft = (candidate: Book) => {
-    if (api.runtime !== 'device') return false;
-    if (draftBaseUpdatedAt.current === undefined) {
-      draftBaseUpdatedAt.current = persistedUpdatedAt.current;
-    }
-    if (draftBaseUpdatedAt.current === null) {
-      return cacheDraftBook(candidate);
-    }
-    return cacheDraftBook(candidate, draftBaseUpdatedAt.current ?? null);
-  };
-
-  const clearCurrentDraft = (bookId: string) => {
-    removeDraftBook(bookId);
-    draftBaseUpdatedAt.current = undefined;
-  };
 
   const section = useMemo(() => book?.chapters.flatMap((chapter) => chapter.sections)
     .find((candidate) => candidate.id === sectionId), [book, sectionId]);
@@ -340,9 +263,6 @@ function App() {
     && deferredContextInput.section?.id === section?.id;
   const promptPreview = previewMatchesTarget ? contextPreview.plan : null;
   const promptPreviewError = previewMatchesTarget ? contextPreview.error : '';
-  useEffect(() => {
-    clearHostBookCaches();
-  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -383,76 +303,16 @@ function App() {
     navigationState.current = { dirty, busy, instruction, sectionDrafts };
   }, [busy, dirty, instruction, sectionDrafts]);
 
-  useEffect(() => {
-    bookRef.current = book;
-  }, [book]);
-
-  const hasLocalEditorDraft = (bookId: string) => {
+  const hasLocalEditorDraft = (bookId: string): boolean => {
     const active = document.activeElement;
     // Native composition/selection and local forms may not have reached Book yet.
     return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
       || Boolean(mainContent.current?.querySelector('.inline-title-input, .block-editor-page, .source-editor-page, dialog[open]'))
       || [...contextToolDrafts.current.values()].some((session) => session.bookId === bookId && session.hasChanges)
       || Boolean(navigationState.current.instruction.trim())
-      || Boolean(bookRef.current?.chapters.some((chapter) => chapter.sections.some((section) =>
+      || Boolean(bookSession.getSnapshot().book?.chapters.some((chapter) => chapter.sections.some((section) =>
         sectionDraftsRef.current[sectionDraftKey(bookId, section.id)]?.instruction.trim())));
   };
-
-  useEffect(() => {
-    if (!isDeviceRuntime) return undefined;
-    const currentBookId = book?.id;
-    const onStorage = (event: StorageEvent) => {
-      const isLibraryUpdate = event.key === 'story-native:library';
-      const isAnyBookUpdate = event.key === null || event.key?.startsWith(bookCachePrefix) === true;
-      const isCurrentBookUpdate = Boolean(currentBookId && event.key === bookCacheKey(currentBookId));
-      if (!isLibraryUpdate && !isAnyBookUpdate) return;
-      if (isLibraryUpdate && api.runtime === 'device') {
-        void api.listPersistedBooks().then(setLibrary)
-          .catch((error) => setStatus(error instanceof Error ? error.message : '无法刷新书库。'));
-      }
-      if (!currentBookId || !isCurrentBookUpdate) return;
-      const storedValue = localStorage.getItem(bookCacheKey(currentBookId));
-      if (!storedValue) {
-        saveConflictRef.current = true;
-        setSaveConflict(true);
-        setDirty(true);
-        setStatus(bookConflictMessage);
-        return;
-      }
-      try {
-        const incoming = JSON.parse(storedValue) as unknown;
-        if (!isCachedBook(incoming, book.id) || incoming.updatedAt === persistedUpdatedAt.current) return;
-        if (persistedRevision.current === saveRevision.current && !busyRef.current && !hasLocalEditorDraft(currentBookId)) {
-          const loaded = normalizeBook(incoming);
-          const selected = selectionRef.current.sectionId;
-          if (selected && !loaded.chapters.some((chapter) => chapter.sections.some((item) => item.id === selected))) {
-            setSectionId('');
-            setInstruction('');
-            setContextToolsOpen(false);
-            setContextCompositionOpen(false);
-            setWriterBookSettingsOpen(false);
-            removeContextDraftSessions(loaded.id, new Set([selected]));
-            setView('shelf');
-            restoreShelfFocus.current = true;
-            setStatus('这个小节已在另一页删除，已返回本书目录。');
-          }
-          bookRef.current = loaded;
-          setBook(loaded);
-          persistedUpdatedAt.current = loaded.updatedAt;
-          persistedRevision.current = advanceSaveRevision();
-        } else {
-          saveConflictRef.current = true;
-          setSaveConflict(true);
-          setDirty(true);
-          setStatus(bookConflictMessage);
-        }
-      } catch {
-        // A malformed update is handled by the next explicit load; keep the local page intact.
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, [book?.id, isDeviceRuntime]);
 
   useEffect(() => {
     const protectUnsavedWork = (event: BeforeUnloadEvent) => {
@@ -518,323 +378,6 @@ function App() {
     setSectionDrafts(next);
   };
 
-  useEffect(() => {
-    let active = true;
-    const loadGeneration = ++libraryLoadGenerationRef.current;
-    const isCurrent = () => active && loadGeneration === libraryLoadGenerationRef.current;
-
-    setLibraryReady(false);
-    setLibrary([]);
-    setBook(null);
-    bookRef.current = null;
-    bookSessionRef.current += 1;
-    setSectionId('');
-    setInstruction('');
-    sectionDraftsRef.current = {};
-    setSectionDrafts({});
-    saveConflictRef.current = false;
-    persistedUpdatedAt.current = null;
-    draftBaseUpdatedAt.current = undefined;
-    advanceSaveRevision();
-    setDirty(false);
-    setSaveConflict(false);
-    setView('shelf');
-    setStatus(isDeviceRuntime ? '正在打开此设备的书库…' : '正在打开本机书库…');
-    void (async () => {
-      try {
-        let libraryWarning = '';
-        const readLibrary = async () => {
-          try { return await api.listBooks(); }
-          catch (error) {
-            if (api.runtime !== 'device') throw error;
-            // A failed coordinator must not hide already-saved Books or their
-            // export path. Writes still go through the gate and report errors.
-            libraryWarning = error instanceof Error ? error.message : '设备保存协调暂不可用。';
-            return api.listPersistedBooks();
-          }
-        };
-        const [entries, profiles] = await Promise.all([
-          readLibrary(),
-          api.listProviderProfiles(),
-        ]);
-        if (!isCurrent()) return;
-        setProviderProfiles(profiles);
-        if (profiles.length > 0) {
-          setActiveProviderProfileId((current) => profiles.some((profile) => profile.id === current)
-            ? current
-            : profiles[0]?.id ?? current);
-        }
-        if (!isCurrent()) return;
-        setLibrary(entries);
-        const selectedBookId = entries[0]?.id;
-        if (selectedBookId) {
-          await openBook(selectedBookId);
-        }
-        if (!isCurrent()) return;
-        setLibraryReady(true);
-        if (!saveConflictRef.current) setStatus(libraryWarning);
-      } catch (error) {
-        if (!isCurrent()) return;
-        setLibraryReady(true);
-        setStatus(error instanceof Error ? error.message : '无法打开书库。');
-      }
-    })();
-    return () => { active = false; };
-  }, [isDeviceRuntime]);
-
-  useEffect(() => {
-    if (!book || !dirty || !canEdit) return;
-    const candidate = normalizeBook(book);
-    let cachedLocally = false;
-    if (api.runtime === 'device') cachedLocally = cacheCurrentDraft(candidate);
-    if (saveConflictRef.current) {
-      setStatus(bookConflictMessage);
-      return;
-    }
-    setLibrary((items) => [{ id: book.id, title: book.title, updatedAt: book.updatedAt },
-      ...items.filter((item) => item.id !== book.id)]);
-    setStatus(api.runtime === 'device'
-      ? (cachedLocally ? '本页恢复草稿已保留，正在保存到此设备…' : '本页恢复草稿无法写入，正在尝试保存书目…')
-      : '正在保存到书库…');
-
-    const revision = saveRevision.current;
-    const timer = window.setTimeout(() => {
-      const task = queueBookSave(candidate, revision, revision);
-      void task.then((saved) => {
-        if (saveRevision.current !== revision) return;
-        const normalizedSaved = normalizeBook(saved);
-        if (api.runtime === 'device') {
-          clearCurrentDraft(normalizedSaved.id);
-        }
-        bookRef.current = normalizedSaved;
-        setBook((current) => current?.id === normalizedSaved.id ? normalizedSaved : current);
-        setLibrary((items) => [{ id: normalizedSaved.id, title: normalizedSaved.title, updatedAt: normalizedSaved.updatedAt },
-          ...items.filter((item) => item.id !== saved.id)]);
-        setDirty(false);
-        setStatus(api.runtime === 'device'
-          ? '已自动保存到此设备。'
-          : '已自动保存。');
-      }).catch((error) => {
-        if (saveRevision.current === revision) {
-          if (isBookConflictError(error)) {
-            setDirty(true);
-            setStatus(bookConflictMessage);
-          } else {
-            const recovery = api.runtime === 'device' && cachedLocally
-              ? '当前设备草稿仍保留本次修改。'
-              : '请立即复制正文或导出仍可访问的内容。';
-            setStatus(`${error instanceof Error ? error.message : '保存失败。'} ${recovery}`);
-          }
-        }
-      });
-    }, 700);
-
-    return () => window.clearTimeout(timer);
-  }, [book, canEdit, dirty]);
-
-  const openBook = async (bookId: string, options: { ignoreDraft?: boolean; persistedOnly?: boolean } = {}) => {
-    const loadGeneration = ++bookLoadGenerationRef.current;
-    const isCurrent = () => loadGeneration === bookLoadGenerationRef.current;
-    const persistedOnly = options.persistedOnly ?? false;
-    try {
-      if (book && book.id !== bookId && dirty && !persistedOnly) await saveCurrent();
-    } catch (error) { if (isCurrent()) throw error; return false; }
-    if (!isCurrent()) return false;
-    rememberCurrentSectionDraft();
-    let resolution: BookLoadResolution;
-    try {
-      resolution = await resolveBookForLoad(bookId, { ...options, persistedOnly });
-    } catch (error) { if (isCurrent()) throw error; return false; }
-    if (!isCurrent()) return false;
-    const { stored, loaded, draft, draftConflict, loadedDirty } = resolution;
-    bookSessionRef.current += 1;
-    persistedUpdatedAt.current = stored.updatedAt;
-    draftBaseUpdatedAt.current = !persistedOnly && !options.ignoreDraft && draft !== null ? draft.baseUpdatedAt : undefined;
-    saveConflictRef.current = !persistedOnly && draftConflict;
-    setSaveConflict(!persistedOnly && draftConflict);
-    const revision = advanceSaveRevision();
-    bookRef.current = loaded;
-    setBook(loaded);
-    setSectionId('');
-    setSelectedCharacterId(loaded.characters[0]?.id ?? '');
-    restoreSectionDraft(loaded.id, '');
-    persistedRevision.current = loadedDirty ? null : revision;
-    setDirty(persistedOnly ? false : loadedDirty);
-    if (!persistedOnly && draftConflict) setStatus(bookConflictMessage);
-    setView('shelf');
-    return true;
-  };
-
-  const changeBook = (recipe: (current: Book) => Book) => {
-    assertDeviceWriteAccess();
-    advanceSaveRevision();
-    const current = bookRef.current ?? book;
-    if (!current) return;
-    const next = normalizeBook({ ...recipe(current), updatedAt: new Date().toISOString() });
-    bookRef.current = next;
-    setBook(next);
-    setDirty(true);
-  };
-
-  const navigateToBook = async (bookId: string) => {
-    if (busyRef.current && !bookNavigationPending.current) return;
-    bookNavigationPending.current = true;
-    busyRef.current = true;
-    setBusy(true);
-    const task = openBook(bookId);
-    const request = bookLoadGenerationRef.current;
-    try { await task; }
-    catch (error) {
-      if (request === bookLoadGenerationRef.current) setStatus(isBookConflictError(error)
-        ? bookConflictMessage : error instanceof Error ? error.message : '无法打开书目。');
-    } finally {
-      if (request === bookLoadGenerationRef.current) {
-        bookNavigationPending.current = false;
-        busyRef.current = false;
-        setBusy(false);
-      }
-    }
-  };
-
-  const queueBookSave = (candidate: Book, revision: number, autosaveRevision?: number): Promise<Book> => {
-    assertDeviceWriteAccess();
-    const owner = bookSessionRef.current;
-    const ownsBook = () => owner === bookSessionRef.current && bookRef.current?.id === candidate.id;
-    const existing = saveFlights.current.get(revision);
-    if (existing) return existing;
-    let persisted = false;
-    const task = saveQueue.current.catch(() => undefined).then(() => {
-      // A delayed autosave may already be behind a slow PUT. Skip its stale
-      // snapshot before starting another full-book write; an already-started
-      // request remains untouched and its response is still revision-guarded.
-      if (autosaveRevision !== undefined && saveRevision.current !== autosaveRevision) {
-        return candidate;
-      }
-      if (!ownsBook()) throw staleSaveError();
-      if (saveConflictRef.current) throw blockedBookConflictError();
-      if (!persistedUpdatedAt.current) throw new Error('缺少当前书目的服务端保存基线，请重新载入后再保存。');
-      persisted = true;
-      return api.saveBook(candidate, persistedUpdatedAt.current);
-    });
-    const tracked: Promise<Book> = task.then((saved) => {
-      if (persisted && ownsBook()) {
-        persistedUpdatedAt.current = saved.updatedAt;
-        if (saveRevision.current === revision) persistedRevision.current = revision;
-        else if (api.runtime === 'device' && bookRef.current) {
-          // Newer edits extend this successful write. Their recovery baseline
-          // must advance too, without clearing or replacing their draft.
-          draftBaseUpdatedAt.current = saved.updatedAt;
-          cacheCurrentDraft(bookRef.current);
-        }
-      }
-      return saved;
-    }, (error) => {
-      if (ownsBook() && isBookConflictError(error)) {
-        saveConflictRef.current = true;
-        setSaveConflict(true);
-        setDirty(true);
-      }
-      if (saveFlights.current.get(revision) === tracked) saveFlights.current.delete(revision);
-      throw error;
-    });
-    saveFlights.current.set(revision, tracked);
-    saveQueue.current = tracked.then(() => undefined, () => undefined);
-    return tracked;
-  };
-
-  const saveCurrent = async (candidateOverride?: Book) => {
-    assertDeviceWriteAccess();
-    const owner = bookSessionRef.current;
-    const currentBook = candidateOverride ?? bookRef.current ?? book;
-    if (!currentBook) throw new Error('请先打开一本书。');
-    const candidate = normalizeBook(currentBook);
-    const revision = saveRevision.current;
-    if (!candidateOverride
-      && !dirty
-      && persistedRevision.current === revision) return currentBook;
-    const saveRevisionForCandidate = candidateOverride ? advanceSaveRevision() : revision;
-    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
-    if (api.runtime === 'device') cacheCurrentDraft(candidate);
-    const saved = normalizeBook(await queueBookSave(candidate, saveRevisionForCandidate));
-    if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== saveRevisionForCandidate) throw staleSaveError();
-    if (api.runtime === 'device') {
-      clearCurrentDraft(saved.id);
-    }
-    bookRef.current = saved;
-    setBook(saved);
-    setDirty(false);
-    persistedRevision.current = saveRevisionForCandidate;
-    persistedUpdatedAt.current = saved.updatedAt;
-    saveConflictRef.current = false;
-    setSaveConflict(false);
-    setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
-      ...items.filter((item) => item.id !== saved.id)]);
-    setStatus(api.runtime === 'device'
-      ? '已自动保存到此设备。'
-      : '已自动保存。');
-    return saved;
-  };
-
-  const commitBookChange = async (recipe: (current: Book) => Book, deferCommit = false) => {
-    assertDeviceWriteAccess();
-    const currentBook = bookRef.current ?? book;
-    if (!currentBook) throw new Error('请先打开一本书。');
-    const owner = bookSessionRef.current;
-    const candidate = normalizeBook({
-      ...recipe(currentBook),
-      updatedAt: new Date().toISOString(),
-    });
-    const revision = advanceSaveRevision();
-    if (!deferCommit) {
-      bookRef.current = candidate;
-      setBook(candidate);
-      setDirty(true);
-      if (api.runtime === 'device') cacheCurrentDraft(candidate);
-    }
-    setStatus(api.runtime === 'device' ? '正在保存到此设备…' : '正在保存到书库…');
-    try {
-      const saved = normalizeBook(await queueBookSave(candidate, revision));
-      // The write succeeded, but later edits still own the visible Book.
-      if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) return saved;
-      if (api.runtime === 'device') {
-        clearCurrentDraft(saved.id);
-      }
-      bookRef.current = saved;
-      setBook(saved);
-      setDirty(false);
-      persistedRevision.current = revision;
-      persistedUpdatedAt.current = saved.updatedAt;
-      saveConflictRef.current = false;
-      setSaveConflict(false);
-      setLibrary((items) => [{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt },
-        ...items.filter((item) => item.id !== saved.id)]);
-      setStatus(api.runtime === 'device' ? '已保存到此设备。' : '已保存。');
-      return saved;
-    } catch (error) {
-      if (owner !== bookSessionRef.current || bookRef.current?.id !== candidate.id || saveRevision.current !== revision) throw error;
-      if (!deferCommit && !isBookConflictError(error)) {
-        bookRef.current = currentBook;
-        setBook(currentBook);
-        setDirty(dirty);
-        if (api.runtime === 'device') {
-          if (dirty) cacheCurrentDraft(currentBook);
-          else clearCurrentDraft(currentBook.id);
-        }
-      } else if (isBookConflictError(error)) {
-        setDirty(true);
-      }
-      setStatus(isBookConflictError(error)
-        ? bookConflictMessage
-        : error instanceof Error ? error.message : '保存失败。');
-      throw error;
-    }
-  };
-
-  const ensureCurrentBookSaved = async () => {
-    if (!book || !dirty) return book;
-    return saveCurrent();
-  };
-
   const closeExport = () => {
     exportDialog.current?.close();
     window.requestAnimationFrame(() => exportTrigger.current?.focus());
@@ -869,86 +412,6 @@ function App() {
     }
   };
 
-  const setStreamingDraftState = (next: StreamingDraft | null) => {
-    streamingDraftRef.current = next;
-    setStreamingDraft(next);
-  };
-
-  const flushStreamingDraft = (controller: AbortController) => {
-    const pending = streamingPending.current;
-    if (!pending || pending.controller !== controller) return;
-    streamingPending.current = null;
-    const current = streamingDraftRef.current;
-    if (!current || current.key !== pending.key || current.status !== 'streaming') return;
-    setStreamingDraftState({ ...current, content: pending.content });
-  };
-
-  const scheduleStreamingDelta = (
-    controller: AbortController,
-    key: string,
-    delta: string,
-  ) => {
-    if (!delta || streamingControllerRef.current !== controller) return;
-    const current = streamingDraftRef.current;
-    if (!current || current.key !== key || current.status !== 'streaming') return;
-    const pending = streamingPending.current;
-    streamingPending.current = {
-      controller,
-      key,
-      content: (pending?.controller === controller && pending.key === key ? pending.content : current.content) + delta,
-    };
-    if (streamingFrame.current !== null) return;
-    const flush = () => {
-      streamingFrame.current = null;
-      flushStreamingDraft(controller);
-    };
-    streamingFrame.current = typeof window.requestAnimationFrame === 'function'
-      ? window.requestAnimationFrame(flush)
-      : window.setTimeout(flush, 0);
-  };
-
-  const beginStreamingDraft = (request: GenerationRequest, controller: AbortController) => {
-    const draft: StreamingDraft = {
-      key: streamingDraftKey(request),
-      bookId: request.bookId,
-      sectionId: request.sectionId,
-      ...(request.targetBlockId ? { targetBlockId: request.targetBlockId } : {}),
-      replaceTarget: request.generationKind === 'regenerate-block',
-      content: '',
-      status: 'streaming',
-      message: '正在逐步生成，尚未写入正文。',
-    };
-    cancelStreamingFrame();
-    streamingControllerRef.current = controller;
-    streamingPending.current = null;
-    setStreamingDraftState(draft);
-  };
-
-  const finishStreamingDraft = (
-    controller: AbortController,
-    status: Exclude<StreamingDraftStatus, 'streaming'>,
-  ) => {
-    if (streamingControllerRef.current !== controller) return;
-    flushStreamingDraft(controller);
-    cancelStreamingFrame();
-    const current = streamingDraftRef.current;
-    if (!current) return;
-    setStreamingDraftState({
-      ...current,
-      status,
-      message: status === 'stopped'
-        ? '已停止，生成草稿未写入正文。'
-        : '生成失败，草稿未写入正文。',
-    });
-  };
-
-  const clearStreamingDraft = (controller?: AbortController) => {
-    if (controller && streamingControllerRef.current !== controller) return;
-    cancelStreamingFrame();
-    streamingControllerRef.current = null;
-    streamingPending.current = null;
-    setStreamingDraftState(null);
-  };
 
   const withBusy = async (action: () => Promise<void>) => {
     if (busyRef.current) return;
@@ -967,154 +430,30 @@ function App() {
     }
   };
 
-  const runGeneration = async (request: GenerationRequest, label: string) => {
-    if (generationAbort.current) throw new Error('已有生成正在进行，请先完成或取消当前生成。');
-    const controller = new AbortController();
-    const visibleSelection = selectionRef.current;
-    const visibleBookId = bookRef.current?.id ?? request.bookId;
-    const requestBookSession = bookSessionRef.current;
-    const sourceSectionTitle = request.generationKind === 'summarize-section'
-      ? bookRef.current?.chapters.flatMap((chapter) => chapter.sections)
-        .find((item) => item.id === request.sectionId)?.title
-      : undefined;
-    const target = {
-      bookId: request.bookId,
-      sectionId: request.sectionId,
-      targetBlockId: request.targetBlockId,
-    };
-    generationAbort.current = controller;
-    generationTarget.current = target;
-    if (request.stream) beginStreamingDraft(request, controller);
-    else clearStreamingDraft();
-    setGenerationState('generating');
-    setStatus(label);
-    try {
-      const result = await api.generate(
-        request,
-        controller.signal,
-        request.stream ? (delta) => scheduleStreamingDelta(controller, streamingDraftKey(request), delta) : undefined,
-      );
-      if (controller.signal.aborted
-        || generationAbort.current !== controller
-        || generationTarget.current !== target
-        || bookRef.current?.id !== visibleBookId
-        || bookSessionRef.current !== requestBookSession
-        || selectionRef.current.sectionId !== visibleSelection.sectionId
-        || selectionRef.current.view !== visibleSelection.view) throw abortGenerationError();
-      const finishReason = result.finishReason ?? 'unknown';
-      if (isUnsuccessfulFinishReason(finishReason)) {
-        const isSummary = request.generationKind === 'summarize-section';
-        const message = unsuccessfulFinishMessage(finishReason, isSummary, sourceSectionTitle);
-        cancelStreamingFrame();
-        streamingControllerRef.current = null;
-        streamingPending.current = null;
-        setStreamingDraftState({
-          key: `${request.bookId}:${visibleSelection.sectionId}:${request.targetBlockId ?? 'section'}`,
-          bookId: visibleBookId,
-          sectionId: visibleSelection.sectionId,
-          ...(request.targetBlockId ? { targetBlockId: request.targetBlockId } : {}),
-          replaceTarget: request.generationKind === 'regenerate-block',
-          content: result.draft,
-          status: 'failed',
-          message,
-        });
-        throw new Error(message);
-      }
-      if (request.stream) clearStreamingDraft(controller);
-      return { ...result, finishReason };
-    } catch (error) {
-      if (request.stream && streamingControllerRef.current === controller) {
-        finishStreamingDraft(controller, isAbortError(error) ? 'stopped' : 'failed');
-      }
-      throw error;
-    } finally {
-      if (generationAbort.current === controller) {
-        generationAbort.current = null;
-        generationTarget.current = null;
-        setGenerationState('idle');
-      }
-    }
-  };
-
-  const cancelGeneration = () => {
-    if (!generationAbort.current) return;
-    generationAbort.current.abort();
-    setStatus('正在取消生成…');
-  };
-
-  const hasCharacterSelection = () => mode !== 'character'
-    || Boolean(book?.characters.some((character) => character.id === selectedCharacterId));
-
-  const generateContinuation = () => withBusy(async () => {
-    if (!hasCharacterSelection()) {
-      setStatus('角色模式需要先选择本书角色。');
-      return;
-    }
-    const targetSectionId = sectionId;
-    const inputSnapshot = instruction;
-    const noteSnapshot = authorNote;
-    const modeSnapshot = mode;
-    const characterSnapshot = selectedCharacterId;
-    const providerProfileIdSnapshot = activeProviderProfile?.id;
-    const streamingOutputSnapshot = streamingOutput;
-    const generationRevision = saveRevision.current;
-    const saved = await saveCurrent();
-    if (saveRevision.current !== generationRevision) throw staleSaveError();
-    const generation = {
-      bookId: saved.id,
-      sectionId: targetSectionId,
-      providerProfileId: providerProfileIdSnapshot,
-      mode: modeSnapshot,
-      selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-      authorNote: noteSnapshot || undefined,
-      instruction: inputSnapshot,
-      generationKind: 'continue-section',
-      stream: streamingOutputSnapshot,
-    } satisfies GenerationRequest;
-    const result = await runGeneration(generation, '正在生成当前小节…');
-    if (bookRef.current?.id !== saved.id || saveRevision.current !== generationRevision) {
-      setStatus('当前书目或正文已变化，生成结果未写入。');
-      return;
-    }
-    const inputBlockId = inputSnapshot.trim() ? makeId('block') : undefined;
-    const additions: SectionBlock[] = [
-      ...(inputBlockId
-        ? [{ id: inputBlockId, kind: 'user' as const, content: inputSnapshot.trim() }]
-        : []),
-      appendCandidate(
-        { id: makeId('block'), kind: 'assistant', content: '' },
-        {
-          id: makeId('candidate'),
-          content: result.draft,
-          ...(result.sourceSignature !== undefined ? { sourceSignature: result.sourceSignature } : {}),
-        },
-      ),
-    ];
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === targetSectionId
-          ? (() => {
-              const blocks = [...sectionBlocks(item), ...additions];
-              return { ...item, blocks, content: blocksAsContent(blocks) };
-            })()
-          : item),
-        })),
-    }));
-    setInstruction((current) => current === inputSnapshot ? '' : current);
-    clearSectionDraft(saved.id, targetSectionId, inputSnapshot);
-    if (inputBlockId) {
-      const responseRevision = saveRevision.current;
-      const savedResponse = await saveCurrent();
-      if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
-        setStatus('当前正文已变化，候选整理未写入。');
-        return;
-      }
-      finalizePreviousAnswerCandidates(savedResponse, targetSectionId, inputBlockId);
-    }
-    setStatus(finishReasonSuccessStatus('续写已加入当前小节。', result.finishReason ?? 'unknown'));
+  const generationSession = useGenerationSession({
+    bookSession,
+    getSelection: () => selectionRef.current,
+    withBusy,
+    onStatus: setStatus,
+    onSummaryBusyChange: setBusy,
+    onContinuationApplied: ({ bookId, sectionId, instruction: inputSnapshot }) => {
+      setInstruction((current) => current === inputSnapshot ? '' : current);
+      clearSectionDraft(bookId, sectionId, inputSnapshot);
+    },
   });
+  const { generationState, streamingDraft, cancelGeneration } = generationSession;
+  const generationInput = {
+    sectionId, mode, selectedCharacterId,
+    providerProfileId: activeProviderProfile?.id,
+    streamingOutput,
+  };
+  const generateContinuation = () => generationSession.generateContinuation({
+    ...generationInput, instruction, authorNote,
+  });
+  const respondToInput = (blockId: string) => generationSession.respondToInput(blockId, generationInput);
+  const regenerateBlock = (blockId: string) => generationSession.regenerateBlock(blockId, generationInput);
+  const generateSectionMemory = (sourceSectionId: string) =>
+    generationSession.generateSectionMemory(sourceSectionId, generationInput);
 
   const updateSectionNote = (value: string) => {
     if (!section) return;
@@ -1156,241 +495,11 @@ function App() {
     }));
   };
 
-  const previousAnswerWithCandidates = (
-    savedBook: Book,
-    targetSectionId: string,
-    targetBlockId: string,
-  ): string | undefined => {
-    if (bookRef.current?.id !== savedBook.id) return undefined;
-    const savedSection = savedBook.chapters.flatMap((chapter) => chapter.sections)
-      .find((item) => item.id === targetSectionId);
-    const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
-    const targetIndex = savedBlocks.findIndex((item) => item.id === targetBlockId);
-    if (targetIndex < 0) return undefined;
-    for (let index = targetIndex - 1; index >= 0; index -= 1) {
-      const candidate = savedBlocks[index];
-      if (candidate?.kind === 'assistant') {
-        if (candidate.candidates && candidate.candidates.length > 1 && candidate.adoptedCandidateId) {
-          return candidate.id;
-        }
-        break;
-      }
-    }
-    return undefined;
-  };
-
-  const finalizePreviousAnswerCandidates = (
-    savedBook: Book,
-    targetSectionId: string,
-    targetBlockId: string,
-  ) => {
-    const previousAnswerId = previousAnswerWithCandidates(savedBook, targetSectionId, targetBlockId);
-    if (!previousAnswerId) return;
-    changeBook((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => {
-          if (item.id !== targetSectionId) return item;
-          const blocks = sectionBlocks(item).map((candidate) => candidate.id === previousAnswerId
-            ? finalizeAnswerCandidates(candidate)
-            : candidate);
-          return { ...item, blocks, content: blocksAsContent(blocks) };
-        }),
-      })),
-    }));
-  };
-
-  const respondToInput = (blockId: string) => {
-    const currentBook = bookRef.current ?? book;
-    const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
-      .find((item) => item.id === sectionId);
-    if (!currentSection) return;
-    const targetSectionId = currentSection.id;
-    const currentBlocks = sectionBlocks(currentSection);
-    const targetIndex = currentBlocks.findIndex((item) => item.id === blockId);
-    const target = targetIndex >= 0 ? currentBlocks[targetIndex] : undefined;
-    if (!target || target.kind !== 'user' || !target.content.trim()) return;
-    const targetContentSnapshot = target.content;
-    const sourceSnapshot = generationSourceFingerprint(currentBlocks, targetIndex);
-    void withBusy(async () => {
-      const modeSnapshot = mode;
-      const characterSnapshot = selectedCharacterId;
-      const providerProfileIdSnapshot = activeProviderProfile?.id;
-      const streamingOutputSnapshot = streamingOutput;
-      const generationRevision = saveRevision.current;
-      const saved = await saveCurrent();
-      if (saveRevision.current !== generationRevision) throw staleSaveError();
-      const savedSection = saved.chapters.flatMap((chapter) => chapter.sections)
-        .find((item) => item.id === targetSectionId);
-      const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
-      const savedTargetIndex = savedBlocks.findIndex((item) => item.id === blockId);
-      const savedTarget = savedTargetIndex >= 0 ? savedBlocks[savedTargetIndex] : undefined;
-      const savedLastNonEmptyIndex = savedBlocks.reduce((last, item, index) => item.content.trim() ? index : last, -1);
-      if (saved.id !== bookRef.current?.id
-        || !savedTarget
-        || savedTarget.kind !== 'user'
-        || savedTarget.content !== targetContentSnapshot
-        || savedTargetIndex !== savedLastNonEmptyIndex
-        || generationSourceFingerprint(savedBlocks, savedTargetIndex) !== sourceSnapshot) {
-        setStatus('当前输入已变化，回答未写入正文。');
-        return;
-      }
-      const generation = {
-        ...makeRespondToInputRequest({
-          bookId: saved.id,
-          sectionId: targetSectionId,
-          providerProfileId: providerProfileIdSnapshot,
-          mode: modeSnapshot,
-          selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-          targetBlockId: blockId,
-        }),
-        stream: streamingOutputSnapshot,
-      } satisfies GenerationRequest;
-      const result = await runGeneration(generation, '正在生成这条输入的回答…');
-      const currentBook = bookRef.current;
-      const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
-        .find((item) => item.id === targetSectionId);
-      const currentBlocks = currentSection ? sectionBlocks(currentSection) : [];
-      const currentTargetIndex = currentBlocks.findIndex((item) => item.id === blockId);
-      const currentLastNonEmptyIndex = currentBlocks.reduce((last, item, index) =>
-        item.content.trim() ? index : last, -1);
-      if (currentBook?.id !== saved.id
-        || saveRevision.current !== generationRevision
-        || currentTargetIndex < 0
-        || currentTargetIndex !== currentLastNonEmptyIndex
-        || currentBlocks[currentTargetIndex]?.kind !== 'user'
-        || currentBlocks[currentTargetIndex]?.content !== targetContentSnapshot
-        || generationSourceFingerprint(currentBlocks, currentTargetIndex) !== sourceSnapshot) {
-        setStatus('当前输入已变化，回答未写入正文。');
-        return;
-      }
-      changeBook((current) => ({
-        ...current,
-        chapters: current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            return applyAnswerCandidateOutcome({
-              section: item,
-              targetBlockId: blockId,
-              writerDraft: { instruction: '', authorNote: '' },
-              outcome: {
-                status: 'success',
-                content: result.draft,
-                sourceSignature: result.sourceSignature,
-              },
-            }).section;
-          }),
-        })),
-      }));
-      // Persist the new answer before collapsing the candidate set belonging
-      // to the immediately preceding AI answer. If this save fails, the new
-      // text and older candidates remain available for an autosave retry.
-      const responseRevision = saveRevision.current;
-      const savedResponse = await saveCurrent();
-      if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
-        setStatus('当前正文已变化，候选整理未写入。');
-        return;
-      }
-      finalizePreviousAnswerCandidates(savedResponse, targetSectionId, blockId);
-      setStatus(finishReasonSuccessStatus('已生成回答并加入正文。', result.finishReason ?? 'unknown'));
-    });
-  };
-
-  const regenerateBlock = (blockId: string) => {
-    const currentBook = bookRef.current ?? book;
-    const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
-      .find((item) => item.id === sectionId);
-    if (!currentSection) return;
-    const currentBlocks = sectionBlocks(currentSection);
-    const targetIndex = currentBlocks.findIndex((item) => item.id === blockId);
-    const target = targetIndex >= 0 ? currentBlocks[targetIndex] : undefined;
-    if (!target || target.kind !== 'assistant') return;
-    const targetSectionId = currentSection.id;
-    const targetContentSnapshot = target.content;
-    const sourceSnapshot = generationSourceFingerprint(currentBlocks, targetIndex);
-    void withBusy(async () => {
-      const modeSnapshot = mode;
-      const characterSnapshot = selectedCharacterId;
-      const providerProfileIdSnapshot = activeProviderProfile?.id;
-      const streamingOutputSnapshot = streamingOutput;
-      const generationRevision = saveRevision.current;
-      const saved = await saveCurrent();
-      if (saveRevision.current !== generationRevision) throw staleSaveError();
-      const savedSection = saved.chapters.flatMap((chapter) => chapter.sections)
-        .find((item) => item.id === targetSectionId);
-      const savedBlocks = savedSection ? sectionBlocks(savedSection) : [];
-      const savedTargetIndex = savedBlocks.findIndex((item) => item.id === blockId);
-      const savedTarget = savedTargetIndex >= 0 ? savedBlocks[savedTargetIndex] : undefined;
-      if (saved.id !== bookRef.current?.id
-        || !savedTarget
-        || savedTarget.kind !== 'assistant'
-        || savedTarget.content !== targetContentSnapshot
-        || generationSourceFingerprint(savedBlocks, savedTargetIndex) !== sourceSnapshot) {
-        setStatus('当前 AI 正文已变化，候选未写入。');
-        return;
-      }
-      const generation = {
-        ...makeRegenerateBlockRequest({
-          bookId: saved.id,
-          sectionId: targetSectionId,
-          providerProfileId: providerProfileIdSnapshot,
-          mode: modeSnapshot,
-          selectedCharacterId: modeSnapshot === 'character' ? characterSnapshot : undefined,
-          targetBlockId: blockId,
-        }),
-        stream: streamingOutputSnapshot,
-      } satisfies GenerationRequest;
-      const result = await runGeneration(generation, '正在生成新的候选回答…');
-      const resultSection = bookRef.current?.chapters.flatMap((chapter) => chapter.sections)
-        .find((item) => item.id === targetSectionId);
-      const resultBlocks = resultSection ? sectionBlocks(resultSection) : [];
-      const resultTargetIndex = resultBlocks.findIndex((item) => item.id === blockId);
-      if (bookRef.current?.id !== saved.id
-        || saveRevision.current !== generationRevision
-        || resultTargetIndex < 0
-        || resultBlocks[resultTargetIndex]?.kind !== 'assistant'
-        || resultBlocks[resultTargetIndex]?.content !== targetContentSnapshot
-        || generationSourceFingerprint(resultBlocks, resultTargetIndex) !== sourceSnapshot) {
-        setStatus('当前书目或正文已变化，候选未写入。');
-        return;
-      }
-      const candidate = {
-        id: makeId('candidate'),
-        content: result.draft,
-        ...(result.sourceSignature !== undefined ? { sourceSignature: result.sourceSignature } : {}),
-      };
-      changeBook((current) => ({
-        ...current,
-        chapters: current.chapters.map((chapter) => ({
-          ...chapter,
-          sections: chapter.sections.map((item) => {
-            if (item.id !== targetSectionId) return item;
-            const blocks = sectionBlocks(item).map((block) => block.id === blockId
-              ? adoptCandidate(appendCandidate(block, candidate), candidate.id)
-              : block);
-            if (!blocks.some((block) => block.id === blockId)) return item;
-            return { ...item, blocks, content: blocksAsContent(blocks) };
-          }),
-        })),
-      }));
-      if (streamingOutputSnapshot) {
-        const responseRevision = saveRevision.current;
-        const savedResponse = await saveCurrent();
-        if (savedResponse.id !== bookRef.current?.id || saveRevision.current !== responseRevision) {
-          setStatus('当前正文已变化，候选未写入。');
-          return;
-        }
-      }
-      setStatus(finishReasonSuccessStatus('已生成新的回答，并已切换到当前版本。', result.finishReason ?? 'unknown'));
-    });
-  };
 
   const selectBlockCandidate = (blockId: string, candidateId: string) => {
     const targetSectionId = section?.id;
     if (!targetSectionId) return;
-    const currentBook = bookRef.current ?? book;
+    const currentBook = bookSession.getSnapshot().book ?? book;
     const currentSection = currentBook?.chapters.flatMap((chapter) => chapter.sections)
       .find((item) => item.id === targetSectionId);
     const currentBlock = currentSection && sectionBlocks(currentSection).find((item) => item.id === blockId);
@@ -1437,68 +546,14 @@ function App() {
   const createBook = async (title: string) => {
     assertDeviceWriteAccess();
     setBusy(true);
-    try {
-      await ensureCurrentBookSaved();
-      rememberCurrentSectionDraft();
-      const created = await api.createBook(title);
-      const normalizedCreated = normalizeBook(created);
-      bookSessionRef.current += 1;
-      bookLoadGenerationRef.current += 1;
-      bookRef.current = normalizedCreated;
-      setLibrary((items) => [{ id: normalizedCreated.id, title: normalizedCreated.title, updatedAt: normalizedCreated.updatedAt }, ...items]);
-      setBook(normalizedCreated);
-      draftBaseUpdatedAt.current = undefined;
-      persistedUpdatedAt.current = normalizedCreated.updatedAt;
-      saveConflictRef.current = false;
-      setSaveConflict(false);
-      const revision = advanceSaveRevision();
-      setSectionId('');
-      setSelectedCharacterId('');
-      restoreSectionDraft(normalizedCreated.id, '');
-      persistedRevision.current = revision;
-      setDirty(false);
-      setView('shelf');
-      setStatus(api.runtime === 'device' ? '新书目已建立在此设备。' : '新书目已建立在本机。');
-      setEmptyBookDialogOpen(false);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : '新建书目失败。');
-      throw error;
-    } finally {
-      setBusy(false);
-    }
+    try { await bookSession.createBook(title); }
+    finally { setBusy(false); }
   };
 
   const importBookBackup = async (file: File) => {
     assertDeviceWriteAccess();
     const imported = parseBookBackup(await file.text());
-    if (saveConflictRef.current) {
-      rememberCurrentSectionDraft();
-    } else {
-      await ensureCurrentBookSaved();
-      rememberCurrentSectionDraft();
-    }
-    const restored = normalizeBook(await api.importBook(imported));
-    bookSessionRef.current += 1;
-    bookLoadGenerationRef.current += 1;
-    const revision = advanceSaveRevision();
-    persistedUpdatedAt.current = restored.updatedAt;
-    draftBaseUpdatedAt.current = undefined;
-    saveConflictRef.current = false;
-    setSaveConflict(false);
-    bookRef.current = restored;
-    setBook(restored);
-    setLibrary((items) => [{
-      id: restored.id,
-      title: restored.title,
-      updatedAt: restored.updatedAt,
-    }, ...items.filter((item) => item.id !== restored.id)]);
-    setSectionId('');
-    setSelectedCharacterId(restored.characters[0]?.id ?? '');
-    restoreSectionDraft(restored.id, '');
-    persistedRevision.current = revision;
-    setDirty(false);
-    setView('shelf');
-    setStatus(`已导入《${restored.title}》的恢复副本，原书目未覆盖。`);
+    await bookSession.importBookBackup(imported);
   };
 
   const deleteCurrentBook = async () => {
@@ -1508,66 +563,9 @@ function App() {
       setStatus(error.message);
       throw error;
     }
-    const deletedBook = book;
-    const nextBook = library.find((entry) => entry.id !== deletedBook.id);
-    const wasDirty = dirty;
     setBusy(true);
-    try {
-      await ensureCurrentBookSaved();
-      const nextResolution = nextBook ? await resolveBookForLoad(nextBook.id) : null;
-      const revision = advanceSaveRevision();
-      setDirty(false);
-      await saveQueue.current.catch(() => undefined);
-      await api.deleteBook(deletedBook.id);
-      bookSessionRef.current += 1;
-      bookLoadGenerationRef.current += 1;
-      removeContextDraftSessions(deletedBook.id);
-      removeDraftBook(deletedBook.id);
-      setLibrary((items) => items.filter((entry) => entry.id !== deletedBook.id));
-      if (nextResolution) {
-        const {
-          stored: storedNextBook,
-          loaded: loadedNextBook,
-          draft,
-          draftConflict,
-          loadedDirty,
-        } = nextResolution;
-        draftBaseUpdatedAt.current = draft?.baseUpdatedAt;
-        persistedUpdatedAt.current = storedNextBook.updatedAt;
-        saveConflictRef.current = draftConflict;
-        setSaveConflict(draftConflict);
-        bookRef.current = loadedNextBook;
-        setBook(loadedNextBook);
-        setSectionId('');
-        setSelectedCharacterId(loadedNextBook.characters[0]?.id ?? '');
-        restoreSectionDraft(loadedNextBook.id, '');
-        persistedRevision.current = loadedDirty ? null : revision;
-        setDirty(loadedDirty);
-        setView('shelf');
-      } else {
-        bookRef.current = null;
-        setBook(null);
-        setSectionId('');
-        setSelectedCharacterId('');
-        setInstruction('');
-        sectionDraftsRef.current = {};
-        setSectionDrafts({});
-        draftBaseUpdatedAt.current = undefined;
-        persistedUpdatedAt.current = null;
-        persistedRevision.current = null;
-        saveConflictRef.current = false;
-        setSaveConflict(false);
-        setDirty(false);
-        setView('shelf');
-      }
-      if (!saveConflictRef.current) setStatus(`已删除《${deletedBook.title}》。`);
-    } catch (error) {
-      setDirty(wasDirty);
-      setStatus(error instanceof Error ? error.message : '删除书目失败。');
-      throw error;
-    } finally {
-      setBusy(false);
-    }
+    try { await bookSession.deleteCurrentBook(); }
+    finally { setBusy(false); }
   };
 
   const addCharacter = (name: string) => commitBookChange((current) => {
@@ -1611,7 +609,7 @@ function App() {
   const withDirectorySave = async (action: (current: Book) => Promise<void>) => {
     assertDeviceWriteAccess();
     if (directoryBusyRef.current || busyRef.current) throw new Error('请等待当前目录操作完成。');
-    const bookId = bookRef.current?.id;
+    const bookId = bookSession.getSnapshot().book?.id;
     if (!bookId) throw new Error('请先打开一本书。');
     directoryBusyRef.current = true;
     busyRef.current = true;
@@ -1619,7 +617,7 @@ function App() {
     setBusy(true);
     try {
       await ensureCurrentBookSaved();
-      const current = bookRef.current;
+      const current = bookSession.getSnapshot().book;
       if (!current || current.id !== bookId) throw new Error('当前书目已经改变，请重新选择。');
       await action(current);
     } finally {
@@ -1663,88 +661,22 @@ function App() {
   });
 
   const undoDirectoryMove = async () => {
-    if (!directoryUndo || directoryUndo.bookId !== bookRef.current?.id) throw new Error('当前书目没有可撤销的移动。');
+    if (!directoryUndo || directoryUndo.bookId !== bookSession.getSnapshot().book?.id) throw new Error('当前书目没有可撤销的移动。');
     await commitDirectoryMove(directoryUndo.move, true);
   };
 
-  const renameChapter = (chapterId: string, title: string) => commitBookChange((current) => ({
-    ...current,
-    chapters: current.chapters.map((chapter) => chapter.id === chapterId
-      ? { ...chapter, title: title.trim() }
-      : chapter),
-  }));
+  const renameChapter = (chapterId: string, title: string) =>
+    commitBookChange((current) => renameBookChapter(current, chapterId, title));
 
-  const renameSection = (chapterId: string, targetSectionId: string, title: string) => commitBookChange((current) => ({
-    ...current,
-    chapters: current.chapters.map((chapter) => chapter.id === chapterId
-      ? {
-          ...chapter,
-          sections: chapter.sections.map((item) => item.id === targetSectionId
-            ? { ...item, title: title.trim() }
-            : item),
-        }
-      : chapter),
-  }));
-
-  const referenceLocation = (current: Book, sourceSectionId: string) => {
-    let ordinal = 0;
-    for (const chapter of current.chapters) {
-      const sectionIndex = chapter.sections.findIndex((item) => item.id === sourceSectionId);
-      if (sectionIndex >= 0) return { chapter, section: chapter.sections[sectionIndex], sectionIndex, ordinal: ordinal + sectionIndex };
-      ordinal += chapter.sections.length;
-    }
-    return undefined;
-  };
+  const renameSection = (chapterId: string, targetSectionId: string, title: string) =>
+    commitBookChange((current) => renameBookSection(current, chapterId, targetSectionId, title));
 
   const deleteSectionBlock = async (blockId: string) => {
     if (!section) throw new Error('找不到当前小节。');
     const targetSectionId = section.id;
-    await commitBookChange((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => {
-          if (item.id !== targetSectionId) return item;
-          const blocks = sectionBlocks(item).filter((block) => block.id !== blockId);
-          return { ...item, blocks, content: blocksAsContent(blocks) };
-        }),
-      })),
-    }));
+    await commitBookChange((current) => deleteBookSectionBlock(current, targetSectionId, blockId));
   };
 
-  const generateSectionMemory = async (sourceSectionId: string) => {
-    setBusy(true);
-    try {
-      if (!book || !section) throw new Error('请先选择一个小节。');
-      const source = referenceLocation(book, sourceSectionId);
-      if (!source) throw new Error('找不到要生成梗概的小节。');
-      const targetOrdinal = book.chapters.flatMap((chapter) => chapter.sections)
-        .findIndex((item) => item.id === section.id);
-      if (targetOrdinal < 0 || source.ordinal >= targetOrdinal) throw new Error('只能为当前小节之前的内容生成梗概。');
-      if (!source.section.content.trim()) throw new Error('这一节还没有正文，无法生成梗概。');
-      const saved = await saveCurrent();
-      const generation = {
-        bookId: saved.id,
-        sectionId: sourceSectionId,
-        providerProfileId: activeProviderProfile?.id,
-        mode: 'author',
-        instruction: '',
-        generationKind: 'summarize-section',
-        stream: false,
-      } satisfies GenerationRequest;
-      const result = await runGeneration(generation, '正在生成前文梗概…');
-      const draft = parseSectionMemoryDraft(result.draft);
-      setStatus(finishReasonSuccessStatus(`已生成「${source.section.title}」的梗概草稿，请确认保存。`, result.finishReason ?? 'unknown'));
-      return draft;
-    } catch (error) {
-      setStatus(isAbortError(error)
-        ? '已取消生成；迟到结果未写入正文。'
-        : error instanceof Error ? error.message : '梗概生成失败。');
-      throw error;
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const saveSectionMemoriesAndLoad = async (entries: Array<{
     sourceSectionId: string;
@@ -1766,20 +698,8 @@ function App() {
     const references = book.chapters.flatMap((chapter) => chapter.sections)
       .flatMap((item) => item.contextReferences ?? [])
       .filter((reference) => reference.sectionId === sourceSectionId);
-    const reconciled = reconcileReferencesAfterMemoryDeletion(book, sourceSectionId);
-    const candidate = normalizeBook({
-      ...reconciled,
-      updatedAt: new Date().toISOString(),
-      chapters: reconciled.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === sourceSectionId
-          ? deleteCurrentSectionMemory(item)
-          : item),
-      })),
-    });
-    setBook(candidate);
-    setDirty(true);
-    await saveCurrent(candidate);
+    const candidate = editBookSectionMemory(book, sourceSectionId, 'delete', new Date().toISOString());
+    await bookSession.saveEditedSnapshot(candidate);
     const summaryRemoved = references.filter((reference) => reference.mode === 'summary').length;
     const bothDowngraded = references.filter((reference) => reference.mode === 'both').length;
     const changes = [
@@ -1793,19 +713,8 @@ function App() {
     if (!book) throw new Error('请先打开一本书。');
     const source = referenceLocation(book, sourceSectionId);
     if (!source?.section.previousMemory) throw new Error('没有可回滚的上一版本。');
-    const candidate = normalizeBook({
-      ...book,
-      updatedAt: new Date().toISOString(),
-      chapters: book.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === sourceSectionId
-          ? rollbackSectionMemory(item)
-          : item),
-      })),
-    });
-    setBook(candidate);
-    setDirty(true);
-    await saveCurrent(candidate);
+    const candidate = editBookSectionMemory(book, sourceSectionId, 'rollback', new Date().toISOString());
+    await bookSession.saveEditedSnapshot(candidate);
     setStatus(`已回滚「${source.section.title}」的 Memory。`);
   };
 
@@ -1813,19 +722,8 @@ function App() {
     if (!book) throw new Error('请先打开一本书。');
     const source = referenceLocation(book, sourceSectionId);
     if (!source?.section.previousMemory) throw new Error('没有可清除的上一版本。');
-    const candidate = normalizeBook({
-      ...book,
-      updatedAt: new Date().toISOString(),
-      chapters: book.chapters.map((chapter) => ({
-        ...chapter,
-        sections: chapter.sections.map((item) => item.id === sourceSectionId
-          ? clearPreviousSectionMemory(item)
-          : item),
-      })),
-    });
-    setBook(candidate);
-    setDirty(true);
-    await saveCurrent(candidate);
+    const candidate = editBookSectionMemory(book, sourceSectionId, 'clear-previous', new Date().toISOString());
+    await bookSession.saveEditedSnapshot(candidate);
     setStatus(`已清除「${source.section.title}」的上一版本 Memory。`);
   };
 
@@ -1869,8 +767,7 @@ function App() {
   const reloadCurrentBook = async () => {
     if (!book) return;
     if (dirty && !(globalThis.confirm?.('重新载入会放弃当前页面尚未保存的本地内容；如需保留，请先导出 JSON 备份。继续吗？') ?? true)) return;
-    if (!await openBook(book.id, { ignoreDraft: true })) return;
-    clearCurrentDraft(book.id);
+    if (!await bookSession.reloadBook(book.id)) return;
     setStatus('已重新载入当前书目。');
   };
 
@@ -2166,7 +1063,5 @@ function App() {
     </div>
   );
 }
-
-
 
 export default App;

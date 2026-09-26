@@ -1,16 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronRight, Sparkles, X } from 'lucide-react';
-import {
-  draftFromSectionMemory,
-  sectionMemoryProvenanceAfterReview,
-} from '../sectionMemory';
+import { draftFromSectionMemory } from '../sectionMemory';
 import { focusFirstDrawerElement } from './shared/dialogFocus';
 import { TextArea } from './shared/TextArea';
-import {
-  contextToolDraftKey,
-  hasPendingContextToolDrafts,
-  type ContextToolDraftSession,
-} from '../contextToolDrafts';
+import { emptyContextToolMemoryDraft as emptyMemoryDraft, type ContextToolDraftSession } from '../contextToolDrafts';
+import { useContextToolSession } from './context/useContextToolSession';
 import {
   DialogOperationStatus,
   idleDialogOperation,
@@ -18,63 +12,6 @@ import {
   type DialogOperationState,
 } from './shared/DialogOperationStatus';
 import type { Book, SectionMemoryDraft, SectionMemoryProvenance } from '../types';
-
-const initialContextToolDraftSession = (
-  bookId: string,
-  sectionId: string,
-  selectedSectionIds: string[] = [],
-): ContextToolDraftSession => ({
-  bookId,
-  sectionId,
-  hasChanges: false,
-  selectedSectionIds: [...selectedSectionIds],
-  expandedSectionIds: [],
-  memoryDrafts: {},
-  generatedDrafts: {},
-  summaryErrors: {},
-});
-
-const copyContextToolDraftSession = (session: ContextToolDraftSession): ContextToolDraftSession => ({
-  ...session,
-  selectedSectionIds: [...session.selectedSectionIds],
-  expandedSectionIds: [...session.expandedSectionIds],
-  memoryDrafts: { ...session.memoryDrafts },
-  generatedDrafts: { ...session.generatedDrafts },
-  summaryErrors: { ...session.summaryErrors },
-});
-
-const filterContextToolDraftRecord = <T,>(
-  record: Record<string, T>,
-  validSourceSectionIds: Set<string>,
-): Record<string, T> => Object.fromEntries(
-  Object.entries(record).filter(([sourceSectionId]) => validSourceSectionIds.has(sourceSectionId)),
-) as Record<string, T>;
-
-const sanitizeContextToolDraftSession = (
-  session: ContextToolDraftSession,
-  validSourceSectionIds: Set<string>,
-  baselineSelectedSectionIds: string[],
-): ContextToolDraftSession => {
-  const next = copyContextToolDraftSession({
-    ...session,
-    selectedSectionIds: session.selectedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)),
-    expandedSectionIds: session.expandedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)),
-    memoryDrafts: filterContextToolDraftRecord(session.memoryDrafts, validSourceSectionIds),
-    generatedDrafts: filterContextToolDraftRecord(session.generatedDrafts, validSourceSectionIds),
-    summaryErrors: filterContextToolDraftRecord(session.summaryErrors, validSourceSectionIds),
-  });
-  const baseline = new Set(baselineSelectedSectionIds.filter((sourceSectionId) => validSourceSectionIds.has(sourceSectionId)));
-  const selectedChanged = next.selectedSectionIds.length !== baseline.size
-    || next.selectedSectionIds.some((sourceSectionId) => !baseline.has(sourceSectionId));
-  const hasValidPendingState = selectedChanged
-    || Object.keys(next.memoryDrafts).length > 0
-    || Object.keys(next.generatedDrafts).length > 0
-    || Object.keys(next.summaryErrors).length > 0;
-  return {
-    ...next,
-    hasChanges: session.hasChanges && hasValidPendingState,
-  };
-};
 
 export function ContextToolsDrawer({
   open,
@@ -114,46 +51,30 @@ export function ContextToolsDrawer({
   const summaryConfirmDialog = useRef<HTMLDialogElement>(null);
   const summaryActionTrigger = useRef<HTMLElement | null>(null);
   const summaryActionAccepted = useRef(false);
-  const localSessionDraftsRef = useRef(new Map<string, ContextToolDraftSession>());
-  const sessionDraftsRef = useRef<Map<string, ContextToolDraftSession>>(
-    sessionDrafts ?? localSessionDraftsRef.current,
-  );
-  sessionDraftsRef.current = sessionDrafts ?? localSessionDraftsRef.current;
-  const sourceSectionIdsByBookRef = useRef(new Map<string, Set<string>>());
-  sourceSectionIdsByBookRef.current.set(book.id, new Set(book.chapters.flatMap((chapter) => (
-    chapter.sections.map((sourceSection) => sourceSection.id)
-  ))));
-  const currentSectionRef = useRef(section);
-  currentSectionRef.current = section;
-  const onPendingDraftsChangeRef = useRef(onPendingDraftsChange);
-  onPendingDraftsChangeRef.current = onPendingDraftsChange;
-  const initialSessionKey = contextToolDraftKey(book.id, section.id);
-  const initialSession = sessionDraftsRef.current.get(initialSessionKey)
-    ? copyContextToolDraftSession(sessionDraftsRef.current.get(initialSessionKey)!)
-    : initialContextToolDraftSession(
-        book.id,
-        section.id,
-        (section.contextReferences ?? []).map((reference) => reference.sectionId),
-      );
-  const activeSessionKeyRef = useRef(initialSessionKey);
-  const sessionStateRef = useRef(initialSession);
-  const [sessionState, setSessionState] = useState<ContextToolDraftSession>(initialSession);
-  sessionStateRef.current = sessionState;
-  const generationSequenceRef = useRef(0);
-  const generationOperationsRef = useRef(new Map<number, {
-    key: string;
-    bookId: string;
-    epoch: number;
-    sourceSectionId: string;
-    invalidated: boolean;
-    settled: boolean;
-  }>());
-  const sessionEpochsRef = useRef(new Map<string, number>());
-  const sessionRevisionsRef = useRef(new Map<string, number>());
-  const saveRequestSequenceRef = useRef(0);
-  const activeSaveRequestsRef = useRef(new Map<string, number>());
+  const {
+    sessionKey,
+    referenceSignature,
+    sessionState,
+    summaryBusyId,
+    setSelectedSectionIds,
+    setExpandedSectionIds,
+    flagMissingSummaries,
+    memoryDraftFor,
+    updateSummary: updateSessionSummary,
+    generateSummary,
+    saveSummariesAndLoad,
+  } = useContextToolSession({
+    book,
+    section,
+    canEdit,
+    sessionDrafts,
+    onPendingDraftsChange,
+    onGenerateMemory,
+    onSaveMemoriesAndLoad,
+    onCancelGeneration,
+  });
+  const presentationSessionKeyRef = useRef(sessionKey);
   const summaryGenerationRequest = useRef(0);
-  const [summaryBusyId, setSummaryBusyId] = useState('');
   const [pendingSummarySectionId, setPendingSummarySectionId] = useState('');
   const [pendingSummaryAction, setPendingSummaryAction] = useState<'generate' | 'save' | ''>('');
   const [summaryFeedback, setSummaryFeedback] = useState<DialogOperationState>(idleDialogOperation);
@@ -167,64 +88,6 @@ export function ContextToolsDrawer({
   }, [canEdit, sessionState.expandedSectionIds, viewExpandedSections]);
   const memoryDrafts = sessionState.memoryDrafts;
   const summaryErrors = sessionState.summaryErrors;
-
-  const notifyPendingDrafts = () => {
-    onPendingDraftsChangeRef.current?.(hasPendingContextToolDrafts(sessionDraftsRef.current));
-  };
-
-  const sessionForKey = (key: string) => {
-    const stored = sessionDraftsRef.current.get(key);
-    if (stored) return stored;
-    return activeSessionKeyRef.current === key ? sessionStateRef.current : undefined;
-  };
-
-  const updateSession = (
-    key: string,
-    patch: Partial<ContextToolDraftSession>,
-    markChanges = false,
-  ) => {
-    const current = sessionForKey(key);
-    if (!current) return undefined;
-    if (!sessionDraftsRef.current.has(key)) {
-      sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
-    }
-    sessionRevisionsRef.current.set(key, (sessionRevisionsRef.current.get(key) ?? 0) + 1);
-    const next = copyContextToolDraftSession({
-      ...current,
-      ...patch,
-      hasChanges: markChanges || current.hasChanges,
-    });
-    sessionDraftsRef.current.set(key, next);
-    if (activeSessionKeyRef.current === key) {
-      sessionStateRef.current = next;
-      setSessionState(next);
-    }
-    notifyPendingDrafts();
-    return next;
-  };
-
-  const latestGenerationForKey = (key: string) => [...generationOperationsRef.current.entries()]
-    .filter(([, operation]) => operation.key === key && !operation.settled && !operation.invalidated)
-    .sort(([left], [right]) => left - right)
-    .at(-1)?.[1];
-
-  const resetSession = (key: string, selectedIds: string[]) => {
-    const next = initialContextToolDraftSession(book.id, section.id, selectedIds);
-    sessionStateRef.current = next;
-    if (activeSessionKeyRef.current === key) setSessionState(next);
-    return next;
-  };
-
-  const clearSessionDraft = (key: string, selectedIds?: string[]) => {
-    sessionDraftsRef.current.delete(key);
-    sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
-    sessionRevisionsRef.current.set(key, (sessionRevisionsRef.current.get(key) ?? 0) + 1);
-    if (activeSessionKeyRef.current === key) {
-      resetSession(key, selectedIds
-        ?? (currentSectionRef.current.contextReferences ?? []).map((reference) => reference.sectionId));
-    }
-    notifyPendingDrafts();
-  };
 
   useEffect(() => {
     const drawer = drawerRef.current;
@@ -244,49 +107,11 @@ export function ContextToolsDrawer({
     return undefined;
   }, [open]);
 
-  const referenceSignature = JSON.stringify((section.contextReferences ?? [])
-    .map((reference) => [reference.sectionId, reference.mode, reference.reason]));
   useEffect(() => {
-    const targetChanged = activeSessionKeyRef.current !== initialSessionKey;
+    const targetChanged = presentationSessionKeyRef.current !== sessionKey;
     const preserveOpenConfirmation = !targetChanged && Boolean(summaryConfirmDialog.current?.open);
-    activeSessionKeyRef.current = initialSessionKey;
-    const baselineSelectedSectionIds = (section.contextReferences ?? []).map((reference) => reference.sectionId);
-    const validSourceSectionIds = new Set(book.chapters.flatMap((chapter) => (
-      chapter.sections.map((sourceSection) => sourceSection.id)
-    )));
-    const stored = sessionDraftsRef.current.get(initialSessionKey);
-    const activeGeneration = latestGenerationForKey(initialSessionKey);
-    const generationSourceExists = activeGeneration
-      ? validSourceSectionIds.has(activeGeneration.sourceSectionId)
-      : true;
-    const next = stored
-      ? sanitizeContextToolDraftSession(stored, validSourceSectionIds, baselineSelectedSectionIds)
-      : initialContextToolDraftSession(book.id, section.id, baselineSelectedSectionIds);
-    let restoredSession = next;
-    if (stored) {
-      const keepForGeneration = Boolean(activeGeneration && generationSourceExists);
-      if (keepForGeneration || next.hasChanges || next.expandedSectionIds.length || Object.keys(next.memoryDrafts).length
-        || Object.keys(next.generatedDrafts).length || Object.keys(next.summaryErrors).length) {
-        restoredSession = keepForGeneration
-          ? { ...next, hasChanges: true }
-          : next;
-        sessionDraftsRef.current.set(initialSessionKey, restoredSession);
-      } else {
-        sessionDraftsRef.current.delete(initialSessionKey);
-        sessionEpochsRef.current.set(initialSessionKey, (sessionEpochsRef.current.get(initialSessionKey) ?? 0) + 1);
-        sessionRevisionsRef.current.set(initialSessionKey, (sessionRevisionsRef.current.get(initialSessionKey) ?? 0) + 1);
-      }
-    } else if (activeGeneration) {
-      activeGeneration.invalidated = true;
-    }
-    if (activeGeneration && !generationSourceExists) {
-      activeGeneration.invalidated = true;
-      onCancelGeneration();
-    }
-    sessionStateRef.current = restoredSession;
-    setSessionState(restoredSession);
+    presentationSessionKeyRef.current = sessionKey;
     setViewExpandedSections(new Set());
-    setSummaryBusyId(activeGeneration && !activeGeneration.invalidated ? activeGeneration.sourceSectionId : '');
     if (!preserveOpenConfirmation) {
       summaryGenerationRequest.current += 1;
       summaryActionAccepted.current = true;
@@ -295,9 +120,8 @@ export function ContextToolsDrawer({
       setPendingSummaryAction('');
       setSummaryFeedback(idleDialogOperation);
     }
-    notifyPendingDrafts();
     return undefined;
-  }, [book.chapters, initialSessionKey, referenceSignature, sessionDrafts]);
+  }, [book.chapters, sessionKey, referenceSignature, sessionDrafts]);
 
   const currentReferences = useMemo(() => new Map((section.contextReferences ?? [])
     .map((reference) => [reference.sectionId, reference.mode] as const)), [section.contextReferences]);
@@ -329,11 +153,6 @@ export function ContextToolsDrawer({
     if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
   }, [someSelected]);
 
-  const setSelectedSectionIds = (next: Set<string>) => {
-    updateSession(activeSessionKeyRef.current, {
-      selectedSectionIds: [...next],
-    }, true);
-  };
   const toggleAll = () => {
     if (!canEdit) return;
     const selectableIds = selectableReferenceSections.map((item) => item.section.id);
@@ -364,102 +183,11 @@ export function ContextToolsDrawer({
     const nextExpanded = new Set(expandedSections);
     if (nextExpanded.has(sourceSectionId)) nextExpanded.delete(sourceSectionId);
     else nextExpanded.add(sourceSectionId);
-    updateSession(activeSessionKeyRef.current, {
-      expandedSectionIds: [...nextExpanded],
-    });
+    setExpandedSectionIds(nextExpanded);
   };
-  const emptyMemoryDraft = (): SectionMemoryDraft => ({
-    synopsis: '',
-    beats: [],
-    continuityFacts: [],
-    characterStateChanges: [],
-    foreshadowingCandidates: [],
-  });
-  const memoryDraftFor = (item: typeof referenceSections[number]) => (
-    memoryDrafts[item.section.id]
-      ?? draftFromSectionMemory(item.section.memory)
-      ?? emptyMemoryDraft()
-  );
-  const memoryDraftForSession = (
-    session: ContextToolDraftSession,
-    item: typeof referenceSections[number],
-  ) => (
-    session.memoryDrafts[item.section.id]
-      ?? draftFromSectionMemory(item.section.memory)
-      ?? emptyMemoryDraft()
-  );
-  const summaryValue = (item: typeof referenceSections[number]) => memoryDraftFor(item).synopsis;
+  const summaryValue = (item: typeof referenceSections[number]) => memoryDraftFor(item.section).synopsis;
   const updateSummary = (item: typeof referenceSections[number], synopsis: string) => {
-    if (!canEdit) return;
-    const current = sessionForKey(activeSessionKeyRef.current);
-    if (!current) return;
-    updateSession(activeSessionKeyRef.current, {
-      memoryDrafts: {
-        ...current.memoryDrafts,
-        [item.section.id]: { ...memoryDraftFor(item), synopsis },
-      },
-      summaryErrors: { ...current.summaryErrors, [item.section.id]: '' },
-    }, true);
-  };
-  const generateSummary = async (item: typeof referenceSections[number]) => {
-    if (!canEdit) return emptyMemoryDraft();
-    const key = activeSessionKeyRef.current;
-    const operationId = ++generationSequenceRef.current;
-    const operation = {
-      key,
-      bookId: book.id,
-      epoch: 0,
-      sourceSectionId: item.section.id,
-      invalidated: false,
-      settled: false,
-    };
-    generationOperationsRef.current.set(operationId, operation);
-    const current = sessionForKey(key);
-    if (current) {
-      updateSession(key, {
-        summaryErrors: { ...current.summaryErrors, [item.section.id]: '' },
-      }, true);
-    }
-    operation.epoch = sessionEpochsRef.current.get(key) ?? 0;
-    if (activeSessionKeyRef.current === key) setSummaryBusyId(item.section.id);
-    try {
-      const draft = await onGenerateMemory(item.section.id);
-      const completed = generationOperationsRef.current.get(operationId);
-      if (completed && !completed.invalidated
-        && sessionEpochsRef.current.get(key) === completed.epoch
-        && sourceSectionIdsByBookRef.current.get(completed.bookId)?.has(completed.sourceSectionId)
-        && sessionDraftsRef.current.has(key)) {
-        const stored = sessionDraftsRef.current.get(key)!;
-        updateSession(key, {
-          generatedDrafts: { ...stored.generatedDrafts, [item.section.id]: draft },
-          memoryDrafts: { ...stored.memoryDrafts, [item.section.id]: draft },
-        }, true);
-      }
-      return draft;
-    } catch (error) {
-      const failed = generationOperationsRef.current.get(operationId);
-      if (failed && !failed.invalidated
-        && sessionEpochsRef.current.get(key) === failed.epoch
-        && sourceSectionIdsByBookRef.current.get(failed.bookId)?.has(failed.sourceSectionId)
-        && sessionDraftsRef.current.has(key)) {
-        const stored = sessionDraftsRef.current.get(key)!;
-        updateSession(key, {
-          summaryErrors: {
-            ...stored.summaryErrors,
-            [item.section.id]: error instanceof Error ? error.message : '梗概生成失败。',
-          },
-        }, true);
-      }
-      throw error;
-    } finally {
-      const completed = generationOperationsRef.current.get(operationId);
-      if (completed) completed.settled = true;
-      if (activeSessionKeyRef.current === key) {
-        const next = latestGenerationForKey(key);
-        setSummaryBusyId(next?.sourceSectionId ?? '');
-      }
-      generationOperationsRef.current.delete(operationId);
-    }
+    updateSessionSummary(item.section, synopsis);
   };
   const requestSummaryAction = (
     item: typeof referenceSections[number],
@@ -483,19 +211,7 @@ export function ContextToolsDrawer({
     if (!canEdit) return;
     const missing = saveableSummaryItems.filter((item) => !summaryValue(item).trim());
     if (missing.length) {
-      const current = sessionForKey(activeSessionKeyRef.current);
-      if (current) {
-        updateSession(activeSessionKeyRef.current, {
-          summaryErrors: {
-            ...current.summaryErrors,
-            ...Object.fromEntries(missing.map((item) => [item.section.id, '请先填写或生成梗概，或取消勾选；不会加载原文。'])),
-          },
-          expandedSectionIds: [...new Set([
-            ...current.expandedSectionIds,
-            ...missing.map((item) => item.section.id),
-          ])],
-        }, true);
-      }
+      flagMissingSummaries(missing.map((item) => item.section.id));
       return;
     }
     summaryActionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -520,72 +236,6 @@ export function ContextToolsDrawer({
     }
     summaryConfirmDialog.current?.close();
   };
-  const saveSummariesAndLoad = async (items: typeof referenceSections) => {
-    const key = activeSessionKeyRef.current;
-    const session = sessionForKey(key);
-    if (!session) throw new Error('当前前文草稿已失效，请重新打开。');
-    if (!sessionDraftsRef.current.has(key)) {
-      sessionDraftsRef.current.set(key, copyContextToolDraftSession(session));
-      sessionEpochsRef.current.set(key, (sessionEpochsRef.current.get(key) ?? 0) + 1);
-      notifyPendingDrafts();
-    }
-    const sessionRevision = sessionRevisionsRef.current.get(key) ?? 0;
-    const sessionEpoch = sessionEpochsRef.current.get(key) ?? 0;
-    const saveRequest = ++saveRequestSequenceRef.current;
-    activeSaveRequestsRef.current.set(key, saveRequest);
-    const entries = items.map((item) => {
-      const draft = memoryDraftForSession(session, item);
-      return {
-        sourceSectionId: item.section.id,
-        draft,
-        provenance: sectionMemoryProvenanceAfterReview(
-          item.section.memory,
-          draft,
-          session.generatedDrafts[item.section.id],
-        ),
-      };
-    });
-    const inactiveExistingSectionIds = displayedReferenceSections
-      .filter((item) => !previousSectionIds.has(item.section.id) && currentReferences.has(item.section.id))
-      .map((item) => item.section.id);
-    const retainedInactiveSectionIds = inactiveExistingSectionIds
-      .filter((sourceSectionId) => session.selectedSectionIds.includes(sourceSectionId));
-    const savedSelectionIds = [...new Set([
-      ...items.map((item) => item.section.id),
-      ...retainedInactiveSectionIds,
-    ])];
-    try {
-      if (inactiveExistingSectionIds.length) {
-        await onSaveMemoriesAndLoad(entries, retainedInactiveSectionIds);
-      } else {
-        await onSaveMemoriesAndLoad(entries);
-      }
-      if (!sessionDraftsRef.current.has(key)
-        || sessionEpochsRef.current.get(key) !== sessionEpoch
-        || sessionRevisionsRef.current.get(key) !== sessionRevision
-        || activeSaveRequestsRef.current.get(key) !== saveRequest) return;
-      clearSessionDraft(key, savedSelectionIds);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '梗概保存失败，请重试。';
-      const current = sessionDraftsRef.current.get(key);
-      if (current
-        && sessionEpochsRef.current.get(key) === sessionEpoch
-        && sessionRevisionsRef.current.get(key) === sessionRevision
-        && activeSaveRequestsRef.current.get(key) === saveRequest) {
-        updateSession(key, {
-          summaryErrors: {
-            ...current.summaryErrors,
-            ...Object.fromEntries(items.map((item) => [item.section.id, message])),
-          },
-        }, true);
-      }
-      throw error;
-    } finally {
-      if (activeSaveRequestsRef.current.get(key) === saveRequest) {
-        activeSaveRequestsRef.current.delete(key);
-      }
-    }
-  };
   const confirmSummaryAction = () => {
     if (!canEdit) return;
     const action = pendingSummaryAction;
@@ -595,7 +245,7 @@ export function ContextToolsDrawer({
       summaryActionAccepted.current = true;
       setSummaryFeedback({ phase: 'pending', title: '正在生成梗概…' });
       const request = ++summaryGenerationRequest.current;
-      void generateSummary(item)
+      void generateSummary(item.section)
         .then(() => {
           if (summaryGenerationRequest.current !== request || !summaryConfirmDialog.current?.open) return;
           setSummaryFeedback({ phase: 'success', title: '已生成梗概' });
@@ -614,7 +264,7 @@ export function ContextToolsDrawer({
       summaryActionAccepted.current = true;
       setSummaryFeedback({ phase: 'pending', title: '正在保存并加载梗概…' });
       const request = ++summaryGenerationRequest.current;
-      void saveSummariesAndLoad(saveableSummaryItems)
+      void saveSummariesAndLoad(saveableSummaryItems.map((item) => item.section), inactiveExistingSectionIds)
         .then(() => {
           if (summaryGenerationRequest.current !== request || !summaryConfirmDialog.current?.open) return;
           setSummaryFeedback({ phase: 'success', title: '梗概保存并加载成功' });
