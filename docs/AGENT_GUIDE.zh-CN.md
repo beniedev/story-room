@@ -125,23 +125,26 @@ npm ci
 
 | 入口 | 负责什么 | 修改时先看 |
 | --- | --- | --- |
-| [`src/App.tsx`](../src/App.tsx) | 运行时启动、书目选择、保存协调、自动保存、冲突、生成和组件回调 | 是否已经有同一动作的回调和保存管线；不要在组件里另写持久化 |
+| [`src/App.tsx`](../src/App.tsx) 和 [`src/application/useBookSession.ts`](../src/application/useBookSession.ts) | App 组合视图与局部 UI 状态；Book 会话拥有当前 Book、书库、保存队列/在途请求、版本、恢复基线、冲突和加载序号 | 使用 snapshot/token 与保存/编辑命令；Book 会话身份和编辑版本不同，不能再建一套队列、Book setter 或组件持久化路径 |
 | [`src/types.ts`](../src/types.ts) | `Book`、`Chapter`、`Section`、块、候选、`SectionContextReference`、`SectionMemory` 的数据契约 | 新字段是否需要规范化、导入校验、导出和两种运行时同时支持 |
-| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) | 书架、章节/小节目录、角色卡/世界观列表（共用 [`src/components/SourceList.tsx`](../src/components/SourceList.tsx)）、本书设定、资料加载范围和名称对话框 | 当前中文标签、`canEdit` 就绪状态、确认对话框、`Bookshelf.onBookChange` 保存回调，以及资料多选模式下的单项列表拖动 |
-| [`src/components/Writer.tsx`](../src/components/Writer.tsx) | 连续正文视图、作者/角色模式、块编辑、候选操作、生成输入和状态提示 | 生成操作的目标块、保存期间控件状态和候选语义 |
+| [`src/components/Bookshelf.tsx`](../src/components/Bookshelf.tsx) 和 [`src/components/bookshelf/`](../src/components/bookshelf/) | 书架组合与菜单；目录/拖动、设定/导航、名称/删除各有 controller 和视图 | 保留局部草稿、焦点恢复、挂载 key、`canEdit` 与共享 busy 门；Book 修改仍走 callback，资料排序复用 [`SourceList`](../src/components/SourceList.tsx) |
+| [`src/components/Writer.tsx`](../src/components/Writer.tsx) 和 [`src/components/writer/`](../src/components/writer/) | Writer 组合选择、候选与命令；块手势、编辑页、生成输入和滚动生命周期分别负责 | 保留原生选择、只读门、Book/小节阅读位置及编辑页往返时的输入状态；候选箭头不触发生成 |
 | [`src/components/shared/InlineTitle.tsx`](../src/components/shared/InlineTitle.tsx) | 章名与节名的双击、双点、键盘原地编辑 | 目录标题以 300 毫秒窗口区分单／双击，其他区域立即执行主动作；Enter／空格执行目录主动作，F2 改名。新目标、滚动、取消、禁用和卸载取消待执行动作；保留原生输入及保存失败状态 |
-| [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx) 与 [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | 前文选择、会话草稿、梗概生成及确认 | 关闭保留未确认草稿；按书目和小节隔离；确认才写入，暂时不可用的既有引用可显式保留或取消 |
+| [`src/components/ContextToolsDrawer.tsx`](../src/components/ContextToolsDrawer.tsx)、[`context/useContextToolSession.ts`](../src/components/context/useContextToolSession.ts) 和 [`src/contextToolDrafts.ts`](../src/contextToolDrafts.ts) | Drawer 持有对话框/焦点；会话 hook 协调 App 所有的草稿 Map、生成与保存结算；纯函数负责初始化/复制/清理草稿 | 关闭按书目与小节保留草稿，确认才持久化；晚结果须仍拥有 Map 条目且匹配版本；暂时不可用的既有引用可显式保留或取消 |
 | [`src/directoryOperations.ts`](../src/directoryOperations.ts) | 整理模式下的目录拖动排序、稳定 ID、逆向位置和前文资格变化 | 拖动只在目录多选模式进行；不删除重建，不用整书快照撤销；成功保存后才采用新顺序 |
 | [`src/components/ContextCompositionDrawer.tsx`](../src/components/ContextCompositionDrawer.tsx) | “本轮上下文概览”，展示纳入资料、原因和估算 | 只展示摘要，不泄露原始模型服务消息或隐藏推理 |
-| [`src/components/ProviderSettings.tsx`](../src/components/ProviderSettings.tsx) 与 `App.tsx` 的设置区域 | 模型服务表单、模型限制、测试、密钥提示和流式开关；`ProviderProfile` 连接方案见 `src/providerProfiles.ts` | 本地服务模式与浏览器模式的密钥生命周期及 `/models` 测试含义 |
-| [`src/contextPlan.ts`](../src/contextPlan.ts)、`src/contextReferences.ts`、`src/sourceSelection.ts` | 资料选择、来源签名、摘要/全文引用、预算估算、提示包，以及通过 `moveSourceItem` 进行单项资料排序 | 只使用当前书目；不要把预览当成原始提示回显 |
+| [`src/components/SettingsDrawer.tsx`](../src/components/SettingsDrawer.tsx)、[`ProviderSettings.tsx`](../src/components/ProviderSettings.tsx) 和 [`AppearanceSettings.tsx`](../src/components/AppearanceSettings.tsx) | 设置局部草稿、模型服务表单/测试、外观与流式控件；App 提供偏好和持久化回调 | 本地服务/浏览器模式的密钥生命周期、放弃确认、关闭重开行为和 `/models` 测试含义 |
+| [`src/contextPlan.ts`](../src/contextPlan.ts)、[`src/context/`](../src/context/)、`src/contextReferences.ts`、`src/sourceSelection.ts` | Planner 入口组合引用、提示块、消息和预算纯阶段；来源签名与单项资料排序保留既有合同 | 只使用当前书目；不要把预览当成原始提示回显。导入与已存 Book 的兼容校验规则有差异时保持各自边界 |
 | [`src/generationRequests.ts`](../src/generationRequests.ts) | 续写、回答和块再生成的目标范围 | 再生成排除目标及后续内容；`respond-to-input` 不重复用户输入 |
+| [`src/application/useGenerationSession.ts`](../src/application/useGenerationSession.ts)、`generationRecipes.ts` 和 `generationStatus.ts` | 生成 controller、取消、临时流式草稿及续写/回答/重生成/梗概流程；纯 Book 修改和结果状态规则 | 只经 Book 会话接口访问；保留目标/来源校验、生成前保存、保存成功后收束候选，以及可复制的异常草稿；梗概保持非流式 |
 | [`src/answerCandidates.ts`](../src/answerCandidates.ts) | 候选读取、采用、添加、删除和保存前后的保留语义 | `content` 是当前采用候选的投影；箭头切换不是生成 |
 | [`src/sectionMemory.ts`](../src/sectionMemory.ts) | `SectionMemory`（小节梗概）的结构、内容指纹、新鲜度、确认、上一快照和回滚 | `model-draft` 未确认不可用于普通续写；正文变化会使小节梗概过期 |
 | [`src/bookImport.ts`](../src/bookImport.ts) 与 [`src/bookExport.ts`](../src/bookExport.ts) | JSON 校验/规范化、新 ID 导入、EPUB/Markdown/TXT/JSON 导出 | 导入建立副本且不覆盖现有书目；校验同一书目内的引用和候选关系 |
-| [`src/api.ts`](../src/api.ts) | 本地服务模式/浏览器模式 API 形状、运行时分流、模型服务测试和生成响应 | 浏览器模式保持示例生成；不要把临时密钥写入书目数据或 `localStorage` |
+| [`src/api.ts`](../src/api.ts) 和 [`src/runtime/`](../src/runtime/) | 运行时入口选择 host/device adapter；JSON 请求、NDJSON 生命周期和 Fake 生成分别负责 | 保持错误构造函数身份、取消与 reader 清理；浏览器模式保持示例生成，临时密钥不能进入书目数据或 `localStorage` |
 | [`src/deviceLibrary.ts`](../src/deviceLibrary.ts) 与 [`src/deviceWriterLease.ts`](../src/deviceWriterLease.ts) | 浏览器模式持久书目、草稿边界和逐操作保存协调 | 写入共用协调入口；普通读取和导出不写书稿 |
-| `server/domain.ts`、`server/store.ts`、`server/providers.ts`、`server/providerStream.ts` | 本地服务模式的书目读写、版本冲突、模型服务调用和流式协议 | 全书目保存、串行保存队列、密钥与书目分离、真实错误不能吞掉 |
+| [`server/main.ts`](../server/main.ts)、[`server/http/`](../server/http/) 和 `server/domain.ts` | 服务 factory/路由、请求校验、安全响应、静态文件与单一生成请求生命周期 | 保留来源规则、响应状态/错误过滤及 abort listener 清理；不增加阻挡已支持私网使用的限制 |
+| [`server/providers.ts`](../server/providers.ts)、[`server/providers/`](../server/providers/)、`server/providerStream.ts` 和 `server/providerResult.ts` | Provider 入口、配置 IO、公开资料投影、目标地址策略及调用客户端；复用流式/结果解析 | 保留临时/持久密钥的身份规则、安全错误与取消；不自动重试或切换 Provider |
+| [`server/store.ts`](../server/store.ts)、`server/bookValidation.ts`、`server/storeErrors.ts` 和 [`server/storage/`](../server/storage/) | Store 拥有串行队列、版本及发布；bookTree/safePaths 拥有文件树；BookTransactions 拥有 journal、快照及恢复 | 保留唯一队列与动态 protected 故障回调；事务不能反向调用 Store 业务入口，保留非托管文件及遇到异常即拒绝的路径校验 |
 | [`src/fixtures.ts`](../src/fixtures.ts) 与 `tests/` | 合成示例、兼容旧数据、功能契约和回归验证 | 只使用中性假数据；测试替身不能被误当成生产能力 |
 
 `src/styles.css` 负责外观和响应式布局。纯视觉修改仍应保留原生表单语义、键盘操作和 `canEdit` 状态；不要用 CSS 伪装成已禁用但仍可写的控件。
