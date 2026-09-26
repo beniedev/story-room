@@ -249,12 +249,16 @@ describe('OpenAI-compatible provider streaming', () => {
     }));
     const store = await makeStore();
     const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
     const pending = store.generate(profile.id, messages, controller.signal, { stream: true });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(body.locked).toBe(true));
     controller.abort();
 
     await expect(pending).rejects.toBeInstanceOf(ProviderCancelledError);
     expect(cancelled).toBe(true);
+    expect(body.locked).toBe(false);
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
   });
 
   it('keeps non-stream calls on the existing JSON path', async () => {

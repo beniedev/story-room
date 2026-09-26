@@ -1,4 +1,4 @@
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoryServer } from '../server/main';
 import { ProviderConnectionError } from '../server/providers';
@@ -48,6 +48,32 @@ const startServer = async (providerStore: Record<string, unknown>) => {
 
 const stopServer = async (server: ReturnType<typeof createStoryServer>) => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+};
+
+const observeRequestListeners = (server: ReturnType<typeof createStoryServer>) => {
+  let captured: {
+    request: IncomingMessage;
+    response: ServerResponse;
+    requestAborts: number;
+    responseCloses: number;
+  } | undefined;
+  server.prependListener('request', (request, response) => {
+    captured = {
+      request,
+      response,
+      requestAborts: request.listenerCount('aborted'),
+      responseCloses: response.listenerCount('close'),
+    };
+  });
+  return () => {
+    if (!captured) throw new Error('Synthetic request was not observed.');
+    return captured;
+  };
+};
+
+const expectRequestListenersReleased = (captured: ReturnType<ReturnType<typeof observeRequestListeners>>) => {
+  expect(captured.request.listenerCount('aborted')).toBe(captured.requestAborts);
+  expect(captured.response.listenerCount('close')).toBe(captured.responseCloses);
 };
 
 afterEach(() => {
@@ -221,6 +247,98 @@ describe('local generation NDJSON stream', () => {
       const signal = await providerStarted;
       request.destroy();
       await vi.waitFor(() => expect(signal.aborted).toBe(true));
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it.each([false, true])('releases generation listeners after successful stream=%s without canceling the completed Provider', async (stream) => {
+    let generationSignal: AbortSignal | undefined;
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate: vi.fn(async (
+        _profileId: string,
+        _messages: unknown,
+        signal: AbortSignal,
+        options: { onDelta?: (delta: string) => void },
+      ) => {
+        generationSignal = signal;
+        options.onDelta?.('Synthetic delta.');
+        return { draft: 'Synthetic result.', finishReason: 'stop' };
+      }),
+    };
+    const { server, origin } = await startServer(providerStore);
+    const captured = observeRequestListeners(server);
+    try {
+      const response = await fetch(`${origin}/api/generate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody({ stream }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('Synthetic result.');
+      expect(generationSignal).toBeDefined();
+      expect(generationSignal?.aborted).toBe(false);
+      expectRequestListenersReleased(captured());
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it.each([false, true])('filters unexpected Provider errors and releases listeners for stream=%s', async (stream) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let generationSignal: AbortSignal | undefined;
+    const providerStore = {
+      getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
+      generate: vi.fn(async (
+        _profileId: string,
+        _messages: unknown,
+        signal: AbortSignal,
+        options: { onDelta?: (delta: string) => void },
+      ) => {
+        generationSignal = signal;
+        options.onDelta?.('Synthetic delta.');
+        throw new Error('synthetic-untrusted-provider-error');
+      }),
+    };
+    const { server, origin } = await startServer(providerStore);
+    const captured = observeRequestListeners(server);
+    try {
+      const response = await fetch(`${origin}/api/generate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody({ stream }),
+      });
+      expect(response.status).toBe(stream ? 200 : 500);
+      const text = await response.text();
+      expect(text).not.toContain('synthetic-untrusted-provider-error');
+      if (stream) {
+        expect(text.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+          { type: 'delta', text: 'Synthetic delta.' },
+          { type: 'error', error: '服务器内部错误。' },
+        ]);
+      } else {
+        expect(JSON.parse(text)).toEqual({ error: '服务器内部错误。' });
+      }
+      expect(generationSignal?.aborted).toBe(false);
+      expectRequestListenersReleased(captured());
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('releases generation listeners when request parsing fails before a Provider call', async () => {
+    const providerStore = {
+      getContextLimits: vi.fn(),
+      generate: vi.fn(),
+    };
+    const { server, origin } = await startServer(providerStore);
+    const captured = observeRequestListeners(server);
+    try {
+      const response = await fetch(`${origin}/api/generate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{',
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: '请求体必须是有效 JSON。' });
+      expect(providerStore.getContextLimits).not.toHaveBeenCalled();
+      expect(providerStore.generate).not.toHaveBeenCalled();
+      expectRequestListenersReleased(captured());
     } finally {
       await stopServer(server);
     }

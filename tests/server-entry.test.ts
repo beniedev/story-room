@@ -13,6 +13,19 @@ import type { Book } from '../src/types';
 import { createSectionMemory } from '../src/sectionMemory';
 import { formatUrlHost } from '../vite.config';
 
+// Unused dependencies fail loudly instead of falling back to the local data directory.
+const unusedStore = <T extends object>(label: string): T => new Proxy({} as T, {
+  get(_target, property) {
+    throw new Error(`Unexpected ${label} access in an isolated server fixture: ${String(property)}`);
+  },
+});
+
+const createTestServer = (
+  storyStore: StoryStore = unusedStore<StoryStore>('Book store'),
+  providerStore: ProviderStore = unusedStore<ProviderStore>('Provider store'),
+  staticRoot?: string,
+) => createStoryServer(storyStore, providerStore, staticRoot);
+
 const requestWithHost = (
   port: number,
   pathname: string,
@@ -58,7 +71,7 @@ describe('local server entry', () => {
     const staticRoot = await mkdtemp(path.join(tmpdir(), 'story-static-'));
     await writeFile(path.join(staticRoot, 'index.html'), '<main>Story Bookshelf</main>', 'utf8');
     await writeFile(path.join(staticRoot, 'app.css'), 'body { color: purple; }', 'utf8');
-    const server = createStoryServer(undefined, undefined, staticRoot);
+    const server = createTestServer(new StoryStore(path.join(staticRoot, 'books')), undefined, staticRoot);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -79,7 +92,7 @@ describe('local server entry', () => {
       expect(assetResponse.headers.get('content-type')).toBe('text/css; charset=utf-8');
       expect(await assetResponse.text()).toContain('purple');
       await expect(healthResponse.json()).resolves.toEqual({ ok: true });
-      await expect(storageResponse.json()).resolves.toEqual({ location: path.resolve('.data') });
+      await expect(storageResponse.json()).resolves.toEqual({ location: path.join(staticRoot, 'books') });
 
       const unknownApi = await fetch(`${origin}/api/not-a-route`);
       expect(unknownApi.status).toBe(404);
@@ -94,7 +107,7 @@ describe('local server entry', () => {
   it('saves, renames, and adds sections to a large Book without a fixed body limit', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'story-large-book-'));
     const storyStore = new StoryStore(root);
-    const server = createStoryServer(storyStore);
+    const server = createTestServer(storyStore);
 
     try {
       let book = await storyStore.createBook('Synthetic large Book');
@@ -162,7 +175,7 @@ describe('local server entry', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     } satisfies Book;
     const storyStore = { saveBook: vi.fn() };
-    const server = createStoryServer(storyStore as never);
+    const server = createTestServer(storyStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -198,7 +211,7 @@ describe('local server entry', () => {
     const storyStore = {
       saveBook: vi.fn(async () => { throw conflict; }),
     };
-    const server = createStoryServer(storyStore as never);
+    const server = createTestServer(storyStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -232,7 +245,7 @@ describe('local server entry', () => {
     } satisfies Book;
     const restored = { ...book, id: 'book-restored-copy' };
     const storyStore = { importBook: vi.fn(async () => restored) };
-    const server = createStoryServer(storyStore as never);
+    const server = createTestServer(storyStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -254,7 +267,7 @@ describe('local server entry', () => {
   it('accepts large author inputs without a fixed request-body cap', async () => {
     const instruction = '合成指导。'.repeat(150_000);
     const storyStore = { createBook: vi.fn(async (title: string) => ({ title })) };
-    const server = createStoryServer(storyStore as never);
+    const server = createTestServer(storyStore as never);
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       const address = server.address();
@@ -302,7 +315,7 @@ describe('local server entry', () => {
         return { draft: 'Synthetic generated text.', finishReason: 'stop' };
       }),
     };
-    const server = createStoryServer(storyStore as never, providerStore as never);
+    const server = createTestServer(storyStore as never, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -377,7 +390,7 @@ describe('local server entry', () => {
       section.content = 'Existing synthetic prose.';
       section.note = note;
       book = await storyStore.saveBook(book, { expectedUpdatedAt: book.updatedAt });
-      const storyServer = createStoryServer(storyStore, providerStore);
+      const storyServer = createTestServer(storyStore, providerStore);
       server = storyServer;
       await new Promise<void>((resolve) => storyServer.listen(0, '127.0.0.1', resolve));
       const address = storyServer.address();
@@ -477,7 +490,7 @@ describe('local server entry', () => {
         .mockResolvedValueOnce({ draft: validDraft, finishReason: 'stop' })
         .mockResolvedValueOnce({ draft: '{"synopsis":"not enough"}', finishReason: 'stop' }),
     };
-    const server = createStoryServer(storyStore as never, providerStore as never);
+    const server = createTestServer(storyStore as never, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -541,7 +554,7 @@ describe('local server entry', () => {
     const providerStore = {
       getContextLimits: vi.fn(async () => ({ maxContext: 128_000, maxOutput: 8_192 })),
     };
-    const server = createStoryServer(storyStore as never, providerStore as never);
+    const server = createTestServer(storyStore as never, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -610,7 +623,7 @@ describe('local server entry', () => {
         });
       }),
     };
-    const server = createStoryServer(storyStore as never, providerStore as never);
+    const server = createTestServer(storyStore as never, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -644,7 +657,7 @@ describe('local server entry', () => {
 
   it('keeps APIs available through configured proxy Hosts', async () => {
     const providerStore = { list: vi.fn(async () => []) };
-    const server = createStoryServer(undefined, providerStore as never);
+    const server = createTestServer(undefined, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -697,7 +710,7 @@ describe('local server entry', () => {
     const providerStore = {
       save: vi.fn(async () => savedProfile),
     };
-    const server = createStoryServer(undefined, providerStore as never);
+    const server = createTestServer(undefined, providerStore as never);
 
     try {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
