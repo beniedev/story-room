@@ -1,6 +1,10 @@
-import { readFile } from 'node:fs/promises';
+import { readFile as readSourceFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createExampleBooks, upgradeExampleBookContent } from '../src/fixtures';
+
+// Source offsets and multiline markers use the same newline representation.
+const readFile = async (file: URL, encoding: 'utf8') =>
+  (await readSourceFile(file, encoding)).replace(/\r\n/g, '\n');
 
 const checkedIndex = (source: string, marker: string, from = 0) => {
   const index = source.indexOf(marker, from);
