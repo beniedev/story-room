@@ -1,203 +1,17 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  assertGenerationExecutable,
-  buildContextPlan,
-  buildContextPreview,
-  fakeGenerate,
-  normalizeSectionMemoryResponse,
-  ProviderResponseError,
-  RequestValidationError,
-} from './domain.ts';
-import {
-  BookNotFoundError,
-  StoreConflictError,
-  StoreInputError,
-  StoryStore,
-} from './store.ts';
-import type { Book, GenerationRequest } from '../src/types.ts';
-import type { ProviderProfile } from '../src/providerProfiles.ts';
-import {
-  ProviderCancelledError,
-  ProviderConnectionError,
-  ProviderInputError,
-  ProviderStore,
-} from './providers.ts';
+import { buildContextPreview, RequestValidationError } from './domain.ts';
+import { StoryStore } from './store.ts';
+import { ProviderStore } from './providers.ts';
+import { formatUrlHost, requestHost, sameOrigin } from './http/requestOrigin.ts';
+import { isRecord, readBody, readBookImportRequest, readBookSaveRequest, readGenerationRequest, readProviderBody } from './http/requests.ts';
+import { sendJson, sendRequestError } from './http/responses.ts';
+import { serveStatic } from './http/staticFiles.ts';
+import { handleGenerationRequest } from './http/generationResponse.ts';
 
 const host = process.env.STORY_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.STORY_API_PORT ?? 4311);
-const generationKinds = new Set(['continue-section', 'regenerate-block', 'respond-to-input', 'rewrite-selection', 'summarize-section']);
-
-type HostAuthority = {
-  hostname: string;
-  port?: string;
-};
-
-const normalizeHost = (value: string) => {
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1);
-  return trimmed;
-};
-
-const parseHostAuthority = (value: string): HostAuthority | null => {
-  const raw = value.trim();
-  if (!raw || raw !== value || raw.includes('\\')) return null;
-  const authority = isIP(raw) === 6 ? `[${raw}]` : raw;
-  let parsed: URL;
-  try {
-    parsed = new URL(`http://${authority}`);
-  } catch {
-    return null;
-  }
-  if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
-  const hostname = normalizeHost(parsed.hostname);
-  if (!hostname) return null;
-  return { hostname, port: parsed.port || undefined };
-};
-
-const requestHost = (request: IncomingMessage) => {
-  const value = request.headers.host;
-  return typeof value === 'string' ? parseHostAuthority(value) : null;
-};
-
-const sameOrigin = (request: IncomingMessage, actualHost: HostAuthority) => {
-  const origin = request.headers.origin;
-  if (origin === undefined) return true;
-  if (origin.trim() !== origin) return false;
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
-    return false;
-  }
-  const host = actualHost.hostname.includes(':') ? `[${actualHost.hostname}]` : actualHost.hostname;
-  const expected = new URL(`http://${host}${actualHost.port ? `:${actualHost.port}` : ''}`);
-  return parsed.origin === expected.origin;
-};
-
-const formatUrlHost = (value: string) => value.includes(':') && !value.startsWith('[') ? `[${value}]` : value;
-
-const contentTypes: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.ttf': 'font/ttf',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-};
-
-const sendJson = (response: ServerResponse, status: number, value: unknown) => {
-  const body = JSON.stringify(value);
-  response.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
-    'cache-control': 'no-store',
-  });
-  response.end(body);
-};
-
-type GenerationStreamEvent =
-  | { type: 'delta'; text: string }
-  | { type: 'result'; result: { draft: string; sourceSignature?: string } }
-  | { type: 'error'; error: string };
-
-const writeGenerationStreamEvent = (response: ServerResponse, event: GenerationStreamEvent) => {
-  if (response.destroyed || response.writableEnded) throw new ProviderCancelledError();
-  if (!response.headersSent) {
-    response.writeHead(200, {
-      'content-type': 'application/x-ndjson; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    });
-  }
-  try {
-    response.write(`${JSON.stringify(event)}\n`);
-  } catch {
-    throw new ProviderCancelledError();
-  }
-};
-
-const finishGenerationStream = (response: ServerResponse) => {
-  if (!response.destroyed && !response.writableEnded) response.end();
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-  typeof value === 'object' && value !== null
-);
-
-const readBody = async (request: IncomingMessage): Promise<unknown> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    const buffer = Buffer.from(chunk);
-    chunks.push(buffer);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  } catch {
-    throw new RequestValidationError('请求体必须是有效 JSON。');
-  }
-};
-
-const readGenerationRequest = async (request: IncomingMessage): Promise<GenerationRequest> => {
-  const body = await readBody(request);
-  if (!isRecord(body)
-    || typeof body.bookId !== 'string'
-    || typeof body.sectionId !== 'string'
-    || typeof body.instruction !== 'string'
-    || (body.providerProfileId !== undefined && typeof body.providerProfileId !== 'string')
-    || (body.stream !== undefined && typeof body.stream !== 'boolean')
-    || (body.mode !== 'author' && body.mode !== 'character')
-    || (body.authorNote !== undefined && typeof body.authorNote !== 'string')
-    || (body.selectedCharacterId !== undefined && typeof body.selectedCharacterId !== 'string')
-    || (body.generationKind !== undefined && (typeof body.generationKind !== 'string' || !generationKinds.has(body.generationKind)))
-    || (body.targetBlockId !== undefined && typeof body.targetBlockId !== 'string')) {
-    throw new RequestValidationError('生成请求数据无效。');
-  }
-  return body as unknown as GenerationRequest;
-};
-
-const readProviderBody = async (request: IncomingMessage) => {
-  const body = await readBody(request);
-  if (!isRecord(body) || !isRecord(body.profile)
-    || (body.apiKey !== undefined && typeof body.apiKey !== 'string')) {
-    throw new RequestValidationError('Provider 请求数据无效。');
-  }
-  return { profile: body.profile as unknown as ProviderProfile, apiKey: body.apiKey as string | undefined };
-};
-
-const readBookSaveRequest = async (request: IncomingMessage, bookId: string) => {
-  const body = await readBody(request);
-  if (!isRecord(body) || !isRecord(body.book)
-    || typeof body.book.id !== 'string'
-    || typeof body.expectedUpdatedAt !== 'string'
-    || !body.expectedUpdatedAt.trim()) {
-    throw new RequestValidationError('保存请求必须包含有效的 Book 与 expectedUpdatedAt。');
-  }
-  if (body.book.id !== bookId) throw new RequestValidationError('URL 与 Book ID 不一致。');
-  return {
-    book: body.book as unknown as Book,
-    expectedUpdatedAt: body.expectedUpdatedAt,
-  };
-};
-
-const readBookImportRequest = async (request: IncomingMessage) => {
-  const body = await readBody(request);
-  if (!isRecord(body) || !isRecord(body.book) || typeof body.book.id !== 'string') {
-    throw new RequestValidationError('导入请求必须包含有效的 Book。');
-  }
-  return body.book as unknown as Book;
-};
-
 const knownRouteMethods: Record<string, string[]> = {
   '/api/health': ['GET'],
   '/api/library': ['GET'],
@@ -210,61 +24,12 @@ const knownRouteMethods: Record<string, string[]> = {
   '/api/generate': ['POST'],
 };
 
-const serveStatic = async (
-  request: IncomingMessage,
-  response: ServerResponse,
-  root: string,
-  pathname: string,
-) => {
-  if (request.method !== 'GET' && request.method !== 'HEAD') return false;
-
-  let decodedPath: string;
-  try {
-    decodedPath = decodeURIComponent(pathname);
-  } catch {
-    return false;
-  }
-
-  const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
-  const candidate = path.resolve(root, relativePath);
-  const relativeToRoot = path.relative(root, candidate);
-  const safeCandidate = relativeToRoot !== '..'
-    && !relativeToRoot.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relativeToRoot);
-
-  let file = safeCandidate ? candidate : '';
-  try {
-    if (!file || !(await stat(file)).isFile()) file = '';
-  } catch {
-    file = '';
-  }
-  if (!file) {
-    file = path.resolve(root, 'index.html');
-    try {
-      if (!(await stat(file)).isFile()) return false;
-    } catch {
-      return false;
-    }
-  }
-
-  const body = await readFile(file);
-  response.writeHead(200, {
-    'content-type': contentTypes[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': body.length,
-    'cache-control': 'no-store',
-  });
-  response.end(request.method === 'HEAD' ? undefined : body);
-  return true;
-};
-
 export const createStoryServer = (
   storyStore = new StoryStore(),
   providerStore = new ProviderStore(),
   staticRoot?: string,
 ) => {
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
-    let generationSignal: AbortSignal | undefined;
-    let streamingGeneration = false;
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const actualHost = requestHost(request);
@@ -334,77 +99,7 @@ export const createStoryServer = (
         return sendJson(response, 200, buildContextPreview(book, body, limits));
       }
       if (request.method === 'POST' && url.pathname === '/api/generate') {
-        const generationController = new AbortController();
-        let generationFinished = false;
-        generationSignal = generationController.signal;
-        const abortOnClientDisconnect = () => {
-          if (!generationFinished && !generationController.signal.aborted) generationController.abort();
-        };
-        request.once('aborted', abortOnClientDisconnect);
-        response.once('close', abortOnClientDisconnect);
-        try {
-          const body = await readGenerationRequest(request);
-          streamingGeneration = body.stream === true;
-          if (generationController.signal.aborted) return;
-          const book = await storyStore.loadBook(body.bookId);
-          if (generationController.signal.aborted) return;
-          const limits = await providerStore.getContextLimits(body.providerProfileId);
-          if (generationController.signal.aborted) return;
-          const plan = buildContextPlan(book, body, limits);
-          assertGenerationExecutable(body);
-          const emitDelta = streamingGeneration
-            ? (delta: string) => {
-                if (generationController.signal.aborted || response.destroyed) {
-                  throw new ProviderCancelledError();
-                }
-                writeGenerationStreamEvent(response, { type: 'delta', text: delta });
-              }
-            : undefined;
-          const generated = body.providerProfileId
-            ? await providerStore.generate(body.providerProfileId, plan.messages, generationController.signal, {
-                stream: streamingGeneration,
-                onDelta: emitDelta,
-              })
-            : null;
-          if (generationController.signal.aborted) return;
-          if (generated !== null) {
-            const result = {
-              draft: body.generationKind === 'summarize-section'
-                && (generated.finishReason === 'stop' || generated.finishReason === 'unknown')
-                ? normalizeSectionMemoryResponse(generated.draft)
-                : generated.draft,
-              finishReason: generated.finishReason,
-              sourceSignature: plan.sourceSignature,
-            };
-            if (streamingGeneration) {
-              writeGenerationStreamEvent(response, { type: 'result', result });
-              generationFinished = true;
-              finishGenerationStream(response);
-              return;
-            }
-            generationFinished = true;
-            return sendJson(response, 200, result);
-          }
-          const fake = fakeGenerate(book, body, limits, plan);
-          const result = {
-            draft: fake.draft,
-            finishReason: 'stop',
-            sourceSignature: fake.sourceSignature,
-          };
-          if (streamingGeneration) {
-            if (emitDelta) emitDelta(result.draft);
-            writeGenerationStreamEvent(response, { type: 'result', result });
-            generationFinished = true;
-            finishGenerationStream(response);
-            return;
-          }
-          generationFinished = true;
-          return sendJson(response, 200, result);
-        } finally {
-          generationFinished = true;
-          request.off('aborted', abortOnClientDisconnect);
-          response.off('close', abortOnClientDisconnect);
-        }
+        return handleGenerationRequest(request, response, storyStore, providerStore);
       }
       if (knownRouteMethods[url.pathname]) {
         response.setHeader('allow', knownRouteMethods[url.pathname].join(', '));
@@ -416,52 +111,7 @@ export const createStoryServer = (
       if (staticRoot && await serveStatic(request, response, staticRoot, url.pathname)) return;
       return sendJson(response, 404, { error: '未找到这个 DEMO API。' });
     } catch (error) {
-      if (error instanceof ProviderCancelledError
-        || generationSignal?.aborted
-        || response.destroyed
-        || response.writableEnded) return;
-      const statusCode = error instanceof BookNotFoundError
-          ? error.statusCode
-          : error instanceof StoreConflictError
-            ? error.statusCode
-          : error instanceof RequestValidationError || error instanceof StoreInputError
-            ? error.statusCode
-            : error instanceof ProviderResponseError
-              ? error.statusCode
-            : error instanceof ProviderInputError || error instanceof ProviderConnectionError
-              ? error.statusCode
-              : 500;
-      const message = error instanceof BookNotFoundError
-        || error instanceof StoreConflictError
-        || error instanceof RequestValidationError
-        || error instanceof StoreInputError
-        || error instanceof ProviderResponseError
-        || error instanceof ProviderInputError
-        || error instanceof ProviderConnectionError
-        ? error.message
-        : '服务器内部错误。';
-      if (streamingGeneration && response.headersSent
-        && !response.destroyed && !response.writableEnded && !generationSignal?.aborted) {
-        const message = error instanceof BookNotFoundError
-          || error instanceof RequestValidationError
-          || error instanceof StoreInputError
-          || error instanceof ProviderResponseError
-          || error instanceof ProviderInputError
-          || error instanceof ProviderConnectionError
-          ? error.message
-          : '服务器内部错误。';
-        try {
-          writeGenerationStreamEvent(response, { type: 'error', error: message });
-          finishGenerationStream(response);
-        } catch {
-          // The client disconnected while the error event was being written.
-        }
-        return;
-      }
-      if (statusCode >= 500) console.error('Story host request failed:', error);
-      return sendJson(response, statusCode, statusCode === 409
-        ? { error: message, code: 'BOOK_CONFLICT' }
-        : { error: message });
+      return sendRequestError(response, error);
     }
   };
   return createServer(handler);

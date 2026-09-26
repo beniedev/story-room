@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ProviderCancelledError,
+  ProviderConnectionError,
+  ProviderInputError,
   ProviderStore,
 } from '../server/providers.ts';
 import {
@@ -306,8 +308,13 @@ describe('local provider store', () => {
     });
     expect(requests).toEqual(['Bearer temporary-test-key']);
     expect(JSON.stringify(await store.list())).not.toContain('temporary-test-key');
+    await expect(readFile(store.file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     await store.save(temporaryProfile, 'saved-test-key');
+    const persisted = await readFile(store.file, 'utf8');
+    await expect(store.test(temporaryProfile, 'override-temporary-test-key')).resolves.toEqual({ ok: true, modelId: 'test-model' });
+    expect(requests).toEqual(['Bearer temporary-test-key', 'Bearer override-temporary-test-key']);
+    expect(await readFile(store.file, 'utf8')).toBe(persisted);
     await store.save({ ...temporaryProfile, kind: 'fake' });
     expect(await store.test({ ...temporaryProfile, kind: 'fake' })).toEqual({
       ok: true,
@@ -450,5 +457,79 @@ describe('local provider store', () => {
     await expect(store.test(profile)).resolves.toEqual({ ok: true, modelId: 'test-model' });
     await expect(store.generate(profile.id, [{ role: 'user', content: 'Continue.', blockIds: [] }]))
       .resolves.toEqual({ draft: content, finishReason: 'unknown' });
+  });
+
+  it('keeps internal config fields out of public profiles while passing generation settings to the client', async () => {
+    const store = await makeStore();
+    const profile = profileAt('https://provider.synthetic/v1');
+    const stored = {
+      ...profile,
+      apiKey: 'synthetic-config-key',
+      temperature: 0.6,
+      topP: 0.7,
+      frequencyPenalty: 0.2,
+      presencePenalty: 0.3,
+      reasoningEffort: 'low',
+      verbosity: 'low',
+    };
+    await writeFile(store.file, JSON.stringify({ profiles: [stored] }), 'utf8');
+    mockedLookup.mockResolvedValue([{ address: '203.0.113.10', family: 4 }]);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'Synthetic completion.' }, finish_reason: 'stop' }],
+    })));
+
+    await expect(store.list()).resolves.toEqual([profile]);
+    await expect(store.getContextLimits(profile.id)).resolves.toEqual({ maxContext: profile.maxContext, maxOutput: profile.maxOutput });
+    await expect(store.generate(profile.id, [{ role: 'user', content: 'Synthetic input.', blockIds: ['synthetic-block'] }]))
+      .resolves.toEqual({ draft: 'Synthetic completion.', finishReason: 'stop' });
+    const request = fetchSpy.mock.calls[0]?.[1];
+    expect(JSON.parse(String(request?.body))).toEqual({
+      model: profile.modelId,
+      messages: [{ role: 'user', content: 'Synthetic input.' }],
+      max_tokens: profile.maxOutput,
+      temperature: 0.6,
+      top_p: 0.7,
+      frequency_penalty: 0.2,
+      presence_penalty: 0.3,
+      reasoning_effort: 'low',
+      verbosity: 'low',
+    });
+    expect(new Headers(request?.headers).get('authorization')).toBe('Bearer synthetic-config-key');
+    expect(String(request?.body)).not.toContain('synthetic-config-key');
+  });
+
+  it('preserves the typed generic failure for invalid persisted Provider config', async () => {
+    const store = await makeStore();
+    const content = JSON.stringify({ profiles: [{ ...profileAt('https://provider.synthetic/v1'), id: 'invalid id', apiKey: 'synthetic-untrusted-config-key' }] });
+    await writeFile(store.file, content, 'utf8');
+
+    for (const action of [() => store.list(), () => store.save(profileAt('https://provider.synthetic/v1'), 'synthetic-new-key')]) {
+      const error = await action().catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(ProviderInputError);
+      expect(error).toMatchObject({ statusCode: 400, message: '本机 Provider 配置无效。' });
+    }
+    expect(await readFile(store.file, 'utf8')).toBe(content);
+  });
+
+  it.each([401, 403, 429, 502])('filters HTTP %s Provider payloads without retries in test and generation', async (status) => {
+    const store = await makeStore();
+    const profile = profileAt('https://provider.synthetic/v1');
+    await store.save(profile, 'synthetic-error-key');
+    mockedLookup.mockResolvedValue([{ address: '203.0.113.10', family: 4 }]);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      error: { message: 'synthetic-untrusted-provider-payload' },
+    }), { status }));
+    const message = status === 401 || status === 403 ? 'Provider 拒绝了本机凭据。' : `Provider 返回 HTTP ${status}。`;
+
+    for (const action of [
+      () => store.test(profile),
+      () => store.generate(profile.id, [{ role: 'user', content: 'Synthetic input.', blockIds: [] }]),
+    ]) {
+      const error = await action().catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(ProviderConnectionError);
+      expect(error).toMatchObject({ statusCode: 502, message });
+      expect(String(error)).not.toContain('synthetic-untrusted-provider-payload');
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
