@@ -143,6 +143,16 @@ class RecoveryFailingStore extends FaultingStore {
   }
 }
 
+class FailOnceStore extends StoryStore {
+  private failNextSave = true;
+
+  protected override async transactionCheckpoint(stage: StoreFaultStage) {
+    if (stage !== 'after-manifest' || !this.failNextSave) return;
+    this.failNextSave = false;
+    throw new Error('synthetic one-time publication failure');
+  }
+}
+
 class FailingTransactionCleanupStore extends StoryStore {
   constructor(root: string, private readonly failureMessage = 'synthetic transaction cleanup failure') {
     super(root);
@@ -182,6 +192,7 @@ class SourceWriteRaceStore extends StoryStore {
   private readonly sourceRelease: Promise<void>;
   private sourceReleaseResolve!: () => void;
   restoreStarted = false;
+  readonly sourceAttempts: string[] = [];
 
   constructor(root: string) {
     super(root);
@@ -194,6 +205,7 @@ class SourceWriteRaceStore extends StoryStore {
   }
 
   protected override async writeManagedSource(file: string, content: string) {
+    this.sourceAttempts.push(path.relative(path.join(this.root, 'books', 'integrity-book'), file));
     if (file.endsWith(path.join('characters', 'integrity-character.json'))) {
       this.sourceStartedResolve();
       await this.sourceRelease;
@@ -554,6 +566,24 @@ describe('story store', () => {
     },
   );
 
+  it('can read and save again on the same store after a publication callback fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
+    temporaryRoots.push(root);
+    const baseline = new StoryStore(root);
+    await baseline.saveBook(makeIntegrityBook());
+    const oldBook = await baseline.loadBook('integrity-book');
+    const store = new FailOnceStore(root);
+
+    await expect(store.saveBook({ ...oldBook, title: 'Failed publication' }))
+      .rejects.toThrow('synthetic one-time publication failure');
+    expect(await store.loadBook(oldBook.id)).toEqual(oldBook);
+
+    const saved = await store.saveBook({ ...oldBook, title: 'Later successful publication' });
+    expect(await store.loadBook(oldBook.id)).toEqual(saved);
+    expect((await store.listBooks()).filter((entry) => entry.id === saved.id))
+      .toEqual([{ id: saved.id, title: saved.title, updatedAt: saved.updatedAt }]);
+  });
+
   it('waits for every started source write before restoring after one write fails', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'story-harness-'));
     temporaryRoots.push(root);
@@ -589,6 +619,10 @@ describe('story store', () => {
     racingStore.releaseSource();
     await expect(savePromise).rejects.toThrow('synthetic source write failure');
     expect(racingStore.restoreStarted).toBe(true);
+    expect(racingStore.sourceAttempts).toEqual([
+      path.join('characters', 'integrity-character.json'),
+      path.join('characters', 'integrity-late-character.json'),
+    ]);
     const recovered = await new StoryStore(root).loadBook(oldBook.id);
     expect(recovered.title).toBe(oldBook.title);
     expect(recovered.characters).toEqual(oldBook.characters);
