@@ -173,6 +173,25 @@ afterEach(async () => {
 });
 
 describe('manuscript block selection', () => {
+  it.each([false, true])('detaches the selection observer when a block unmounts with a pending gesture (%s)', async (released) => {
+    const container = await mount();
+    const block = blockFor(container);
+    const add = vi.spyOn(document, 'addEventListener');
+    const remove = vi.spyOn(document, 'removeEventListener');
+    try {
+      await dispatchPointer(block, 'pointerdown', { pointerType: 'touch', timeStamp: 10 });
+      const observer = add.mock.calls.find(([name]) => name === 'selectionchange')?.[1];
+      expect(observer).toBeTypeOf('function');
+      if (released) await dispatchPointer(block, 'pointerup', { pointerType: 'touch', timeStamp: 50 });
+      const root = mountedRoots.pop()!;
+      await act(async () => root.unmount());
+      expect(remove).toHaveBeenCalledWith('selectionchange', observer);
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
   it.each(['touch', 'pen'])('keeps a completed %s tap when pointerleave precedes click', async (pointerType) => {
     const container = await mount();
     const block = blockFor(container, 'second-block');
