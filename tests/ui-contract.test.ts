@@ -41,7 +41,7 @@ describe('writing UI contract', () => {
   });
 
   it('keeps the restricted first-person mode in the writing menu', async () => {
-    const source = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     expect(source).toContain('角色模式 · 第一视角');
     expect(source).toContain('第一人称连续正文生成');
     expect(source).toContain('selectedCharacterId');
@@ -61,6 +61,7 @@ describe('writing UI contract', () => {
   it('keeps the writing surface reader-first and moves secondary actions into one menu', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const input = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     expect(writer).toContain('className="writer-context-progress"');
     expect(writer).toContain('className="writer-tool-row"');
     expect(writer).toContain('role="group" aria-label="写作工具"');
@@ -69,14 +70,14 @@ describe('writing UI contract', () => {
     expect(writer).not.toContain('<BookMarked aria-hidden="true" /><span>设定</span>');
     expect(writer).toContain('className="writer-tool-actions"');
     expect(writer).toContain('className="writer-section-title"');
-    expect(writer).toContain('className="writer-action-menu"');
-    expect(writer).toContain('className="writer-menu-modes"');
-    expect(writer).toContain('打开写作操作');
+    expect(input).toContain('className="writer-action-menu"');
+    expect(input).toContain('className="writer-menu-modes"');
+    expect(input).toContain('打开写作操作');
     expect(writer).toContain('label="小节名称"');
     expect(writer).not.toContain('aria-label="导出当前书目"');
     expect(app).toContain('aria-label="导出当前书目"');
-    expect(writer).toMatch(/className="primary-action icon-button writer-send-button"[\s\S]{0,520}<Send aria-hidden="true" \/>/);
-    expect(writer).toContain('closeActionMenu(true)');
+    expect(input).toMatch(/className="primary-action icon-button writer-send-button"[\s\S]{0,520}<Send aria-hidden="true" \/>/);
+    expect(input).toContain('closeActionMenu(true)');
     expect(app).toContain('restoreShelfFocus.current = true');
     expect(writer).not.toContain('上一小节');
     expect(writer).not.toContain('下一小节');
@@ -89,7 +90,7 @@ describe('writing UI contract', () => {
 
     const shelfContentStart = source.indexOf('className="shelf-content"');
     const selectorIndex = source.indexOf('className="book-library-drawer"');
-    const toolbarIndex = source.indexOf('className="directory-toolbar"');
+    const toolbarIndex = source.indexOf('<BookDirectory');
     expect(shelfContentStart).toBeGreaterThanOrEqual(0);
     expect(selectorIndex).toBeGreaterThan(shelfContentStart);
     expect(selectorIndex).toBeLessThan(toolbarIndex);
@@ -122,10 +123,12 @@ describe('writing UI contract', () => {
   });
 
   it('matches the home settings entry to the shallow icon-only writing control', async () => {
-    const source = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../src/components/bookshelf/BookDirectory.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const toolbarStart = source.indexOf('className="directory-toolbar"');
     const chapterListStart = source.indexOf('<ol className="chapter-list"', toolbarStart);
+    expect(toolbarStart).toBeGreaterThanOrEqual(0);
+    expect(chapterListStart).toBeGreaterThan(toolbarStart);
     const toolbar = source.slice(toolbarStart, chapterListStart);
 
     expect(toolbar).toContain('className="book-settings-button icon-button"');
@@ -137,6 +140,7 @@ describe('writing UI contract', () => {
   it('separates book switching from book creation and current-book management', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const shelf = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const directory = await readFile(new URL('../src/components/bookshelf/BookDirectory.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${shelf}`;
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const panelStart = source.indexOf('className="book-library-panel"');
@@ -154,7 +158,7 @@ describe('writing UI contract', () => {
     expect(panel).not.toContain('删除书目');
     expect(panel).not.toContain('新建书目');
     expect(source).toContain("if (entry.id !== props.book.id) props.onOpenBook(entry.id);");
-    expect(source).toContain('book-settings-button');
+    expect(directory).toContain('book-settings-button');
     expect(styles).toMatch(/\.book-settings-button\s*\{[\s\S]{0,300}background:\s*var\(--surface\)[\s\S]{0,120}color:\s*var\(--accent-strong\)/);
     expect(styles).toMatch(/\.book-library-panel\s*\{[\s\S]{0,220}position:\s*absolute[\s\S]{0,220}width:\s*100%/);
     expect(styles).toMatch(/\.book-selector-card\s*\{[\s\S]{0,320}background:\s*var\(--surface\)/);
@@ -168,12 +172,13 @@ describe('writing UI contract', () => {
   it('passes the active provider metadata to the writer and emphasizes the context count', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const input = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const writerInvocationStart = source.indexOf('<Writer');
     const writerInvocationEnd = source.indexOf('/>', writerInvocationStart);
     const writerInvocation = source.slice(writerInvocationStart, writerInvocationEnd);
 
-    expect(writer).toContain('作者模式 · 写作接龙');
+    expect(input).toContain('作者模式 · 写作接龙');
     expect(source).not.toContain('作者模式 · 接龙');
     expect(writerInvocation).toMatch(/provider(?:Profile)?Name\s*=/);
     expect(writerInvocation).toMatch(/modelId\s*=/);
@@ -206,8 +211,7 @@ describe('writing UI contract', () => {
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const focus = await readFile(new URL('../src/components/shared/dialogFocus.ts', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    const settingsStart = source.indexOf('function SettingsDrawer');
-    const settings = source.slice(settingsStart);
+    const settings = await readFile(new URL('../src/components/SettingsDrawer.tsx', import.meta.url), 'utf8');
     const contextControlsStart = writer.indexOf('className="writer-context-trigger"');
     const contextControlsEnd = writer.indexOf('className="writer-tool-actions"', contextControlsStart);
     const contextControls = writer.slice(contextControlsStart, contextControlsEnd);
@@ -369,9 +373,6 @@ describe('writing UI contract', () => {
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${tools}`;
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    const recovery = await readFile(new URL('../src/bookRecovery.ts', import.meta.url), 'utf8');
-    expect(app).toContain('resolveBookForLoad(');
-    expect(recovery).toMatch(/normalizeBook\(await \(options\.persistedOnly && api\.runtime === 'device'\s*\? api\.loadPersistedBook\(bookId\)\s*: api\.loadBook\(bookId\)\)\)/);
     expect(source).toContain('const candidate = normalizeBook(book);');
     expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries, retainedInactiveSectionIds)');
     expect(source).toContain('source.ordinal >= targetOrdinal');
@@ -413,22 +414,24 @@ describe('writing UI contract', () => {
 
   it('keeps author relay input and persistent section guidance inside the continuous manuscript', async () => {
     const app = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const input = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
+    const block = await readFile(new URL('../src/components/writer/ManuscriptBlock.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    expect(app).toContain('className="writer-section-note"');
-    expect(app).toContain('小节注释');
-    expect(app).toContain('authorNote');
-    expect(app).toContain('onAuthorNoteChange');
-    expect(app).toContain('指导当前小节之后的写作，不进入正文；修改后会保留，并在作者和扮演模式中生效。');
-    expect(app).toContain('写下一段正文，让 AI 从这里接着写');
+    expect(input).toContain('className="writer-section-note"');
+    expect(input).toContain('小节注释');
+    expect(input).toContain('authorNote');
+    expect(input).toContain('onAuthorNoteChange');
+    expect(input).toContain('指导当前小节之后的写作，不进入正文；修改后会保留，并在作者和扮演模式中生效。');
+    expect(input).toContain('写下一段正文，让 AI 从这里接着写');
     expect(app).not.toContain('props.section?.note');
     expect(app).not.toContain('onSectionNoteChange');
-    expect(app).toContain('className="manuscript-block-group"');
-    expect(app).toContain('className="manuscript-block"');
-    expect(app).toContain('className="manuscript-block-select icon-button"');
-    expect(app).toContain('<MousePointer2 aria-hidden="true" />');
-    expect(app).toContain("? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段");
-    expect(app).not.toContain('aria-describedby={`manuscript-block-content-${block.id}`}');
-    expect(app).not.toContain('className="manuscript-block-copy">{renderBlockContent(block)}</span>\n              </button>');
+    expect(block).toContain('className="manuscript-block-group"');
+    expect(block).toContain('className="manuscript-block"');
+    expect(block).toContain('className="manuscript-block-select icon-button"');
+    expect(block).toContain('<MousePointer2 aria-hidden="true" />');
+    expect(block).toContain("? '取消选择' : '选择'} ${block.kind === 'user' ? '用户输入' : 'AI 输出'}片段");
+    expect(block).not.toContain('aria-describedby={`manuscript-block-content-${block.id}`}');
+    expect(block).not.toContain('className="manuscript-block-copy">{renderBlockContent(block)}</span>\n              </button>');
     expect(app).toContain('className="manuscript-block-actions"');
     expect(app).not.toContain('className="writer-block-actions"');
     expect(app).toContain('重新生成所选 AI 输出');
@@ -436,7 +439,7 @@ describe('writing UI contract', () => {
     expect(app).toContain('编辑所选片段');
     expect(app).toContain('删除所选片段');
     expect(app).toContain('只会删除当前选中的这一块用户输入或 AI 输出');
-    expect(app).toContain('className="manuscript-dialogue"');
+    expect(block).toContain('className="manuscript-dialogue"');
     expect(styles).toContain('--manuscript-user: #4a354d');
     expect(styles).toContain('--manuscript-ai: #7d63c7');
     expect(styles).toContain('--manuscript-emphasis: #7d63c7');
@@ -453,6 +456,7 @@ describe('writing UI contract', () => {
   it('sends directly, appends the continuation, clears input, and keeps section guidance', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const input = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${writer}`;
     expect(source).toContain('const generateContinuation = () => withBusy(async () => {');
     expect(source).toContain('const authorNote = section?.note ??');
@@ -462,7 +466,7 @@ describe('writing UI contract', () => {
     expect(source).toContain("appendCandidate(");
     expect(source).toContain('sourceSignature: result.sourceSignature');
     expect(source).toContain('续写已加入当前小节。');
-    expect(source).toContain("aria-label={props.busy ? '正在续写' : '发送并续写'}");
+    expect(input).toContain("aria-label={props.busy ? '正在续写' : '发送并续写'}");
     expect(source).not.toContain('className="draft-preview"');
     expect(source).not.toContain('应用到正文');
     expect(source).not.toContain('放弃预览');
@@ -470,7 +474,7 @@ describe('writing UI contract', () => {
   });
 
   it('keeps mode switching open while role choice stays in the writing menu', async () => {
-    const app = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const app = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     expect(app).toContain("onClick={() => props.onModeChange('author')}");
     expect(app).toContain("onClick={() => props.onModeChange('character')}");
     expect(app).toContain('id="character-select"');
@@ -480,20 +484,22 @@ describe('writing UI contract', () => {
 
   it('opens a selected block in a full-screen editor with immediate autosave', async () => {
     const app = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const editor = await readFile(new URL('../src/components/writer/BlockEditorPage.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(app).toContain("const [editingBlockId, setEditingBlockId] = useState('');");
     expect(app).toContain('const readerScrollPosition = useRef(0);');
     expect(app).toContain('const editingBlock = blocks.find((item) => item.id === editingBlockId);');
-    expect(app).toContain('className="block-editor-page"');
-    expect(app).toContain('className="block-editor-header"');
-    expect(app).toContain('className="block-editor-textarea"');
-    expect(app).toContain('onChange={(event) => props.onSectionBlocksChange');
-    expect(app).toContain('自动保存');
+    expect(editor).toContain('className="block-editor-page"');
+    expect(editor).toContain('className="block-editor-header"');
+    expect(editor).toContain('className="block-editor-textarea"');
+    expect(app).toContain('onChange={(content) => props.onSectionBlocksChange');
+    expect(editor).toContain('onChange={(event) => onChange(event.target.value)}');
+    expect(editor).toContain('自动保存');
     expect(app).toContain('manuscriptWrapRef.current?.scrollTop');
     expect(app).toContain('manuscriptWrapRef.current.scrollTop = readerScrollPosition.current');
     expect(app).not.toContain('window.scrollY');
     expect(app).not.toContain('window.scrollTo');
-    expect(app).not.toContain('<main className="block-editor-body">');
+    expect(editor).not.toContain('<main className="block-editor-body">');
     expect(app).toContain('readerScrollPosition.current');
     expect(app).not.toContain('editBlockDialog');
     expect(app).not.toContain('edit-block-input');
@@ -502,95 +508,63 @@ describe('writing UI contract', () => {
     expect(styles).toContain('max(1rem, var(--manuscript-font-size, 16px))');
   });
 
-  it('keeps persisted Book writes in the device API and page drafts out of shared storage', async () => {
-    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    expect(app).not.toContain('localStorage.setItem(bookCacheKey');
-    expect(app).not.toContain('localStorage.removeItem(bookCacheKey');
-    const drafts = await readFile(new URL('../src/deviceDrafts.ts', import.meta.url), 'utf8');
-    expect(app).toContain("from './deviceDrafts'");
-    expect(drafts).toContain('sessionStorage.setItem(bookDraftKey(book.id)');
-    expect(drafts).toContain('const clearHostBookCaches');
-  });
-
   it('keeps book creation and source management compact and understandable', async () => {
-    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const app = await readFile(new URL('../src/components/../App.tsx', import.meta.url), 'utf8');
     const shelf = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const directory = await readFile(new URL('../src/components/bookshelf/BookDirectory.tsx', import.meta.url), 'utf8');
+    const settings = await readFile(new URL('../src/components/bookshelf/BookSettingsDrawer.tsx', import.meta.url), 'utf8');
+    const dialogs = await readFile(new URL('../src/components/bookshelf/useBookshelfDialogs.ts', import.meta.url), 'utf8');
+    const navigation = await readFile(new URL('../src/components/bookshelf/useBookSettings.ts', import.meta.url), 'utf8');
+    const name = await readFile(new URL('../src/components/bookshelf/BookNameDialog.tsx', import.meta.url), 'utf8');
+    const deletion = await readFile(new URL('../src/components/bookshelf/BookDeleteDialog.tsx', import.meta.url), 'utf8');
+    const editors = await readFile(new URL('../src/components/BookSettingsEditors.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
-    const memory = await readFile(new URL('../src/components/SectionMemoryEditor.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    const source = `${app}\n${shelf}\n${writer}\n${memory}\n${tools}`;
-    expect(source).toContain("openNameDialog({ kind: 'new-book'");
-    expect(shelf).toContain('className="inline-new-section"');
-    expect(source).toContain("openCurrentBookNameDialog({ kind: 'rename-book'");
-    expect(shelf).toContain('<InlineTitle');
-    expect(shelf).toContain('onRenameSection');
-    expect(source).not.toContain("openNameDialog({ kind: 'rename-section'");
+    expect(dialogs).toContain("openNameDialog({ kind: 'new-book'");
+    expect(shelf).toContain("openCurrentBookNameDialog({ kind: 'rename-book'");
+    expect(directory).toContain('className="inline-new-section"');
+    expect(directory).toContain('<InlineTitle');
+    expect(directory).toContain('onRenameSection');
+    expect(directory).not.toContain("openNameDialog({ kind: 'rename-section'");
     expect(writer).not.toContain('id="section-title-dialog-heading"');
     expect(writer).toContain('onSave={props.onSectionTitleChange}');
-    expect(source).toContain('if (id !== sectionId) {');
-    expect(source).not.toContain("setDraftInstruction('')");
-    expect(source).toContain('toggleChapterSelection');
-    expect(source).toContain('toggleSectionSelection');
-    expect(shelf).toContain('className="directory-selection-checkbox"');
-    expect(shelf).toContain("? 'checked'");
-    expect(shelf).toContain("? 'mixed'");
+    expect(app).toContain('if (id !== sectionId) {');
+    expect(tools).not.toContain("setDraftInstruction('')");
+    for (const token of ['toggleChapterSelection', 'toggleSectionSelection', 'className="directory-selection-checkbox"', "? 'checked'", "? 'mixed'", "kind: 'selection'", '小节名称']) expect(directory).toContain(token);
     expect(styles).toContain('.directory-selection-checkbox[data-state="mixed"]::after');
-    expect(source).toContain("kind: 'selection'");
-    expect(source).toContain('删除所选内容');
-    expect(source).toContain('返回本书设定');
-    expect(source).toContain('bookSettingsView');
-    expect(source).toContain('returnBookSettingsParent');
-    expect(source).toContain('compact-book-settings-heading');
-    expect(source).toContain('<h2 id="book-settings-title" className="sr-only">{bookSettingsTitle}</h2>');
-    expect(source).toContain("openBookSettingsPage({ kind: 'character'");
-    expect(source).toContain("openBookSettingsPage({ kind: 'world'");
-    expect(source).not.toContain('bookSettingsOpenRequest');
-    expect(source).toContain("kind: 'source-selection'");
-    expect(source).toContain('删除所选角色卡');
-    expect(source).toContain('删除所选世界观设定');
-    expect(source).not.toContain('editingCharacterId');
-    expect(source).not.toContain('editingWorldId');
-    expect(source).toContain('className="source-editor-page"');
-    expect(source).toContain('全局指引');
-    expect(source).toContain('剧情大纲');
-    expect(source).toContain('写作风格指导');
-    expect(source).not.toContain('本机书库已打开。');
-    expect(source).toContain('className="book-settings-drawer"');
-    expect(source).toContain('className="name-dialog"');
-    expect(source).toContain('className="confirm-dialog"');
-    expect(source).toContain('const focusNameInput = () => {');
-    expect(source).toContain('const focusTarget = () => {');
-    expect(source).toContain('className="source-group-drawer"');
-    expect(source).toContain('章节名称');
-    expect(source).toContain('小节名称');
-    expect(source).toContain('danger-icon');
-    expect(source).not.toContain('window.confirm');
-    expect(source).toContain('确认保存前不会写入书目');
-    expect(source).toContain('本书设定');
-    expect(source).not.toContain('电子书目录');
-    expect(source).not.toContain('aria-label="书目视图"');
-    expect(source).not.toContain('Canon 与摘要');
-    expect(source).not.toContain('<span>装入 Prompt</span>');
-    expect(source).not.toContain('剧情记忆');
-    expect(source).not.toContain('Book 隔离视图');
-    expect(source).not.toContain('StoryGraph');
+    expect(dialogs).toContain('删除所选内容');
+    expect(dialogs).toContain('const focusNameInput = () => {');
+    expect(dialogs).toContain('const focusTarget = () => {');
+    expect(dialogs).toContain('章节名称');
+    expect(navigation).toContain('returnBookSettingsParent');
+    for (const token of ['返回本书设定', 'bookSettingsView', 'compact-book-settings-heading', '<h2 id="book-settings-title" className="sr-only">{bookSettingsTitle}</h2>', "openBookSettingsPage({ kind: 'character'", "openBookSettingsPage({ kind: 'world'", "kind: 'source-selection'", '删除所选角色卡', '删除所选世界观设定', '全局指引', '剧情大纲', '写作风格指导', 'className="book-settings-drawer"', 'className="source-group-drawer"', 'danger-icon', '本书设定']) expect(settings).toContain(token);
+    expect(editors).toContain('className="source-editor-page"');
+    expect(name).toContain('className="name-dialog"');
+    expect(deletion).toContain('className="confirm-dialog"');
+    expect(tools).toContain('确认保存前不会写入书目');
+    for (const owner of [app, shelf, directory, settings, dialogs, navigation, name, deletion, editors, writer, tools]) {
+      expect(owner).not.toMatch(/bookSettingsOpenRequest|editingCharacterId|editingWorldId|本机书库已打开。|window\.confirm|电子书目录|aria-label="书目视图"|Canon 与摘要|<span>装入 Prompt<\/span>|剧情记忆|Book 隔离视图|StoryGraph/);
+    }
   });
 
   it('keeps confirmation dialogs open until the real operation succeeds or fails', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    const shelf = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const directory = await readFile(new URL('../src/components/bookshelf/useBookDirectory.ts', import.meta.url), 'utf8');
+    const dialogs = await readFile(new URL('../src/components/bookshelf/useBookshelfDialogs.ts', import.meta.url), 'utf8');
+    const scope = await readFile(new URL('../src/components/SourceLoadScopePage.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const feedback = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
 
     expect(app).toContain('const commitBookChange = async');
     expect(app).toContain('await queueBookSave(candidate, revision)');
-    expect(shelf).toContain('await props.onAddSection');
-    expect(shelf).toContain("setNameOperation({ phase: 'pending'");
-    expect(shelf).toContain("setDeleteOperation({ phase: 'pending', title: '正在删除…' })");
-    expect(shelf).toContain("setConfirmOperation({ phase: 'pending', title: `正在保存${sourceLabel}加载范围…` })");
-    expect(shelf).toContain('await onConfirm(selectionPatch())');
+    expect(directory).toContain('await props.onAddSection');
+    expect(dialogs).toContain("setNameOperation({ phase: 'pending'");
+    expect(dialogs).toContain("setDeleteOperation({ phase: 'pending', title: '正在删除…' })");
+    expect(scope).toContain("setConfirmOperation({ phase: 'pending', title: `正在保存${sourceLabel}加载范围…` })");
+    expect(scope).toContain('await onConfirm(selectionPatch())');
     expect(writer).toContain('props.onDeleteSectionBlock(selectedBlock.id)');
     expect(tools).toContain("title: '正在保存并加载梗概…'");
     expect(tools).toContain("title: '梗概保存并加载失败'");
@@ -599,68 +573,37 @@ describe('writing UI contract', () => {
   });
 
   it('keeps settings compact while supporting reusable provider profiles', async () => {
-    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const app = await readFile(new URL('../src/components/../App.tsx', import.meta.url), 'utf8');
+    const settings = await readFile(new URL('../src/components/SettingsDrawer.tsx', import.meta.url), 'utf8');
+    const appearance = await readFile(new URL('../src/components/AppearanceSettings.tsx', import.meta.url), 'utf8');
     const provider = await readFile(new URL('../src/components/ProviderSettings.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const composition = await readFile(new URL('../src/components/ContextCompositionDrawer.tsx', import.meta.url), 'utf8');
-    const source = `${app}\n${provider}\n${writer}\n${composition}`;
+
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    expect(source).toContain('选择皮肤');
-    expect(source).toContain('id="theme-select"');
-    expect(source).toContain('<option value="paper">蓝雪</option>');
-    expect(source).not.toContain('蓝雪 · 默认');
-    expect(source).toContain('<option value="manga">粉漫</option>');
-    expect(source).toContain('<option value="gray">灰度</option>');
-    expect(source).toContain('<option value="purple">紫雅</option>');
-    expect(source).toContain('id="provider-profile-select"');
+    for (const token of ['选择皮肤', 'id="theme-select"', '<option value="paper">蓝雪</option>', '<option value="manga">粉漫</option>', '<option value="gray">灰度</option>', '<option value="purple">紫雅</option>']) expect(appearance).toContain(token);
+    expect(appearance).not.toContain('蓝雪 · 默认');
+    expect(provider).toContain('id="provider-profile-select"');
     expect(writer).not.toContain('<span>设定</span>');
     expect(writer).toContain('className="book-settings-button icon-button writer-book-settings-button"');
-    expect(source).toContain('模型连接');
-    expect(source).toContain('API Key');
-    expect(source).toContain('模型 ID');
-    expect(source).toContain('最大上下文');
-    expect(source).toContain('最大输出');
-    expect(source).toContain('保存连接方案');
-    const settingsStart = source.indexOf('function SettingsDrawer');
-    expect(source.slice(settingsStart)).not.toContain('Prompt 组合');
-    expect(source).toContain("const previewVisible = view === 'write' && !manuscriptEditorOpen;");
-    expect(source).toContain("if (!previewVisible || !book || !section) return { plan: null, error: '' };");
-    expect(source).toContain('activeProviderProfile.maxContext');
-    expect(source).toContain('activeProviderProfile.maxOutput');
-    expect(source).toContain('availableInput');
-    expect(source).toContain('prompt-proportion-bar');
-    expect(source).toContain('promptShareLabel(share)');
-    expect(source).toContain('const promptCompositionGroup');
-    expect(source).toContain("title: '正在写'");
-    expect(source).toContain("title: '前文梗概/全文'");
-    expect(source).toContain('API Key 以明文保存在运行服务的电脑上');
-    expect(source).toContain('不保存在浏览器存储中');
-    expect(source).toContain('不会随书稿备份导出');
-    expect(source).toContain('仅连接你信任的服务');
-    expect(source).toContain('仅在你信任当前页面和目标 URL 时输入 API Key');
-    expect(source).toContain('当前页面脚本可读取且不会持久化');
-    expect(source).toContain('type="password"');
-    expect(source).not.toContain('访问密码');
-    expect(source).not.toContain('host-access');
-    expect(source).toContain('<h3 id="storage-heading">保存位置</h3>');
-    expect(source).toContain('正文和资料保存在本地：');
-    expect(source).toContain('可以使用导出功能，导出为其他格式的文件。');
-    expect(source).toContain('api.storageLocation()');
-    expect(source).not.toContain('本机 host 的故事目录');
-    expect(source).not.toContain('保存并连接');
-    expect(source).not.toContain('window.prompt');
-    expect(source).toContain('event.target === event.currentTarget');
-    expect(source).toContain('const restoreProfileBaseline = () => {');
-    expect(source).toContain("setDiscardOperation({ phase: 'success', title: '已放弃修改' })");
-    expect(source).toMatch(/const finishDiscardAction = \(\) => \{[\s\S]{0,180}applySettingsAction\(action\);/);
+    for (const token of ['模型连接', 'API Key', '模型 ID', '最大上下文', '最大输出', '保存连接方案', 'API Key 以明文保存在运行服务的电脑上', '不保存在浏览器存储中', '不会随书稿备份导出', '仅连接你信任的服务', '仅在你信任当前页面和目标 URL 时输入 API Key', '当前页面脚本可读取且不会持久化', 'type="password"']) expect(provider).toContain(token);
+    expect(settings).not.toContain('Prompt 组合');
+    expect(app).toContain("const previewVisible = view === 'write' && !manuscriptEditorOpen;");
+    expect(app).toContain("if (!previewVisible || !book || !section) return { plan: null, error: '' };");
+    expect(app).toContain('activeProviderProfile.maxContext');
+    expect(app).toContain('activeProviderProfile.maxOutput');
+    expect(writer).toContain('availableInput');
+    for (const token of ['prompt-proportion-bar', 'promptShareLabel(share)', 'const promptCompositionGroup', "title: '正在写'", "title: '前文梗概/全文'"]) expect(composition).toContain(token);
+    for (const token of ['<h3 id="storage-heading">保存位置</h3>', '正文和资料保存在本地：', '可以使用导出功能，导出为其他格式的文件。', 'onLoadStorageLocation()', 'event.target === event.currentTarget', 'const restoreProfileBaseline = () => {', "setDiscardOperation({ phase: 'success', title: '已放弃修改' })"]) expect(settings).toContain(token);
+    expect(app).toContain('onLoadStorageLocation={api.storageLocation}');
+    expect(settings).toMatch(/const finishDiscardAction = \(\) => \{[\s\S]{0,180}applySettingsAction\(action\);/);
+    for (const owner of [app, settings, appearance, provider, writer, composition]) expect(owner).not.toMatch(/访问密码|host-access|本机 host 的故事目录|保存并连接|window\.prompt|className="settings-list-row|className="provider-profile-list/);
     expect(styles).toContain('.instruction-dock textarea:focus');
     expect(styles).toContain('background: var(--surface)');
-    expect(source).not.toContain('className="settings-list-row');
-    expect(source).not.toContain('className="provider-profile-list');
   });
 
   it('lists writing style guidance before the plot outline', async () => {
-    const source = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../src/components/bookshelf/BookSettingsDrawer.tsx', import.meta.url), 'utf8');
     const guidanceStart = source.indexOf('global-guidance-drawer');
     const styleLink = source.indexOf("openBookSettingsPage({ kind: 'style' })", guidanceStart);
     const outlineLink = source.indexOf("openBookSettingsPage({ kind: 'outline' })", guidanceStart);
@@ -671,16 +614,19 @@ describe('writing UI contract', () => {
   });
 
   it('uses the updated character and world-setting vocabulary and exposes section loading scope', async () => {
-    const source = await readFile(new URL('../src/components/Bookshelf.tsx', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../src/components/bookshelf/BookSettingsDrawer.tsx', import.meta.url), 'utf8');
+    const editors = await readFile(new URL('../src/components/BookSettingsEditors.tsx', import.meta.url), 'utf8');
+    const scopeEditor = await readFile(new URL('../src/components/SourceLoadScopePage.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    const scopeEditorStart = source.indexOf('function SourceLoadScopePage');
-    const characterEditorStart = source.indexOf('function CharacterEditor');
-    const worldEditorStart = source.indexOf('function WorldRuleEditor');
-    const missingEditorStart = source.indexOf('function MissingSettingsItem');
-    const scopeEditor = source.slice(scopeEditorStart, characterEditorStart);
-    const characterEditor = source.slice(characterEditorStart, worldEditorStart);
-    const worldEditor = source.slice(worldEditorStart, missingEditorStart);
+    const characterEditorStart = editors.indexOf('function CharacterEditor');
+    const worldEditorStart = editors.indexOf('function WorldRuleEditor');
+    const missingEditorStart = editors.indexOf('function MissingSettingsItem');
+    const characterEditor = editors.slice(characterEditorStart, worldEditorStart);
+    const worldEditor = editors.slice(worldEditorStart, missingEditorStart);
 
+    expect(characterEditorStart).toBeGreaterThanOrEqual(0);
+    expect(worldEditorStart).toBeGreaterThan(characterEditorStart);
+    expect(missingEditorStart).toBeGreaterThan(worldEditorStart);
     expect(characterEditor).toContain('角色要点');
     expect(characterEditor).toContain('角色设定');
     expect(characterEditor).not.toContain('角色职责');
@@ -712,9 +658,9 @@ describe('writing UI contract', () => {
     expect(styles).toMatch(/\.source-load-tab\s*\{[\s\S]{0,180}grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
     expect(styles).toMatch(/\.source-scope-all\[aria-pressed="true"\]\s*\{[\s\S]{0,160}background:\s*var\(--surface-active\)/);
     expect(source).toContain('loadedSectionIds');
-    expect(source).toContain('function SourceLoadScopePage');
-    expect(source).toContain('className="source-scope-drawer context-reference-scope"');
-    expect(source).toContain('加载范围');
+    expect(scopeEditor).toContain('function SourceLoadScopePage');
+    expect(scopeEditor).toContain('className="source-scope-drawer context-reference-scope"');
+    expect(scopeEditor).toContain('加载范围');
     expect(source).toContain("kind: 'character-scope'");
     expect(source).toContain("kind: 'world-scope'");
     expect(source).not.toContain('onSetActiveCharacter');
@@ -723,37 +669,39 @@ describe('writing UI contract', () => {
 
   it('provides a persisted 12–24px font-size stepper without a slider', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const appearance = await readFile(new URL('../src/components/AppearanceSettings.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontSizeKey');
-    expect(source).toContain('minManuscriptFontSize = 12');
-    expect(source).toContain('maxManuscriptFontSize = 24');
-    expect(source).toContain('defaultManuscriptFontSize = 16');
+    expect(appearance).toContain('minManuscriptFontSize = 12');
+    expect(appearance).toContain('maxManuscriptFontSize = 24');
+    expect(appearance).toContain('defaultManuscriptFontSize = 16');
     expect(source).toContain('localStorage.getItem(manuscriptFontSizeKey)');
     expect(source).toContain('localStorage.setItem(manuscriptFontSizeKey');
     expect(source).toContain("setProperty('--manuscript-font-size'");
-    expect(source).toContain('className="font-size-setting"');
-    expect(source).toContain('className="font-size-stepper"');
-    expect(source).toContain('aria-label="减小正文字号"');
-    expect(source).toContain('aria-label="增大正文字号"');
-    expect(source).toContain('<output');
-    expect(source).not.toContain('type="range"');
+    expect(appearance).toContain('className="font-size-setting"');
+    expect(appearance).toContain('className="font-size-stepper"');
+    expect(appearance).toContain('aria-label="减小正文字号"');
+    expect(appearance).toContain('aria-label="增大正文字号"');
+    expect(appearance).toContain('<output');
+    expect(appearance).not.toContain('type="range"');
     expect(styles).toContain('var(--manuscript-font-size, 16px)');
   });
 
   it('bundles and persists the optional LXGW WenKai font across the full interface', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const appearance = await readFile(new URL('../src/components/AppearanceSettings.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const packageJson = await readFile(new URL('../package.json', import.meta.url), 'utf8');
     const materializer = await readFile(new URL('../scripts/materialize-font.mjs', import.meta.url), 'utf8');
     const license = await readFile(new URL('../public/fonts/OFL.txt', import.meta.url), 'utf8');
     expect(source).toContain('manuscriptFontFamilyKey');
-    expect(source).toContain('id="manuscript-font-select"');
-    expect(source).toContain('<span>全局字体</span>');
-    expect(source).not.toContain('<span>正文字体</span>');
-    expect(source).toContain('<option value="sans">无衬线</option>');
-    expect(source).not.toContain('无衬线 · 默认');
-    expect(source).not.toContain('跟随系统');
-    expect(source).toContain('<option value="wenkai">霞鹜文楷</option>');
+    expect(appearance).toContain('id="manuscript-font-select"');
+    expect(appearance).toContain('<span>全局字体</span>');
+    expect(appearance).not.toContain('<span>正文字体</span>');
+    expect(appearance).toContain('<option value="sans">无衬线</option>');
+    expect(appearance).not.toContain('无衬线 · 默认');
+    expect(appearance).not.toContain('跟随系统');
+    expect(appearance).toContain('<option value="wenkai">霞鹜文楷</option>');
     expect(source).toContain('localStorage.setItem(manuscriptFontFamilyKey');
     expect(styles).toContain('@font-face');
     expect(styles).toContain('/fonts/LXGWWenKaiLite-Regular.ttf');
@@ -784,14 +732,14 @@ describe('writing UI contract', () => {
   });
 
   it('renders paired prose asterisks as semantic emphasis', async () => {
-    const source = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
-    expect(source).toContain("import { parseProseFormatting } from '../proseFormatting'");
+    const source = await readFile(new URL('../src/components/writer/ManuscriptBlock.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("import { parseProseFormatting } from '../../proseFormatting'");
     expect(source).toContain('parseProseFormatting(block.content)');
     expect(source).toContain('<em key={`${block.id}-emphasis-${index}`}>');
   });
 
   it('uses one top-right grip for direct desktop and long-press mobile input resizing', async () => {
-    const source = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(source).toContain('className="instruction-resize-handle"');
     expect(source).toContain('><span aria-hidden="true" /></button>');

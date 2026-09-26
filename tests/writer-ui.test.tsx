@@ -214,6 +214,55 @@ describe('writer title editing', () => {
 });
 
 describe('writer scroll interactions', () => {
+  it('keeps section reading positions isolated between Books with the same section id', async () => {
+    const blocks: SectionBlock[] = [{ id: 'shared-block', kind: 'assistant', content: '合成正文' }];
+    const firstBook = makeBook('book-position-first', blocks);
+    const secondBook = makeBook('book-position-second', blocks);
+    const { container, root } = await render(<Writer {...writerProps(firstBook)} />);
+    try {
+      const manuscript = container.querySelector<HTMLElement>('.manuscript-wrap')!;
+      setScrollGeometry(manuscript, 1_000, 300);
+      manuscript.scrollTop = 140;
+      await act(async () => manuscript.dispatchEvent(new Event('scroll', { bubbles: true })));
+      await rerender(root, <Writer {...writerProps(secondBook)} />);
+      expect(manuscript.scrollTop).toBe(0);
+      manuscript.scrollTop = 260;
+      await act(async () => manuscript.dispatchEvent(new Event('scroll', { bubbles: true })));
+      await rerender(root, <Writer {...writerProps(firstBook)} />);
+      expect(manuscript.scrollTop).toBe(140);
+      await rerender(root, <Writer {...writerProps(secondBook)} />);
+      expect(manuscript.scrollTop).toBe(260);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it.each([false, true])('follows the first draft chunk only when the reader has not scrolled up (%s)', async (scrollUp) => {
+    const book = makeBook(`book-stream-follow-${scrollUp}`, [{ id: 'block-one', kind: 'assistant', content: '合成正文' }]);
+    const props = writerProps(book);
+    const { container, root } = await render(<Writer {...props} />);
+    try {
+      const manuscript = container.querySelector<HTMLElement>('.manuscript-wrap')!;
+      setScrollGeometry(manuscript, 1_000, 300);
+      manuscript.scrollTop = 700;
+      await act(async () => manuscript.dispatchEvent(new Event('scroll', { bubbles: true })));
+      const draft = { content: '', status: 'streaming' as const, message: '正在生成', replaceTarget: false };
+      await rerender(root, <Writer {...props} streamingDraft={draft} />);
+      if (scrollUp) {
+        manuscript.scrollTop = 200;
+        await act(async () => manuscript.dispatchEvent(new Event('scroll', { bubbles: true })));
+      }
+      setScrollGeometry(manuscript, 1_100, 300);
+      await rerender(root, <Writer {...props} streamingDraft={{ ...draft, content: '第一段草稿' }} />);
+      expect(manuscript.scrollTop).toBe(scrollUp ? 200 : 800);
+      setScrollGeometry(manuscript, 1_200, 300);
+      await rerender(root, <Writer {...props} streamingDraft={{ ...draft, content: '第一段草稿，继续追加。' }} />);
+      expect(manuscript.scrollTop).toBe(scrollUp ? 200 : 800);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it('aligns the newly submitted user block to the top after generation completes', async () => {
     const initialBlocks: SectionBlock[] = [
       { id: 'old-user', kind: 'user', content: '旧输入' },
@@ -274,6 +323,42 @@ describe('writer scroll interactions', () => {
 });
 
 describe('section writing guidance', () => {
+  it('retains the resized instruction height and restores block-action focus after an editor visit', async () => {
+    const book = makeBook('book-input-editor-lifecycle', [{ id: 'block-one', kind: 'assistant', content: '合成正文' }]);
+    const props = { ...writerProps(book), instruction: '未提交的输入', authorNote: '保留的小节注释' };
+    const { container, root } = await render(<Writer {...props} />);
+    try {
+      const textarea = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+      vi.spyOn(textarea, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 44));
+      const resize = container.querySelector<HTMLButtonElement>('.instruction-resize-handle')!;
+      await act(async () => resize.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })));
+      expect(textarea.style.height).toBe('60px');
+      expect(resize.dataset.resizing).toBeUndefined();
+      await act(async () => container.querySelector<HTMLButtonElement>('.manuscript-block-select')!.click());
+      const edit = container.querySelector<HTMLButtonElement>('[aria-label="编辑所选片段"]')!;
+      edit.focus();
+      await act(async () => edit.click());
+      expect(container.querySelector('.instruction-dock')).toBeNull();
+      expect(document.activeElement).toBe(container.querySelector('#block-editor-textarea'));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="完成编辑并返回正文"]')!.click());
+      await act(async () => new Promise((resolve) => window.setTimeout(resolve, 20)));
+      const restoredInput = container.querySelector<HTMLTextAreaElement>('#writing-instruction')!;
+      const restoredResize = container.querySelector<HTMLButtonElement>('.instruction-resize-handle')!;
+      expect(restoredInput.style.height).toBe('60px');
+      expect(restoredInput.value).toBe('未提交的输入');
+      expect(container.querySelector<HTMLTextAreaElement>('#author-note-input')!.value).toBe('保留的小节注释');
+      expect(restoredResize.dataset.resizing).toBeUndefined();
+      expect(document.activeElement).toBe(container.querySelector('.manuscript-block-actions button'));
+      await act(async () => restoredResize.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+      expect(restoredInput.style.height).toBe('44px');
+      expect(props.onSectionBlocksChange).not.toHaveBeenCalled();
+      expect(props.onInstructionChange).not.toHaveBeenCalled();
+      expect(props.onAuthorNoteChange).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it('stays available and editable in character mode', async () => {
     const book = makeBook('book-section-guidance');
     const onAuthorNoteChange = vi.fn();

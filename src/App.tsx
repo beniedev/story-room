@@ -1,15 +1,9 @@
-import { bookCachePrefix, bookCacheKey, isCachedBook, cacheDraftBook, removeDraftBook, clearHostBookCaches } from './deviceDrafts';
-import { resolveBookForLoad, type BookLoadResolution } from './bookRecovery';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenText,
   BookPlus,
   Download,
   FileJson,
-  FileText,
-  Minus,
-  Plus,
-  ScrollText,
   Settings,
   X,
 } from 'lucide-react';
@@ -63,16 +57,21 @@ import {
 import { ContextToolsDrawer } from './components/ContextToolsDrawer';
 import { Writer } from './components/Writer';
 import { Bookshelf } from './components/Bookshelf';
-import { ProviderSettings } from './components/ProviderSettings';
+import { EmptyLibraryActions } from './components/EmptyLibraryActions';
+import { ExportDialog } from './components/ExportDialog';
+import { SettingsDrawer } from './components/SettingsDrawer';
 import { makeId } from './components/shared/id';
-import { withDeviceLibraryWrite } from './deviceWriterLease';
-import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
 import {
-  DialogOperationStatus,
-  idleDialogOperation,
-  useDismissSuccessfulDialog,
-  type DialogOperationState,
-} from './components/shared/DialogOperationStatus';
+  bookCacheKey,
+  bookCachePrefix,
+  cacheDraftBook,
+  clearHostBookCaches,
+  isCachedBook,
+  removeDraftBook,
+} from './deviceDrafts';
+import { resolveBookForLoad, type BookLoadResolution } from './bookRecovery';
+import { blocksAsContent, sectionBlocks } from './components/shared/sectionContent';
+import { clampManuscriptFontSize, defaultManuscriptFontSize, type ManuscriptFontFamily } from './components/AppearanceSettings';
 import type {
   Book,
   BookIndexEntry,
@@ -91,14 +90,6 @@ const activeProviderProfileKey = 'story-native:active-provider-profile';
 const manuscriptFontSizeKey = 'story-native:manuscript-font-size';
 const manuscriptFontFamilyKey = 'story-native:manuscript-font-family';
 const streamingOutputKey = 'story-native:streaming-output';
-type ManuscriptFontFamily = 'sans' | 'wenkai';
-const minManuscriptFontSize = 12;
-const maxManuscriptFontSize = 24;
-const defaultManuscriptFontSize = 16;
-const clampManuscriptFontSize = (value: number) => Math.min(
-  maxManuscriptFontSize,
-  Math.max(minManuscriptFontSize, Math.round(value)),
-);
 type SectionDraft = {
   instruction: string;
 };
@@ -171,6 +162,7 @@ const blockedBookConflictError = () => new BookConflictError();
 const generationSourceFingerprint = (blocks: SectionBlock[], targetIndex: number) => JSON.stringify(
   blocks.slice(0, targetIndex).map((block) => [block.id, block.kind, block.content]),
 );
+
 
 function App() {
   const isDeviceRuntime = api.runtime === 'device';
@@ -2144,6 +2136,7 @@ function App() {
         onSaveProviderProfile={saveProviderProfile}
         onTestProviderProfile={api.testProviderProfile}
         providerRuntime={api.runtime}
+        onLoadStorageLocation={api.storageLocation}
         onClose={() => settingsTrigger.current?.focus()}
       />
 
@@ -2175,513 +2168,5 @@ function App() {
 }
 
 
-function EmptyLibraryActions({
-  open,
-  busy,
-  onOpenChange,
-  onCreateBook,
-  onImport,
-}: {
-  open: boolean;
-  busy: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreateBook: (title: string) => Promise<void>;
-  onImport: () => void;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const titleInputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState('');
-  const [operation, setOperation] = useState<DialogOperationState>(idleDialogOperation);
-
-  useEffect(() => {
-    if (open) {
-      setOperation(idleDialogOperation);
-      if (!dialogRef.current?.open) dialogRef.current?.showModal();
-      titleInputRef.current?.focus();
-    } else if (dialogRef.current?.open) {
-      dialogRef.current.close();
-    }
-  }, [open]);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle || operation.phase === 'pending') return;
-    setOperation({ phase: 'pending', title: '正在新建书目…' });
-    try {
-      await onCreateBook(trimmedTitle);
-      setOperation({ phase: 'success', title: '新建书目成功' });
-      onOpenChange(false);
-      setTitle('');
-    } catch (error) {
-      setOperation({
-        phase: 'error',
-        title: '新建书目失败',
-        detail: error instanceof Error ? error.message : '请稍后重试。',
-      });
-    }
-  };
-
-  return (
-    <section className="empty-library-state" aria-labelledby="empty-library-title">
-      <h1 id="empty-library-title">书库还是空的</h1>
-      <p>新建一本书开始写作，或导入 JSON 备份继续工作。</p>
-      <div className="empty-library-actions">
-        <button type="button" className="primary-action" onClick={() => onOpenChange(true)} disabled={busy}>
-          新建书目
-        </button>
-        <button type="button" className="quiet-action" onClick={onImport} disabled={busy}>
-          导入 JSON 备份
-        </button>
-      </div>
-      <dialog
-        ref={dialogRef}
-        className="name-dialog"
-        aria-labelledby="empty-book-dialog-title"
-        onClose={() => {
-          if (operation.phase !== 'pending') onOpenChange(false);
-        }}
-      >
-        <form method="dialog" onSubmit={submit}>
-          <div className="dialog-heading">
-            <div>
-              <span className="eyebrow">故事书屋</span>
-              <h2 id="empty-book-dialog-title">新建书目</h2>
-            </div>
-            <button type="button" className="icon-button" onClick={() => onOpenChange(false)} disabled={operation.phase === 'pending'} aria-label="关闭新建书目对话框" title="关闭"><X aria-hidden="true" /></button>
-          </div>
-          <label className="dialog-field">
-            <span>书名</span>
-            <input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="输入书名" disabled={operation.phase === 'pending'} />
-          </label>
-          {operation.phase === 'error' && <p className="dialog-error" role="alert">{operation.detail}</p>}
-          {operation.phase === 'success' && <p className="dialog-success" role="status">{operation.title}</p>}
-          <div className="dialog-actions">
-            <button type="button" className="quiet-action" onClick={() => onOpenChange(false)} disabled={operation.phase === 'pending'}>取消</button>
-            <button type="submit" className="primary-action" disabled={!title.trim() || operation.phase === 'pending'}>
-              {operation.phase === 'pending' ? '正在新建…' : '确认新建'}
-            </button>
-          </div>
-        </form>
-      </dialog>
-    </section>
-  );
-}
-
-
-function ExportDialog({
-  bookTitle,
-  dialogRef,
-  onExport,
-  onClose,
-}: {
-  bookTitle: string;
-  dialogRef: React.RefObject<HTMLDialogElement | null>;
-  onExport: (format: BookExportFormat) => void;
-  onClose: () => void;
-}) {
-  const options: Array<{
-    format: BookExportFormat;
-    title: string;
-    description: string;
-    icon: typeof BookOpenText;
-  }> = [
-    { format: 'epub', title: 'EPUB 电子书', description: '自带书、章、节目录，适合阅读器与 Kindle', icon: BookOpenText },
-    { format: 'markdown', title: 'Markdown 文档', description: '可编辑长文，自带章、节目录', icon: ScrollText },
-    { format: 'text', title: 'TXT 纯文字', description: '最简兼容格式，保留目录与层级编号', icon: FileText },
-    { format: 'json', title: 'JSON 完整备份', description: '保留角色卡、设定、加载范围与正文结构', icon: FileJson },
-  ];
-
-  return (
-    <dialog
-      className="export-dialog"
-      ref={dialogRef}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
-      aria-labelledby="export-dialog-title"
-    >
-      <div className="export-dialog-body">
-        <header className="dialog-heading">
-          <div>
-            <small>仅从当前设备生成文件</small>
-            <h2 id="export-dialog-title">导出《{bookTitle}》</h2>
-          </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭导出选项" title="关闭">
-            <X aria-hidden="true" />
-          </button>
-        </header>
-        <div className="export-option-list">
-          {options.map((option) => {
-            const OptionIcon = option.icon;
-            return (
-              <button
-                type="button"
-                className="export-option"
-                key={option.format}
-                onClick={() => onExport(option.format)}
-              >
-                <OptionIcon aria-hidden="true" />
-                <span><strong>{option.title}</strong><small>{option.description}</small></span>
-                <Download aria-hidden="true" />
-              </button>
-            );
-          })}
-        </div>
-        <p className="helper-copy">应用不会上传书稿；文档如何备份或同步由你选择。</p>
-      </div>
-    </dialog>
-  );
-}
-
-
-
-function SettingsDrawer({
-  dialogRef,
-  theme,
-  onThemeChange,
-  manuscriptFontFamily,
-  onManuscriptFontFamilyChange,
-  manuscriptFontSize,
-  onManuscriptFontSizeChange,
-  streamingOutput,
-  onStreamingOutputChange,
-  providerProfiles,
-  activeProviderProfileId,
-  onSelectProviderProfile,
-  onSaveProviderProfile,
-  onTestProviderProfile,
-  providerRuntime,
-  onClose,
-}: {
-  dialogRef: React.RefObject<HTMLDialogElement | null>;
-  theme: ThemeName;
-  onThemeChange: (theme: ThemeName) => void;
-  manuscriptFontFamily: ManuscriptFontFamily;
-  onManuscriptFontFamilyChange: (font: ManuscriptFontFamily) => void;
-  manuscriptFontSize: number;
-  onManuscriptFontSizeChange: (size: number) => void;
-  streamingOutput: boolean;
-  onStreamingOutputChange: (enabled: boolean) => void;
-  providerProfiles: ProviderProfile[];
-  activeProviderProfileId: string;
-  onSelectProviderProfile: (id: string) => void;
-  onSaveProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<ProviderProfile>;
-  onTestProviderProfile: (profile: ProviderProfile, apiKey?: string) => Promise<{ ok: true; modelId: string }>;
-  providerRuntime: 'host' | 'device';
-  onClose: () => void;
-}) {
-  const currentProfile = providerProfiles.find((profile) => profile.id === activeProviderProfileId)
-    ?? providerProfiles[0];
-  const blankProfile = (): ProviderProfile => ({
-    id: '',
-    name: '',
-    kind: 'openai-compatible',
-    baseUrl: '',
-    modelId: '',
-    maxContext: 128000,
-    maxOutput: 8192,
-  });
-  const [editingId, setEditingId] = useState(currentProfile?.id ?? '');
-  const [profileDraft, setProfileDraft] = useState<ProviderProfile>(() => currentProfile ? { ...currentProfile } : blankProfile());
-  const [profileBaseline, setProfileBaseline] = useState<{ profile: ProviderProfile; key: string }>(() => ({
-    profile: currentProfile ? { ...currentProfile } : blankProfile(),
-    key: '',
-  }));
-  const [sessionKeys, setSessionKeys] = useState<Record<string, string>>({});
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
-  const [connectionStatus, setConnectionStatus] = useState('');
-  const [connectionState, setConnectionState] = useState<'idle' | 'testing' | 'saving' | 'success' | 'error'>('idle');
-  const [storageLocation, setStorageLocation] = useState('正在读取本地地址…');
-  const [discardOperation, setDiscardOperation] = useState<DialogOperationState>(idleDialogOperation);
-  const discardChangesDialog = useRef<HTMLDialogElement>(null);
-  const [pendingSettingsAction, setPendingSettingsAction] = useState<'close' | 'new' | ProviderProfile | null>(null);
-  useEffect(() => {
-    let active = true;
-    void api.storageLocation()
-      .then(({ location }) => {
-        if (active) setStorageLocation(location);
-      })
-      .catch(() => {
-        if (active) setStorageLocation('本地地址暂时无法读取');
-      });
-    return () => { active = false; };
-  }, []);
-  useEffect(() => {
-    if (!currentProfile || editingId) return;
-    setEditingId(currentProfile.id);
-    setProfileDraft({ ...currentProfile });
-    setProfileBaseline({ profile: { ...currentProfile }, key: sessionKeys[currentProfile.id] ?? '' });
-  }, [currentProfile, editingId]);
-  const performCloseDrawer = () => dialogRef.current?.close();
-  const clearConnectionResult = () => {
-    setConnectionStatus('');
-    setConnectionState('idle');
-  };
-  const selectProfile = (profile: ProviderProfile) => {
-    onSelectProviderProfile(profile.id);
-    setEditingId(profile.id);
-    setProfileDraft({ ...profile });
-    setApiKeyDraft(sessionKeys[profile.id] ?? '');
-    setProfileBaseline({ profile: { ...profile }, key: sessionKeys[profile.id] ?? '' });
-    setConnectionStatus('');
-    setConnectionState('idle');
-  };
-  const startNewProfile = () => {
-    setEditingId('');
-    setProfileDraft(blankProfile());
-    setApiKeyDraft('');
-    setProfileBaseline({ profile: blankProfile(), key: '' });
-    setConnectionStatus('');
-    setConnectionState('idle');
-  };
-  const restoreProfileBaseline = () => {
-    setEditingId(profileBaseline.profile.id);
-    setProfileDraft({ ...profileBaseline.profile });
-    setApiKeyDraft(profileBaseline.key);
-    setConnectionStatus('');
-    setConnectionState('idle');
-  };
-  const providerDraftChanged = () => {
-    return JSON.stringify({ ...profileDraft, id: editingId }) !== JSON.stringify({ ...profileBaseline.profile, id: editingId })
-      || apiKeyDraft !== profileBaseline.key;
-  };
-  const applySettingsAction = (action: 'close' | 'new' | ProviderProfile) => {
-    setPendingSettingsAction(null);
-    if (action === 'close') {
-      performCloseDrawer();
-      return;
-    }
-    if (action === 'new') {
-      startNewProfile();
-      return;
-    }
-    selectProfile(action);
-  };
-  const requestSettingsAction = (action: 'close' | 'new' | ProviderProfile) => {
-    if (!providerDraftChanged()) {
-      applySettingsAction(action);
-      return;
-    }
-    setPendingSettingsAction(action);
-    setDiscardOperation(idleDialogOperation);
-    discardChangesDialog.current?.showModal();
-  };
-  const finishDiscardAction = () => {
-    const action = pendingSettingsAction;
-    discardChangesDialog.current?.close();
-    if (action) applySettingsAction(action);
-  };
-  useDismissSuccessfulDialog(discardOperation.phase === 'success', finishDiscardAction);
-  const submitProfile = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (connectionState === 'saving' || connectionState === 'testing') return;
-    const id = editingId || makeId('provider');
-    const profile: ProviderProfile = {
-      ...profileDraft,
-      id,
-      name: profileDraft.name.trim(),
-      baseUrl: profileDraft.baseUrl.trim(),
-      modelId: profileDraft.modelId.trim(),
-      maxContext: Math.max(1, Number(profileDraft.maxContext)),
-      maxOutput: Math.max(1, Number(profileDraft.maxOutput)),
-    };
-    setConnectionState('saving');
-    setConnectionStatus('正在保存连接方案…');
-    try {
-      const saved = await onSaveProviderProfile(profile, apiKeyDraft || undefined);
-      setEditingId(saved.id);
-      setProfileDraft(saved);
-      setProfileBaseline({ profile: { ...saved }, key: providerRuntime === 'device' ? apiKeyDraft : '' });
-      if (providerRuntime === 'device') {
-        setSessionKeys((current) => ({ ...current, [saved.id]: apiKeyDraft }));
-      } else {
-        setApiKeyDraft('');
-      }
-      setConnectionStatus(providerRuntime === 'host'
-        ? '连接方案已保存到本机私有配置。'
-        : '连接方案已保存。API Key 只在当前页面临时保留。');
-      setConnectionState('success');
-    } catch (error) {
-      setConnectionState('error');
-      setConnectionStatus(error instanceof Error ? error.message : '连接方案保存失败。');
-    }
-  };
-  const testProfileConnection = async () => {
-    if (connectionState === 'saving' || connectionState === 'testing') return;
-    const baseUrl = profileDraft.baseUrl.trim().replace(/\/+$/, '');
-    const modelId = profileDraft.modelId.trim();
-    if (!baseUrl || !modelId) {
-      setConnectionState('error');
-      setConnectionStatus('请先填写 URL 和模型 ID。');
-      return;
-    }
-
-    let endpoint: URL;
-    try {
-      endpoint = new URL(`${baseUrl}/models`);
-      if (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:') throw new Error();
-    } catch {
-      setConnectionState('error');
-      setConnectionStatus('请填写以 http:// 或 https:// 开头的有效 URL。');
-      return;
-    }
-
-    setConnectionState('testing');
-    setConnectionStatus('正在测试连接…');
-    try {
-      await onTestProviderProfile({ ...profileDraft, baseUrl, modelId }, apiKeyDraft || undefined);
-      setConnectionState('success');
-      setConnectionStatus('已访问 /models，模型列表已返回；未验证实际生成参数。');
-    } catch (error) {
-      setConnectionState('error');
-      setConnectionStatus(error instanceof Error ? error.message : '无法连接。');
-    }
-  };
-  return (
-    <dialog
-      className="settings-drawer"
-      ref={dialogRef}
-      onClick={(event) => { if (event.target === event.currentTarget) requestSettingsAction('close'); }}
-      onClose={onClose}
-      onCancel={(event) => { event.preventDefault(); requestSettingsAction('close'); }}
-      aria-labelledby="settings-title"
-    >
-      <header className="drawer-heading">
-        <div>
-          <p className="eyebrow">界面偏好</p>
-          <h2 id="settings-title">设置</h2>
-        </div>
-        <button type="button" className="icon-button" autoFocus onClick={() => requestSettingsAction('close')} aria-label="关闭设置" title="关闭设置"><X aria-hidden="true" /></button>
-      </header>
-      <section className="settings-section" aria-labelledby="theme-heading">
-        <h3 id="theme-heading">皮肤</h3>
-        <label className="sr-only" htmlFor="theme-select">选择皮肤</label>
-        <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeName)}>
-          <option value="paper">蓝雪</option>
-          <option value="manga">粉漫</option>
-          <option value="gray">灰度</option>
-          <option value="purple">紫雅</option>
-        </select>
-        <p className="compact-setting-note">{{
-          paper: '白色内容页、灰蓝边缘与分级标题色。',
-          manga: '少女漫画风格的粉紫配色与交互。',
-          gray: '冷灰纸面配酒红、赭金与墨蓝标题。',
-          purple: '白色正文配淡紫边缘与深紫层级。',
-        }[theme]}</p>
-        <label className="font-family-setting" htmlFor="manuscript-font-select">
-          <span>全局字体</span>
-          <select
-            id="manuscript-font-select"
-            value={manuscriptFontFamily}
-            onChange={(event) => onManuscriptFontFamilyChange(event.target.value as ManuscriptFontFamily)}
-          >
-            <option value="sans">无衬线</option>
-            <option value="wenkai">霞鹜文楷</option>
-          </select>
-        </label>
-        <div className="font-size-setting" role="group" aria-labelledby="font-size-setting-label">
-          <span id="font-size-setting-label">字号大小</span>
-          <div className="font-size-stepper">
-            <button
-              type="button"
-              className="icon-button"
-              onClick={() => onManuscriptFontSizeChange(clampManuscriptFontSize(manuscriptFontSize - 1))}
-              disabled={manuscriptFontSize <= minManuscriptFontSize}
-              aria-label="减小正文字号"
-              title="减小正文字号"
-            ><Minus aria-hidden="true" /></button>
-            <output aria-live="polite" aria-label={`当前正文字号 ${manuscriptFontSize} 像素`}>{manuscriptFontSize}</output>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={() => onManuscriptFontSizeChange(clampManuscriptFontSize(manuscriptFontSize + 1))}
-              disabled={manuscriptFontSize >= maxManuscriptFontSize}
-              aria-label="增大正文字号"
-              title="增大正文字号"
-            ><Plus aria-hidden="true" /></button>
-          </div>
-        </div>
-        <p className="compact-setting-note">正文 12–24 px；手机编辑器最低保持 16 px。</p>
-      </section>
-      <section className="settings-section" aria-labelledby="generation-settings-heading">
-        <h3 id="generation-settings-heading">生成</h3>
-        <label className="streaming-output-setting" htmlFor="streaming-output-toggle">
-          <span>
-            <strong>流式输出</strong>
-            <small>生成正文时逐步显示内容。</small>
-          </span>
-          <input
-            id="streaming-output-toggle"
-            type="checkbox"
-            role="switch"
-            checked={streamingOutput}
-            onChange={(event) => onStreamingOutputChange(event.target.checked)}
-          />
-        </label>
-      </section>
-      <ProviderSettings
-        currentProfile={currentProfile}
-        providerProfiles={providerProfiles}
-        editingId={editingId}
-        connectionState={connectionState}
-        profileDraft={profileDraft}
-        apiKeyDraft={apiKeyDraft}
-        providerRuntime={providerRuntime}
-        connectionStatus={connectionStatus}
-        onRequestSettingsAction={(action) => requestSettingsAction(action)}
-        onClearConnectionResult={clearConnectionResult}
-        onProfileDraftChange={(recipe) => setProfileDraft(recipe)}
-        onApiKeyDraftChange={setApiKeyDraft}
-        onSubmitProfile={submitProfile}
-        onTestProfileConnection={() => void testProfileConnection()}
-      />
-
-      <section className="settings-section" aria-labelledby="storage-heading">
-        <h3 id="storage-heading">保存位置</h3>
-        <p className="helper-copy storage-copy">
-          正文和资料保存在本地：<span className="storage-location">{storageLocation}</span><br />
-          可以使用导出功能，导出为其他格式的文件。
-        </p>
-      </section>
-      <dialog
-        className="confirm-dialog"
-        ref={discardChangesDialog}
-        onClose={() => setDiscardOperation(idleDialogOperation)}
-        onCancel={(event) => {
-          event.preventDefault();
-          if (discardOperation.phase === 'success') finishDiscardAction();
-          else discardChangesDialog.current?.close();
-        }}
-        aria-labelledby="discard-provider-dialog-title"
-        aria-describedby={discardOperation.phase === 'idle' ? 'discard-provider-dialog-description' : undefined}
-      >
-        <header className="dialog-heading">
-          <h2 id="discard-provider-dialog-title">放弃未保存修改？</h2>
-          <button type="button" className="icon-button" onClick={() => discardChangesDialog.current?.close()} aria-label="取消放弃修改" title="取消"><X aria-hidden="true" /></button>
-        </header>
-        <div className="confirm-dialog-body">
-          {discardOperation.phase === 'idle' ? (
-            <>
-              <p id="discard-provider-dialog-description">当前连接方案有未保存的修改；放弃后才会继续下一步。</p>
-              <div className="dialog-actions">
-                <button type="button" className="quiet-action" onClick={() => discardChangesDialog.current?.close()}>继续编辑</button>
-                <button
-                  type="button"
-                  className="danger-action"
-                  onClick={() => {
-                    restoreProfileBaseline();
-                    setDiscardOperation({ phase: 'success', title: '已放弃修改' });
-                  }}
-                >放弃并继续</button>
-              </div>
-            </>
-          ) : (
-            <DialogOperationStatus state={discardOperation} />
-          )}
-        </div>
-      </dialog>
-    </dialog>
-  );
-}
 
 export default App;

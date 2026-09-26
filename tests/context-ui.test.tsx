@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ContextCompositionDrawer } from '../src/components/ContextCompositionDrawer';
 import { ContextToolsDrawer } from '../src/components/ContextToolsDrawer';
-import { SourceLoadScopePage } from '../src/components/Bookshelf';
+import { SourceLoadScopePage } from '../src/components/SourceLoadScopePage';
 import { contextToolDraftKey, type ContextToolDraftSession } from '../src/contextToolDrafts';
 import type {
   Book,
