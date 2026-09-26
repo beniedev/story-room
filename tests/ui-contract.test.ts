@@ -369,7 +369,9 @@ describe('writing UI contract', () => {
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${tools}`;
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    expect(app).toMatch(/normalizeBook\(await \(options\.persistedOnly && api\.runtime === 'device'\s*\? api\.loadPersistedBook\(bookId\)\s*: api\.loadBook\(bookId\)\)\)/);
+    const recovery = await readFile(new URL('../src/bookRecovery.ts', import.meta.url), 'utf8');
+    expect(app).toContain('resolveBookForLoad(');
+    expect(recovery).toMatch(/normalizeBook\(await \(options\.persistedOnly && api\.runtime === 'device'\s*\? api\.loadPersistedBook\(bookId\)\s*: api\.loadBook\(bookId\)\)\)/);
     expect(source).toContain('const candidate = normalizeBook(book);');
     expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries, retainedInactiveSectionIds)');
     expect(source).toContain('source.ordinal >= targetOrdinal');
@@ -504,8 +506,10 @@ describe('writing UI contract', () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(app).not.toContain('localStorage.setItem(bookCacheKey');
     expect(app).not.toContain('localStorage.removeItem(bookCacheKey');
-    expect(app).toContain('sessionStorage.setItem(bookDraftKey(book.id)');
-    expect(app).toContain('const clearHostBookCaches');
+    const drafts = await readFile(new URL('../src/deviceDrafts.ts', import.meta.url), 'utf8');
+    expect(app).toContain("from './deviceDrafts'");
+    expect(drafts).toContain('sessionStorage.setItem(bookDraftKey(book.id)');
+    expect(drafts).toContain('const clearHostBookCaches');
   });
 
   it('keeps book creation and source management compact and understandable', async () => {
