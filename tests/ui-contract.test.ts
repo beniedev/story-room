@@ -1,8 +1,72 @@
-import { readFile } from 'node:fs/promises';
+import { readFile as readSourceFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createExampleBooks, upgradeExampleBookContent } from '../src/fixtures';
 
+// Source offsets and multiline markers use the same newline representation.
+const readFile = async (file: URL, encoding: 'utf8') =>
+  (await readSourceFile(file, encoding)).replace(/\r\n/g, '\n');
+
+const checkedIndex = (source: string, marker: string, from = 0) => {
+  const index = source.indexOf(marker, from);
+  expect(index, `Missing source marker: ${marker}`).toBeGreaterThanOrEqual(from);
+  return index;
+};
+
+const checkedSlice = (source: string, startMarker: string, endMarker: string, from = 0) => {
+  const start = checkedIndex(source, startMarker, from);
+  const end = checkedIndex(source, endMarker, start + startMarker.length);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+};
+
 describe('writing UI contract', () => {
+  it('keeps Book persistence ownership in the session and DOM drafts in App', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const session = await readFile(new URL('../src/application/useBookSession.ts', import.meta.url), 'utf8');
+    expect(app).toContain('useBookSession({');
+    expect(app).toContain('hasLocalEditorDraft: (bookId): boolean => hasLocalEditorDraft(bookId)');
+    expect(app).toContain('document.activeElement');
+    expect(app).not.toMatch(/\b(?:setBook|setDirty|saveQueue|saveFlights|persistedUpdatedAt|draftBaseUpdatedAt|bookSessionRef|bookLoadGenerationRef|libraryLoadGenerationRef)\b/);
+    expect(session).toContain('optionsRef.current.hasLocalEditorDraft(bookId)');
+    expect(session).not.toMatch(/document\.|querySelector|from ['"][^'"]*App/);
+    const publicCommands = checkedSlice(session, '  return {\n    book, library, dirty', '\n  };');
+    expect(publicCommands).not.toMatch(/\b(?:setBook|setDirty|bookRef|saveQueue|saveFlights|saveRevision|persistedUpdatedAt|draftBaseUpdatedAt)\b/);
+  });
+
+  it('keeps generation lifecycle and apply orchestration in one session without another Book owner', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const session = await readFile(new URL('../src/application/useGenerationSession.ts', import.meta.url), 'utf8');
+    expect(app).toContain('useGenerationSession({');
+    expect(app).toContain('getSelection: () => selectionRef.current');
+    expect(app).not.toMatch(/\b(?:generationAbort|generationTarget|streamingDraftRef|streamingPending|streamingFrame|setGenerationState|runGeneration)\b/);
+    expect(session).toContain('!bookSession.isCurrent(requestBookToken)');
+    expect(session).toContain('bookSession.getSnapshot().revision !== generationRevision');
+    expect(session).not.toMatch(/useState<Book|useRef<Book|\b(?:bookRef|saveQueue|saveFlights|setBook|setDirty)\b|document\.|from ['"][^'"]*App/);
+    const publicCommands = checkedSlice(session, '  return {\n    generationState, streamingDraft', '\n  };');
+    expect(publicCommands).not.toMatch(/generationAbort|generationTarget|streamingDraftRef|streamingFrame|runGeneration/);
+  });
+
+  it('keeps context draft ownership in App and session settlement outside the Drawer DOM', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+    const session = await readFile(new URL('../src/components/context/useContextToolSession.ts', import.meta.url), 'utf8');
+    const model = await readFile(new URL('../src/contextToolDrafts.ts', import.meta.url), 'utf8');
+    expect(app).toContain('const contextToolDrafts = useRef(new Map<string, ContextToolDraftSession>());');
+    expect(app).toContain('sessionDrafts={contextToolDrafts.current}');
+    const wiring = checkedSlice(tools, '} = useContextToolSession({', '\n  });');
+    for (const prop of ['book,', 'section,', 'canEdit,', 'sessionDrafts,', 'onGenerateMemory,', 'onSaveMemoriesAndLoad,']) {
+      expect(wiring).toContain(prop);
+    }
+    expect(tools).not.toMatch(/sessionEpochsRef|sessionRevisionsRef|activeSaveRequestsRef|generationOperationsRef|sessionDraftsRef/);
+    expect(session).not.toMatch(/document\.|window\.|from ['"][^'"]*(?:App|Writer|api)['"]/);
+    expect(model).not.toMatch(/from ['"]react['"]|document\.|window\.|from ['"][^'"]*api['"]/);
+    const save = checkedSlice(session, '  const saveSummariesAndLoad = async', '\n  return {');
+    expect(save).toContain('await onSaveMemoriesAndLoad(entries)');
+    expect(save).toContain('if (!ownsSession(key)');
+    const publicCommands = checkedSlice(session, '  return {\n    sessionKey:', '\n  };');
+    expect(publicCommands).not.toMatch(/sessionDraftsRef|sessionEpochsRef|sessionRevisionsRef|updateSession|activeSaveRequestsRef/);
+  });
+
   it('keeps the manuscript out of chat UI structures', async () => {
     const source = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     expect(source).toContain('className="manuscript"');
@@ -108,8 +172,8 @@ describe('writing UI contract', () => {
       '.manuscript',
       '.block-editor-body',
     ]) {
-      const start = styles.indexOf(`${selector} {`);
-      const rule = styles.slice(start, styles.indexOf('\n}', start) + 2);
+      const start = checkedIndex(styles, `${selector} {`);
+      const rule = styles.slice(start, checkedIndex(styles, '\n}', start + 1) + 2);
       expect(start).toBeGreaterThanOrEqual(0);
       expect(rule).toContain('var(--workspace-max)');
     }
@@ -145,6 +209,8 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const panelStart = source.indexOf('className="book-library-panel"');
     const panelEnd = source.indexOf('</details>', panelStart);
+    expect(panelStart).toBeGreaterThanOrEqual(0);
+    expect(panelEnd).toBeGreaterThan(panelStart);
     const panel = source.slice(panelStart, panelEnd);
 
     expect(source).toContain('<BookPlus aria-hidden="true" />');
@@ -176,6 +242,8 @@ describe('writing UI contract', () => {
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     const writerInvocationStart = source.indexOf('<Writer');
     const writerInvocationEnd = source.indexOf('/>', writerInvocationStart);
+    expect(writerInvocationStart).toBeGreaterThanOrEqual(0);
+    expect(writerInvocationEnd).toBeGreaterThan(writerInvocationStart);
     const writerInvocation = source.slice(writerInvocationStart, writerInvocationEnd);
 
     expect(input).toContain('作者模式 · 写作接龙');
@@ -214,8 +282,10 @@ describe('writing UI contract', () => {
     const settings = await readFile(new URL('../src/components/SettingsDrawer.tsx', import.meta.url), 'utf8');
     const contextControlsStart = writer.indexOf('className="writer-context-trigger"');
     const contextControlsEnd = writer.indexOf('className="writer-tool-actions"', contextControlsStart);
+    expect(contextControlsStart).toBeGreaterThanOrEqual(0);
+    expect(contextControlsEnd).toBeGreaterThan(contextControlsStart);
     const contextControls = writer.slice(contextControlsStart, contextControlsEnd);
-    const leadingStart = writer.indexOf('className="writer-tool-leading"');
+    const leadingStart = checkedIndex(writer, 'className="writer-tool-leading"');
     const leadingGroup = writer.slice(leadingStart, leadingStart + 1500);
 
     expect(composition).toContain('export function ContextCompositionDrawer');
@@ -285,8 +355,10 @@ describe('writing UI contract', () => {
     expect(source).not.toContain('context-reference-presets');
     const sharedDrawerStyles = styles.indexOf('.context-composition-drawer,');
     const compositionStyleStart = styles.indexOf('.context-composition-drawer {', sharedDrawerStyles + 1);
-    const compositionStyles = styles.slice(compositionStyleStart, styles.indexOf('.context-tools-drawer {', compositionStyleStart));
-    const toolStyles = styles.slice(styles.indexOf('.context-tools-drawer {'), styles.indexOf('.context-composition-drawer[data-open="true"]'));
+    expect(sharedDrawerStyles).toBeGreaterThanOrEqual(0);
+    expect(compositionStyleStart).toBeGreaterThan(sharedDrawerStyles);
+    const compositionStyles = checkedSlice(styles, '.context-composition-drawer {', '.context-tools-drawer {', sharedDrawerStyles + 1);
+    const toolStyles = checkedSlice(styles, '.context-tools-drawer {', '.context-composition-drawer[data-open="true"]');
     expect(compositionStyles).toContain('max-height: 0');
     expect(compositionStyles).toContain('position: fixed');
     expect(toolStyles).toContain('position: fixed');
@@ -310,6 +382,7 @@ describe('writing UI contract', () => {
   it('uses the compact checkbox and inline synopsis interaction for previous sections', async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
+    const session = await readFile(new URL('../src/components/context/useContextToolSession.ts', import.meta.url), 'utf8');
     const operation = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
     expect(tools).toContain('前文选择');
@@ -331,7 +404,7 @@ describe('writing UI contract', () => {
     expect(tools).toContain('aria-label={summaryBusy');
     expect(tools).toContain('className="primary-action icon-button context-summary-save"');
     expect(tools).toContain('onClick={requestSummarySave}');
-    expect(tools).toContain('onSaveMemoriesAndLoad(entries)');
+    expect(session).toContain('onSaveMemoriesAndLoad(entries)');
     expect(tools).toContain('aria-label="保存并加载梗概"');
     expect(tools).not.toContain('window.confirm');
     expect(tools).toContain('className="confirm-dialog"');
@@ -372,10 +445,12 @@ describe('writing UI contract', () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const source = `${app}\n${tools}`;
+    const session = await readFile(new URL('../src/application/useBookSession.ts', import.meta.url), 'utf8');
+    const generation = await readFile(new URL('../src/application/useGenerationSession.ts', import.meta.url), 'utf8');
     const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-    expect(source).toContain('const candidate = normalizeBook(book);');
+    expect(session).toContain('const candidate = normalizeBook(book);');
     expect(source).toContain('applySummaryReferenceSelection(current, targetSectionId, entries, retainedInactiveSectionIds)');
-    expect(source).toContain('source.ordinal >= targetOrdinal');
+    expect(generation).toContain('source.ordinal >= targetOrdinal');
     expect(source).not.toContain("mode: 'full', reason: 'manual'");
     expect(source).not.toContain('应用建议');
     expect(source).not.toContain('前一节：梗概 + 全文');
@@ -384,7 +459,7 @@ describe('writing UI contract', () => {
     expect(source).toContain('disabled={!canEdit || busy || (!hasContent && !selected)}');
     expect(source).toContain('这是第一节，暂无前文可选');
     expect(source).toContain('await commitBookChange(');
-    expect(source).toContain('parseSectionMemoryDraft(result.draft)');
+    expect(generation).toContain('parseSectionMemoryDraft(result.draft)');
     expect(source).not.toContain('assertGenerationBudget(');
     expect(source).not.toContain('contextDialog');
     expect(styles).toContain('.context-summary-generate');
@@ -457,15 +532,17 @@ describe('writing UI contract', () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const writer = await readFile(new URL('../src/components/Writer.tsx', import.meta.url), 'utf8');
     const input = await readFile(new URL('../src/components/writer/GenerationInput.tsx', import.meta.url), 'utf8');
+    const generation = await readFile(new URL('../src/application/useGenerationSession.ts', import.meta.url), 'utf8');
     const source = `${app}\n${writer}`;
-    expect(source).toContain('const generateContinuation = () => withBusy(async () => {');
+    expect(app).toContain('const generateContinuation = () => generationSession.generateContinuation({');
+    expect(generation).toContain('const generateContinuation = (input: ContinuationInput) => withBusy(async () => {');
     expect(source).toContain('const authorNote = section?.note ??');
-    expect(source).toContain('authorNote: noteSnapshot || undefined');
+    expect(generation).toContain('authorNote: noteSnapshot || undefined');
     expect(source).not.toContain('setAuthorNote(');
     expect(source).toContain("setInstruction((current) => current === inputSnapshot ? '' : current)");
-    expect(source).toContain("appendCandidate(");
-    expect(source).toContain('sourceSignature: result.sourceSignature');
-    expect(source).toContain('续写已加入当前小节。');
+    expect(generation).toContain('appendCandidate(');
+    expect(generation).toContain('sourceSignature: result.sourceSignature');
+    expect(generation).toContain('续写已加入当前小节。');
     expect(input).toContain("aria-label={props.busy ? '正在续写' : '发送并续写'}");
     expect(source).not.toContain('className="draft-preview"');
     expect(source).not.toContain('应用到正文');
@@ -551,6 +628,7 @@ describe('writing UI contract', () => {
 
   it('keeps confirmation dialogs open until the real operation succeeds or fails', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const session = await readFile(new URL('../src/application/useBookSession.ts', import.meta.url), 'utf8');
     const directory = await readFile(new URL('../src/components/bookshelf/useBookDirectory.ts', import.meta.url), 'utf8');
     const dialogs = await readFile(new URL('../src/components/bookshelf/useBookshelfDialogs.ts', import.meta.url), 'utf8');
     const scope = await readFile(new URL('../src/components/SourceLoadScopePage.tsx', import.meta.url), 'utf8');
@@ -558,8 +636,9 @@ describe('writing UI contract', () => {
     const tools = await readFile(new URL('../src/components/ContextToolsDrawer.tsx', import.meta.url), 'utf8');
     const feedback = await readFile(new URL('../src/components/shared/DialogOperationStatus.tsx', import.meta.url), 'utf8');
 
-    expect(app).toContain('const commitBookChange = async');
-    expect(app).toContain('await queueBookSave(candidate, revision)');
+    expect(session).toContain('const commitBookChange = async');
+    expect(app).toContain('useBookSession({');
+    expect(session).toContain('await queueBookSave(candidate, revision)');
     expect(directory).toContain('await props.onAddSection');
     expect(dialogs).toContain("setNameOperation({ phase: 'pending'");
     expect(dialogs).toContain("setDeleteOperation({ phase: 'pending', title: '正在删除…' })");
@@ -643,8 +722,11 @@ describe('writing UI contract', () => {
     expect(worldEditor).toContain('className="icon-button source-scope-open"');
     expect(worldEditor).toContain('<ListTree aria-hidden="true" />');
     expect(scopeEditor).toContain('className="source-load-tab"');
-    expect(scopeEditor.indexOf('className="source-load-toggle"')).toBeLessThan(scopeEditor.indexOf('className="source-scope-all"'));
-    expect(scopeEditor.indexOf('className="source-scope-all"')).toBeLessThan(scopeEditor.indexOf('source-scope-confirm'));
+    const toggleIndex = checkedIndex(scopeEditor, 'className="source-load-toggle"');
+    const allIndex = checkedIndex(scopeEditor, 'className="source-scope-all"');
+    const confirmationIndex = checkedIndex(scopeEditor, 'source-scope-confirm');
+    expect(toggleIndex).toBeLessThan(allIndex);
+    expect(allIndex).toBeLessThan(confirmationIndex);
     expect(scopeEditor).toContain('checked={allSelected}');
     expect(scopeEditor).toContain('selectAllRef.current.indeterminate = someSelected');
     expect(scopeEditor).toContain('aria-pressed={allSelected}');
@@ -723,8 +805,8 @@ describe('writing UI contract', () => {
       '.manuscript-block[data-kind="user"]',
       '.block-editor-textarea[data-kind="user"]',
     ]) {
-      const start = styles.indexOf(`${selector} {`);
-      const rule = styles.slice(start, styles.indexOf('\n}', start) + 2);
+      const start = checkedIndex(styles, `${selector} {`);
+      const rule = styles.slice(start, checkedIndex(styles, '\n}', start + 1) + 2);
       expect(start).toBeGreaterThanOrEqual(0);
       expect(rule).toContain('color: var(--manuscript-user)');
       expect(rule).not.toContain('font-weight');

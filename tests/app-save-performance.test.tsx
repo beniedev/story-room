@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
@@ -171,6 +171,38 @@ beforeEach(() => {
 });
 
 describe('App Book navigation save sessions', () => {
+  it('ignores obsolete StrictMode bootstrap results after the current session has loaded', async () => {
+    const firstLibrary = deferred<Response>();
+    const first = { ...makeBook(), id: 'obsolete-bootstrap-book', title: 'Obsolete synthetic bootstrap' };
+    const current = { ...makeBook(), title: 'Current synthetic bootstrap' };
+    let libraryCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/library') {
+        libraryCalls += 1;
+        return libraryCalls === 1 ? firstLibrary.promise : jsonResponse([current]);
+      }
+      if (url === '/api/providers') return jsonResponse([]);
+      if (url === '/api/storage-location') return jsonResponse({ location: 'synthetic-library' });
+      if (url === `/api/books/${current.id}`) return jsonResponse(current);
+      throw new Error(`Unexpected bootstrap test request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<StrictMode><App /></StrictMode>));
+    try {
+      await waitForElement(() => container.querySelector('.book-selector-card'));
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(current.title);
+      await act(async () => firstLibrary.resolve(jsonResponse([first])));
+      await flushMicrotasks();
+      expect(libraryCalls).toBe(2);
+      expect(container.querySelector('.book-selector-card')?.textContent).toContain(current.title);
+      expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/books/${first.id}`)).toBe(false);
+    } finally { await unmount(root); }
+  });
+
   const installNavigationApi = (saveGate: Deferred<Response>, loadGate?: Deferred<Response>) => {
     const first = makeBook();
     const other = { ...makeBook(), id: 'other-book', title: '另一部合成书' };
