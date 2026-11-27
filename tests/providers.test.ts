@@ -498,6 +498,23 @@ describe('local provider store', () => {
     expect(String(request?.body)).not.toContain('synthetic-config-key');
   });
 
+  it('omits penalty fields when the profile does not set them', async () => {
+    const store = await makeStore();
+    const profile = profileAt('https://provider.synthetic/v1');
+    await store.save(profile, 'synthetic-penalty-key');
+    mockedLookup.mockResolvedValue([{ address: '203.0.113.10', family: 4 }]);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'Synthetic completion.' }, finish_reason: 'stop' }],
+    })));
+
+    await expect(store.generate(profile.id, [{ role: 'user', content: 'Synthetic input.', blockIds: [] }]))
+      .resolves.toEqual({ draft: 'Synthetic completion.', finishReason: 'stop' });
+    const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('frequency_penalty');
+    expect(body).not.toHaveProperty('presence_penalty');
+    expect(body).toMatchObject({ temperature: 1, top_p: 1 });
+  });
+
   it('preserves the typed generic failure for invalid persisted Provider config', async () => {
     const store = await makeStore();
     const content = JSON.stringify({ profiles: [{ ...profileAt('https://provider.synthetic/v1'), id: 'invalid id', apiKey: 'synthetic-untrusted-config-key' }] });
